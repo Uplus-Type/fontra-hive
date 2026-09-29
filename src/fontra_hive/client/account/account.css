@@ -9,6 +9,9 @@ html, body {
   touch-action: auto;
 }
 html { overflow-y: auto; }
+/* core.css sets 0.9em (the editor's dense UI); these pages are read. */
+html, body { font-size: 100%; }
+body:not([data-page="home"]) { font-size: 1.0625rem; }
 body {
   display: flex;
   flex-direction: column;
