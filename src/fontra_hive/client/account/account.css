@@ -20,7 +20,7 @@ form, .card {
 }
 label { display: flex; flex-direction: column; gap: 0.3em; font-size: 0.9em; }
 label small { opacity: 0.6; }
-input, textarea {
+input, textarea, input[type="password"] {
   font: inherit; font-size: 1em; padding: 0.5em 0.6em; border-radius: 0.4em;
   border: 1px solid #8884;
   background: var(--text-input-background-color, #eee);
@@ -44,3 +44,25 @@ a { color: inherit; }
 textarea { resize: vertical; }
 /* Hidden from people, filled by bots (see POST /api/waitlist). */
 .hp { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+
+/* The pages one sees before signing in (sign-in, invitation, password,
+   sign-out): dark grey with a large logo, like https://fontra.xyz. The home
+   page (data-page="home") keeps Fontra's own theme. */
+body:not([data-page="home"]) {
+  background: #222;
+  color: white;
+  padding: 1.25em;
+  box-sizing: border-box;
+}
+body:not([data-page="home"]) .logo {
+  width: min(30vw, 30vh);
+  height: min(30vw, 30vh);
+  margin: 1.5em 0 0.5em;
+  filter: drop-shadow(0.5rem 0.5rem 1.2rem black);
+}
+body:not([data-page="home"]) h1 { font-size: 2.25rem; font-weight: normal; }
+body:not([data-page="home"]) .lead,
+body:not([data-page="home"]) .note { opacity: 0.8; }
+body:not([data-page="home"]) form,
+body:not([data-page="home"]) .card { color: var(--foreground-color, black); }
+body:not([data-page="home"]) a:hover { color: var(--fontra-red-color, #f11759); }
