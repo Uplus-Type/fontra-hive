@@ -118,6 +118,7 @@ def answers():
         "GET /api/orgs/uplustype/invitations": [200, {"invitations": []}],
         "POST /api/orgs/uplustype/invitations": [201, {"invitation": {}}],
         "PATCH /api/orgs/uplustype/members/fabio": [200, {}],
+        "PATCH /api/orgs/uplustype": [200, {"organization": {}}],
     }
 
 
@@ -238,6 +239,16 @@ def test_organization_page(browser_and_url):  # noqa: F811
     page.wait_for_function(
         "calls.some(c => c.path === '/api/orgs/uplustype/invitations' && c.method === 'POST')"
     )
+    # Settings: projects shared with members only.
+    page.check("input[name=membersOnly]")
+    page.click("text=Save")
+    page.wait_for_function(
+        "calls.some(c => c.path === '/api/orgs/uplustype' && c.method === 'PATCH')"
+    )
+    settings = page.evaluate(
+        "calls.find(c => c.path === '/api/orgs/uplustype' && c.method === 'PATCH')"
+    )
+    assert settings["body"]["membersOnly"] is True
     invite = page.evaluate(
         "calls.find(c => c.path === '/api/orgs/uplustype/invitations' && c.method === 'POST')"
     )

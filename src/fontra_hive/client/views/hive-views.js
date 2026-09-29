@@ -614,7 +614,8 @@ export function openShareDialog(projectName, { onClose } = {}) {
       who.addEventListener("keydown", (e) => e.key === "Enter" && invite());
       dialog.append(el("div", { class: "add" }, [who, role, add]));
       dialog.append(el("p", { class: "note" }, [
-        "They receive an email with a link, valid 7 days, and join when they accept.",
+        "People who already have a Hive account, by username or by the address of their account. " +
+          "They receive an email with a link, valid 7 days, and join when they accept.",
       ]));
     } else {
       dialog.append(el("p", { class: "note" }, ["Managers and admins can invite people and change roles."]));

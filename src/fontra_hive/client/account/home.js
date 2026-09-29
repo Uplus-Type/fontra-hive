@@ -454,6 +454,7 @@ async function orgSection(login) {
                 el("td", {}, [el("button", { class: "secondary", onclick: async () => { await call(`${base}/invitations/${inv.id}`, undefined, "DELETE"); route(); } }, ["Cancel"])]),
               ])))
           : null,
+        el("p", { class: "note" }, ["People who already have a Hive account, by the address of their account."]),
         form([el("div", { class: "row" }, [field("Email", email), field("As", role)])], "Send the invitation", async () => {
           await call(`${base}/invitations`, { email: email.value.trim(), role: role.value });
           const sent = email.value.trim();
@@ -467,11 +468,16 @@ async function orgSection(login) {
       el("option", { value: "" }, ["none: only the projects they are invited to"]),
       ...ROLES.filter((r) => r !== "admin").map((r) => el("option", { value: r, selected: r === org.baseRole }, [r])),
     ]);
+    const membersOnly = el("input", { type: "checkbox", name: "membersOnly", checked: !!org.membersOnly });
     content.push(
       el("div", { class: "panel" }, [
         el("h3", { style: "margin-top:0" }, ["Settings"]),
-        form([field("Full name", name), field("Members' role on every project", baseRole, "owners are admins of every project")], "Save", async () => {
-          await call(base, { name: name.value.trim(), baseRole: baseRole.value }, "PATCH");
+        form([
+          field("Full name", name),
+          field("Members' role on every project", baseRole, "owners are admins of every project"),
+          el("label", { class: "check" }, [membersOnly, "Share our projects with our members only (no outside collaborators)"]),
+        ], "Save", async () => {
+          await call(base, { name: name.value.trim(), baseRole: baseRole.value, membersOnly: membersOnly.checked }, "PATCH");
           return "Saved.";
         }),
       ])
