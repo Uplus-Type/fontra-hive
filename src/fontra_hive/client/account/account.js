@@ -91,6 +91,39 @@ async function loginPage() {
     });
   });
   form.login.focus();
+  waitlist();
+}
+
+// "Request an invitation" under the sign-in form (sign-up is by invitation
+// only). Opened directly by /#request, e.g. from a landing page.
+function waitlist() {
+  const open = $("#request-open");
+  const form = $("#request");
+  const sent = $("#request-sent");
+  if (!open || !form) return;
+  const show = () => {
+    open.classList.add("hidden");
+    form.classList.remove("hidden");
+    form.email.focus();
+  };
+  open.addEventListener("click", show);
+  if (location.hash === "#request") show();
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    busy(form, async () => {
+      const email = form.email.value.trim();
+      await call("/api/waitlist", {
+        email,
+        name: form.fullname.value.trim(),
+        organization: form.organization.value.trim(),
+        message: form.message.value.trim(),
+        website: form.website.value,
+      });
+      form.classList.add("hidden");
+      sent.textContent = `Thank you. We will write to ${email} with an invitation.`;
+      sent.classList.remove("hidden");
+    });
+  });
 }
 
 async function invitationPage() {

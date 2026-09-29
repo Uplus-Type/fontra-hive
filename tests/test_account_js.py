@@ -111,6 +111,41 @@ def test_login_page(browser_and_url):
     page.close()
 
 
+def test_request_an_invitation_from_the_sign_in_page(browser_and_url):
+    answers = {
+        "POST /api/auth/refresh": [401, {"detail": "Please sign in again."}],
+        "POST /api/waitlist": [202, None],
+    }
+    page = account_page(browser_and_url, "login.html", answers, "#request")
+    page.evaluate("""async () => {
+          window.__hiveAccountNoAutoStart = false;
+          await import('/account/account.js?start=1');
+        }""")
+    # Opened directly by /#request (a link from a landing page).
+    page.wait_for_selector("#request:not(.hidden)")
+    assert page.evaluate("document.activeElement.name") == "email"
+    # The bots' field: out of sight (account.css) and out of the tab order.
+    assert page.get_attribute(".hp input", "tabindex") == "-1"
+    assert page.get_attribute(".hp", "aria-hidden") == "true"
+    page.fill("#request input[name=email]", "zoe@example.com")
+    page.fill("#request input[name=fullname]", "Zoé")
+    page.fill("#request input[name=organization]", "Zoé Type")
+    page.fill("#request textarea[name=message]", "Two designers, one variable family.")
+    page.click("#request button[type=submit]")
+    page.wait_for_selector("#request-sent:not(.hidden)")
+    assert "zoe@example.com" in page.inner_text("#request-sent")
+    sent = page.evaluate("calls.find(c => c.path === '/api/waitlist')")
+    assert sent["body"] == {
+        "email": "zoe@example.com",
+        "name": "Zoé",
+        "organization": "Zoé Type",
+        "message": "Two designers, one variable family.",
+        "website": "",
+    }
+    assert page.errors == []
+    page.close()
+
+
 def test_invitation_page_signs_up(browser_and_url):
     answers = {
         "POST /api/invitations/lookup": [
