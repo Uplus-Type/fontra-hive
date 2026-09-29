@@ -29,7 +29,9 @@ from fontra.backends.filenames import stringToFileName
 from fontra.core.fonthandler import FontHandler
 from fontra.core.protocols import ProjectManager
 
+from .access import Access, DevDirectory, token_for, username_from_token
 from .backend_git import GitFontraBackend
+from .fonthandler import HiveFontHandler
 from .gitstore import (
     DEFAULT_BRANCH,
     SERVER_SIGNATURE,
@@ -54,15 +56,29 @@ class DevHiveProjectManagerFactory:
         parser.add_argument("--author-name", default="Fontra Hive dev")
         parser.add_argument("--author-email", default="dev@fontrahive.local")
         parser.add_argument("--commit-delay", type=float, default=2.0, help="seconds")
+        parser.add_argument(
+            "--users",
+            type=pathlib.Path,
+            help="JSON file of users, organizations and project roles (default: "
+            "<root>/hive-dev-users.json if it exists; without it, no login and "
+            "everyone may edit everything)",
+        )
 
     @staticmethod
     def getProjectManager(arguments: SimpleNamespace) -> ProjectManager:
+        root = arguments.root.resolve()
+        usersPath = getattr(arguments, "users", None) or root / DEV_USERS_FILE
         return DevHiveProjectManager(
-            rootPath=arguments.root.resolve(),
+            rootPath=root,
             readOnly=arguments.read_only,
             author=Signature(arguments.author_name, arguments.author_email),
             commitDelay=arguments.commit_delay,
+            directory=DevDirectory(usersPath) if usersPath.exists() else None,
         )
+
+
+DEV_USERS_FILE = "hive-dev-users.json"
+DEV_USER_COOKIE = "hive-dev-user"
 
 
 def glyphPath(glyphName: str) -> str:
@@ -82,23 +98,105 @@ class DevHiveProjectManager:
         readOnly: bool = False,
         author: Signature | None = None,
         commitDelay: float = 2.0,
+        directory: DevDirectory | None = None,
     ):
         self.rootPath = rootPath
         self.readOnly = readOnly
         self.author = author
         self.commitDelay = commitDelay
+        # None: no accounts (single author, everyone may edit everything).
+        self.directory = directory
         self.fontHandlers: dict[str, FontHandler] = {}
 
     async def aclose(self) -> None:
         for fontHandler in list(self.fontHandlers.values()):
             await fontHandler.aclose()
 
+    # --- identity -------------------------------------------------------------
+
     async def authorize(self, request: web.Request) -> str | None:
-        return "dev"  # no authentication in the development manager
+        """The token of the request: ``"dev"`` without a directory, else the
+        user chosen on the development login page (a plain cookie: this is
+        for local development only, there is no password)."""
+        if not _sameOrigin(request):
+            return None
+        if self.directory is None:
+            return "dev"
+        username = request.cookies.get(DEV_USER_COOKIE)
+        if self.directory.user(username) is None:
+            return None
+        return token_for(username)
+
+    def accessFor(self, token: str | None, projectName: str) -> Access | None:
+        """What the holder of ``token`` may do on a project (None: nothing).
+        Without a directory everyone is an anonymous admin."""
+        if self.directory is None:
+            return None
+        return self.directory.access(username_from_token(token), projectName)
+
+    async def _require(
+        self, request: web.Request, projectName: str, capability: str
+    ) -> Access | None:
+        """For the Hive routes: raise unless the requester has ``capability``
+        on the project. A project the requester cannot read looks absent."""
+        if self.directory is None:
+            return None
+        access = self.accessFor(await self.authorize(request), projectName)
+        if access is None or not access.can("read"):
+            raise web.HTTPNotFound()
+        if not access.can(capability):
+            raise web.HTTPForbidden(text=f"{access.role} cannot {capability}")
+        return access
 
     async def rootDocumentHandler(self, request: web.Request) -> web.Response:
+        if self.directory is not None and await self.authorize(request) is None:
+            return web.Response(
+                text=_devLoginPage(self.directory), content_type="text/html"
+            )
         htmlPath = resources.files("fontra") / "client" / "landing.html"
         return web.Response(body=htmlPath.read_bytes(), content_type="text/html")
+
+    async def devLoginHandler(self, request: web.Request) -> web.Response:
+        form = await request.post()
+        username = form.get("user", "")
+        if self.directory is None or self.directory.user(username) is None:
+            raise web.HTTPBadRequest(text="unknown user")
+        response = web.HTTPFound("/")
+        response.set_cookie(DEV_USER_COOKIE, username, httponly=True, samesite="Lax")
+        raise response
+
+    async def devLogoutHandler(self, request: web.Request) -> web.Response:
+        response = web.HTTPFound("/")
+        response.del_cookie(DEV_USER_COOKIE)
+        raise response
+
+    async def meHandler(self, request: web.Request) -> web.Response:
+        """Who is logged in (for the Hive UI in Fontra's views)."""
+        if self.directory is None:
+            return web.json_response({"user": None, "accounts": False})
+        user = self.directory.user(username_from_token(await self.authorize(request)))
+        if user is None:
+            raise web.HTTPUnauthorized()
+        return web.json_response(
+            {
+                "user": {
+                    "username": user.username,
+                    "name": user.name,
+                    "email": user.email,
+                },
+                "accounts": True,
+            }
+        )
+
+    async def accessHandler(self, request: web.Request) -> web.Response:
+        """The requester's role and capabilities on a project."""
+        name = request.match_info["name"]
+        if self._repoPath(name) is None:
+            raise web.HTTPNotFound()
+        if self.directory is None:
+            return web.json_response({"role": None, "capabilities": ["*"]})
+        access = await self._require(request, name, "read")
+        return web.json_response(access.to_json())
 
     def _repoPath(self, name: str) -> pathlib.Path | None:
         if not name or "/" in name or name.startswith("."):
@@ -111,6 +209,8 @@ class DevHiveProjectManager:
         repoPath = self._repoPath(name)
         if repoPath is None:
             return False
+        if self.directory is not None and self.accessFor(token, name) is None:
+            return False
         store = GitRepoStore.open(repoPath)
         try:
             return store.head(branch) is not None
@@ -122,9 +222,11 @@ class DevHiveProjectManager:
         for repoPath in sorted(self.rootPath.glob("*.git")):
             if not repoPath.is_dir():
                 continue
+            name = repoPath.name[: -len(".git")]
+            if self.directory is not None and self.accessFor(token, name) is None:
+                continue
             store = GitRepoStore.open(repoPath)
             try:
-                name = repoPath.name[: -len(".git")]
                 branches = store.branches()
                 if DEFAULT_BRANCH in branches:  # the default branch comes first
                     projects.append(name)
@@ -137,6 +239,8 @@ class DevHiveProjectManager:
         self, projectIdentifier: str, token: str, readOnly: bool = False
     ) -> FontHandler | None:
         name, branch = splitProjectIdentifier(projectIdentifier)
+        if self.directory is not None and self.accessFor(token, name) is None:
+            return None  # not a member: the connection is refused
         key = f"{name}@{branch}"
         fontHandler = self.fontHandlers.get(key)
         if fontHandler is None:
@@ -163,12 +267,19 @@ class DevHiveProjectManager:
                 store.close()
 
             logger.info("new FontHandler for %r (head %s)", key, backend.head)
-            fontHandler = FontHandler(
+            fontHandler = HiveFontHandler(
                 backend=backend,
                 projectIdentifier=key,
                 metaInfoProvider=self,
-                readOnly=self.readOnly or readOnly,
+                # With accounts, read-only is decided per connection by the
+                # role; the handler itself is shared by everyone.
+                readOnly=self.readOnly or (readOnly and self.directory is None),
                 allConnectionsClosedCallback=closeFontHandler,
+                accessForToken=(
+                    (lambda token, name=name: self.accessFor(token, name))
+                    if self.directory is not None
+                    else None
+                ),
             )
             await fontHandler.startTasks()
             self.fontHandlers[key] = fontHandler
@@ -179,7 +290,11 @@ class DevHiveProjectManager:
             [
                 # Registered before Fontra adds its own route for the
                 # "fontra.webcontent" entry point, so this one answers.
+                web.post("/hive/dev-login", self.devLoginHandler),
+                web.get("/hive/logout", self.devLogoutHandler),
                 web.get("/hive/{path:.*}", self.clientFileHandler),
+                web.get("/api/hive/me", self.meHandler),
+                web.get("/api/hive/projects/{name}/access", self.accessHandler),
                 web.get("/api/hive/projects/{name}/branches", self.branchesHandler),
                 web.get("/api/hive/projects/{name}/log", self.logHandler),
                 web.get("/api/hive/projects/{name}/glyph", self.glyphHandler),
@@ -236,6 +351,7 @@ class DevHiveProjectManager:
             raise web.HTTPBadRequest(text="glyph and ref are required")
         if self.readOnly:
             raise web.HTTPForbidden(text="read-only server")
+        access = await self._require(request, name, "edit")
 
         fontHandler = self.fontHandlers.get(f"{name}@{branch}")
         backend = fontHandler.backend if fontHandler is not None else None
@@ -269,7 +385,7 @@ class DevHiveProjectManager:
                 {path: data},
                 branch=branch,
                 message=message,
-                author=self.author or SERVER_SIGNATURE,
+                author=_author(access, self.author),
                 expected_head=head,
             )
             if backend is not None:
@@ -288,6 +404,7 @@ class DevHiveProjectManager:
         repoPath = self._repoPath(request.match_info["name"])
         if repoPath is None:
             raise web.HTTPNotFound()
+        await self._require(request, request.match_info["name"], "read")
         branch = request.query.get("branch", DEFAULT_BRANCH)
         store = GitRepoStore.open(repoPath)
         try:
@@ -302,6 +419,7 @@ class DevHiveProjectManager:
         repoPath = self._repoPath(request.match_info["name"])
         if repoPath is None:
             raise web.HTTPNotFound()
+        await self._require(request, request.match_info["name"], "read")
         store = GitRepoStore.open(repoPath)
         try:
             data = {b: store.head(b) for b in store.branches()}
@@ -313,6 +431,7 @@ class DevHiveProjectManager:
         repoPath = self._repoPath(request.match_info["name"])
         if repoPath is None:
             raise web.HTTPNotFound()
+        await self._require(request, request.match_info["name"], "read")
         branch = request.query.get("branch", DEFAULT_BRANCH)
         path = request.query.get("path")
         glyphName = request.query.get("glyph")
@@ -351,6 +470,7 @@ class DevHiveProjectManager:
         repoPath = self._repoPath(request.match_info["name"])
         if repoPath is None:
             raise web.HTTPNotFound()
+        await self._require(request, request.match_info["name"], "read")
         branch = request.query.get("branch", DEFAULT_BRANCH)
         store = GitRepoStore.open(repoPath)
         try:
@@ -386,6 +506,7 @@ class DevHiveProjectManager:
             raise web.HTTPBadRequest(text="name is required")
         if self.readOnly:
             raise web.HTTPForbidden(text="read-only server")
+        access = await self._require(request, name, "snapshot")
 
         fontHandler = self.fontHandlers.get(f"{name}@{branch}")
         backend = fontHandler.backend if fontHandler is not None else None
@@ -399,7 +520,7 @@ class DevHiveProjectManager:
                 snapshot = store.create_snapshot(
                     title,
                     branch=branch,
-                    author=self.author or SERVER_SIGNATURE,
+                    author=_author(access, self.author),
                     expected_head=store.head(branch),
                 )
             except (ValueError, RefMovedError) as error:
@@ -424,6 +545,7 @@ class DevHiveProjectManager:
         glyphName = request.query.get("glyph")
         if repoPath is None or not glyphName:
             raise web.HTTPNotFound()
+        await self._require(request, request.match_info["name"], "read")
         ref = request.query.get("ref", DEFAULT_BRANCH)
         store = GitRepoStore.open(repoPath)
         try:
@@ -465,3 +587,56 @@ def _snapshotJSON(snapshot: SnapshotInfo) -> dict[str, Any]:
     data = dataclasses.asdict(snapshot)
     data["glyphs"] = list(snapshot.glyphs)
     return data
+
+
+def _author(access: Access | None, fallback: Signature | None) -> Signature:
+    if access is not None:
+        return access.user.signature
+    return fallback or SERVER_SIGNATURE
+
+
+def _sameOrigin(request) -> bool:
+    """Refuse cross-site requests (a page on another site opening our
+    websocket or posting to our routes with the user's cookies). Requests
+    without an Origin header (same-origin GETs, tools) are accepted."""
+    origin = getattr(request, "headers", {}).get("Origin")
+    if not origin or origin == "null":
+        return True
+    host = origin.split("://", 1)[-1].rstrip("/")
+    return host == getattr(request, "host", host)
+
+
+def _devLoginPage(directory: DevDirectory) -> str:
+    """A minimal login page for local development: pick who you are."""
+    from html import escape
+
+    buttons = "\n".join(
+        f'<button name="user" value="{escape(u.username)}">'
+        f"<b>{escape(u.name)}</b><small>{escape(u.username)} · {escape(u.email)}</small>"
+        "</button>"
+        for u in directory.users()
+    )
+    return f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>Fontra Hive — sign in (development)</title>
+<link rel="stylesheet" href="/css/core.css">
+<style>
+  body {{ display: flex; flex-direction: column; align-items: center;
+          font-family: fontra-ui-regular; }}
+  img {{ width: 84px; margin-top: 56px; }}
+  h1 {{ font-size: 1.5em; margin: 0.5em 0 0.2em; }}
+  p {{ opacity: 0.6; margin: 0 0 1.5em; }}
+  form {{ display: flex; flex-direction: column; gap: 0.5em; width: 22em; }}
+  button {{ font: inherit; text-align: left; border: none; border-radius: 0.5em;
+            padding: 0.7em 1em; background: var(--ui-element-background-color);
+            color: var(--ui-element-foreground-color);
+            box-shadow: 1px 2px 6px #0002; cursor: pointer; }}
+  button:hover {{ outline: 2px solid #46f; }}
+  small {{ display: block; opacity: 0.6; }}
+</style></head>
+<body>
+  <img src="/images/fontra-icon.svg" alt="">
+  <h1>Fontra Hive</h1>
+  <p>Development server: choose who you are (no password).</p>
+  <form method="post" action="/hive/dev-login">{buttons}</form>
+</body></html>
+"""

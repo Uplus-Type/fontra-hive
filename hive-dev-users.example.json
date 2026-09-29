@@ -1,0 +1,17 @@
+{
+  "users": {
+    "jeremie": {"name": "Jérémie Hornus", "email": "jeremie@uplustype.com"},
+    "fabio": {"name": "Fabio Caccamo", "email": "fabio@example.com"},
+    "ana": {"name": "Ana López", "email": "ana@example.com"}
+  },
+  "organizations": {
+    "uplustype": {
+      "name": "U+Type",
+      "members": {"jeremie": "owner", "fabio": "member"},
+      "base_role": "designer"
+    }
+  },
+  "projects": {
+    "MyFont": {"owner": "uplustype", "collaborators": {"ana": "observer"}}
+  }
+}

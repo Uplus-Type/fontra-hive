@@ -75,6 +75,42 @@ Edits made in the editor are committed about two seconds after the last
 change (`--commit-delay`), one commit per user. Open `MyFont@bold-extension`
 to edit the branch.
 
+## Accounts and roles (development)
+
+Put a `hive-dev-users.json` next to the repositories (or pass `--users FILE`)
+and the development server gets accounts, following GitHub's model: users
+with a unique username and an email; organizations with owners and members;
+projects owned by a user or an organization, with outside collaborators. A
+person's role on a project is the highest of: admin (owner of the project or
+of its organization), the organization's `base_role` (member), their
+collaborator role. See `hive-dev-users.example.json`.
+
+```bash
+cp hive-dev-users.example.json repos/hive-dev-users.json   # then edit it
+fontra --launch hive-dev repos
+```
+
+- `/` shows a sign-in page listing the users (development only: no password,
+  a plain cookie). *Log out*: `/hive/logout`.
+- The project list only shows the projects you have a role on; opening
+  another one is refused.
+- Roles: observer (read), reviewer (+ comment), designer (+ edit, restore,
+  branch, snapshot), manager (+ merge, tag, export, invite), admin (+ rename,
+  trash, delete). They apply **per connection** in the one shared
+  `FontHandler` of a project, so live collaboration keeps working: an
+  observer gets Fontra's read-only mode (lock icon) and any edit they send
+  is refused before it is written or broadcast; the Hive routes (history,
+  Restore, snapshots) check the same capabilities.
+- Every edit is committed under the name of the person who made it, with a
+  pseudonymous address (`<username>@hive`), never their real email: open the
+  same project in two browsers as two users and the glyph history shows both.
+- The file is re-read when it changes: roles can be edited while the server
+  runs. Without the file, nothing changes (no sign-in, one author, everyone
+  may edit).
+
+Routes: `GET /api/hive/me` (who is signed in), `GET
+/api/hive/projects/<name>/access` (your role and capabilities).
+
 ## Glyph history in the editor (plug-in)
 
 The package also ships an editor plug-in: a "Glyph history" panel in the right
