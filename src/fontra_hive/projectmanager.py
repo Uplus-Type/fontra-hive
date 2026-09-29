@@ -28,7 +28,7 @@ from fontra.core.fonthandler import FontHandler
 from fontra.core.protocols import ProjectManager
 
 from .backend_git import GitFontraBackend
-from .gitstore import DEFAULT_BRANCH, GitRepoStore, Signature
+from .gitstore import DEFAULT_BRANCH, SERVER_SIGNATURE, GitRepoStore, Signature
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +172,74 @@ class DevHiveProjectManager:
                 web.get("/api/hive/projects/{name}/log", self.logHandler),
                 web.get("/api/hive/projects/{name}/glyph", self.glyphHandler),
                 web.get("/api/hive/projects/{name}/head", self.headHandler),
+                web.post("/api/hive/projects/{name}/restore", self.restoreHandler),
             ]
+        )
+
+    async def restoreHandler(self, request: web.Request) -> web.Response:
+        """Bring one glyph back to the state it had at ``ref``, as a new commit.
+
+        History is never rewritten: the old glyph file is committed again on
+        top of the branch. If the project is open in the editor, the running
+        backend picks the commit up as an external change and every connected
+        client reloads the glyph.
+        """
+        name = request.match_info["name"]
+        repoPath = self._repoPath(name)
+        glyphName = request.query.get("glyph")
+        ref = request.query.get("ref")
+        branch = request.query.get("branch", DEFAULT_BRANCH)
+        if repoPath is None:
+            raise web.HTTPNotFound()
+        if not glyphName or not ref:
+            raise web.HTTPBadRequest(text="glyph and ref are required")
+        if self.readOnly:
+            raise web.HTTPForbidden(text="read-only server")
+
+        fontHandler = self.fontHandlers.get(f"{name}@{branch}")
+        backend = fontHandler.backend if fontHandler is not None else None
+        store = backend.store if backend is not None else GitRepoStore.open(repoPath)
+        path = glyphPath(glyphName)
+        try:
+            head = store.head(branch)
+            if head is None:
+                raise web.HTTPNotFound(text=f"no branch {branch}")
+            try:
+                sha = store.resolve(ref)
+                data = store.read_file(sha, path)
+            except KeyError:
+                raise web.HTTPNotFound(text=f"{glyphName} does not exist at {ref}")
+            if backend is not None:
+                backend.flush()  # commit pending edits first, so nothing is lost
+                head = store.head(branch)
+            try:
+                current = store.read_file(head, path)
+            except KeyError:
+                current = None
+            if current == data:
+                return web.json_response(
+                    {"branch": branch, "head": head, "restored": sha, "changed": False}
+                )
+            message = (
+                f"Restore {glyphName} to {sha[:10]}\n\n"
+                f"Hive-Glyphs: {glyphName}\nHive-Restore: {sha}\n"
+            )
+            newHead = store.commit(
+                {path: data},
+                branch=branch,
+                message=message,
+                author=self.author or SERVER_SIGNATURE,
+                expected_head=head,
+            )
+            if backend is not None:
+                # Same code path as a commit made by someone else: the glyph is
+                # reloaded from git and every connected editor is notified.
+                await backend.check_external_changes()
+        finally:
+            if backend is None:
+                store.close()
+        return web.json_response(
+            {"branch": branch, "head": newHead, "restored": sha, "changed": True}
         )
 
     async def headHandler(self, request: web.Request) -> web.Response:

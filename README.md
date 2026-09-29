@@ -80,9 +80,24 @@ sidebar listing every commit that touched the selected glyph (author, time,
 message), refreshed as you edit. It uses Fontra's editor plug-in mechanism
 and is served by the Fontra server itself under `/hive/plugin/`.
 
-To enable it (once per browser): open *Application settings → Plugins*, add
-the address `/hive/plugin`, then reload the editor. The panel appears as a
-clock icon in the right sidebar.
+- **Preview a version on the canvas.** Click a commit: that version of the
+  glyph is drawn in orange over the glyph itself, in glyph coordinates, so
+  the two outlines can be compared point by point. The layer shown is the
+  one being edited when the old version has it, otherwise its default
+  source layer (the status line says which); components are resolved
+  against the same version. The overlay is a visualization layer added at
+  runtime, below the editing nodes.
+- **Restore this version.** With a version previewed, "Restore this version"
+  (click twice: the button asks to confirm) makes the server commit that
+  glyph file again on top of the branch. Nothing is rewritten or deleted:
+  the restore is a new commit, marked `Hive-Restore: <sha>`, attributed to
+  the user, and every editor connected to the project reloads the glyph
+  through the same path as any external change. The restore is not part
+  of the editor's undo stack; restoring the previous version undoes it.
+
+To enable the panel (once per browser): open *Application settings →
+Plugins*, add the address `/hive/plugin`, then reload the editor. The panel
+appears as a clock icon in the right sidebar.
 
 Why manual registration: Fontra's plug-in list is per browser (local
 storage), with no way for a server to declare plug-ins yet. That is one of
@@ -92,10 +107,11 @@ needed.
 Routes used by the panel (also handy from the command line):
 
 ```
-GET /api/hive/projects/<name>/head?branch=main
-GET /api/hive/projects/<name>/log?branch=main&glyph=A&limit=50
-GET /api/hive/projects/<name>/glyph?glyph=A&ref=<sha|branch|tag>
-GET /api/hive/projects/<name>/branches
+GET  /api/hive/projects/<name>/head?branch=main
+GET  /api/hive/projects/<name>/log?branch=main&glyph=A&limit=50
+GET  /api/hive/projects/<name>/glyph?glyph=A&ref=<sha|branch|tag>
+GET  /api/hive/projects/<name>/branches
+POST /api/hive/projects/<name>/restore?branch=main&glyph=A&ref=<sha|tag>
 ```
 
 The panel polls `head` every 1.5 s (a few bytes) and reloads the list only
@@ -120,7 +136,9 @@ The tests import a `.fontra` package into a bare repository, compare the git
 backend with Fontra's file-system backend, apply the same edits to both and
 check the exported files are identical byte for byte, then exercise scheduled
 commits, attribution, external changes, concurrent commits, read-only mode,
-and that the repository is readable by `git` itself.
+the HTTP routes (history, glyph at a ref, restore, including restore into a
+project open in a running backend), and that the repository is readable by
+`git` itself.
 
 ## Design notes
 

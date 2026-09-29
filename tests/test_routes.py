@@ -2,6 +2,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from aiohttp import web
 
 from conftest import run
 from fontra_hive.gitstore import GitRepoStore, Signature
@@ -92,5 +93,102 @@ def test_head_route(manager):
             (await manager.headHandler(fake_request("Mutator", branch="bold"))).body
         )
         assert bold["head"] != data["head"]
+
+    run(go())
+
+
+def test_restore_route_commits_the_old_glyph_on_top(manager, tmp_path):
+    async def go():
+        log = json.loads(
+            (await manager.logHandler(fake_request("Mutator", glyph="A"))).body
+        )
+        head, first = log["head"], log["commits"][-1]["sha"]
+        original = (
+            await manager.glyphHandler(fake_request("Mutator", glyph="A", ref=first))
+        ).body
+        assert original != b"{}\n"
+
+        response = await manager.restoreHandler(
+            fake_request("Mutator", glyph="A", ref=first)
+        )
+        data = json.loads(response.body)
+        assert data["changed"] and data["restored"] == first
+        assert data["head"] != head and len(data["head"]) == 40
+
+        # History is not rewritten: a new commit sits on top of the branch.
+        log = json.loads(
+            (await manager.logHandler(fake_request("Mutator", glyph="A"))).body
+        )
+        assert log["head"] == data["head"]
+        assert [c["message"].splitlines()[0] for c in log["commits"]] == [
+            f"Restore A to {first[:10]}",
+            "Edit A",
+            "Import",
+        ]
+        assert f"Hive-Restore: {first}" in log["commits"][0]["message"]
+        assert log["commits"][0]["author"] == "Fontra Hive"  # no --author-name
+        assert (
+            await manager.glyphHandler(fake_request("Mutator", glyph="A"))
+        ).body == original
+
+        # Restoring what is already current changes nothing.
+        again = json.loads(
+            (
+                await manager.restoreHandler(
+                    fake_request("Mutator", glyph="A", ref=first)
+                )
+            ).body
+        )
+        assert again == {**data, "changed": False}
+
+        # Missing parameters, unknown glyph or ref, read-only server.
+        with pytest.raises(web.HTTPBadRequest):
+            await manager.restoreHandler(fake_request("Mutator", glyph="A"))
+        with pytest.raises(web.HTTPNotFound):
+            await manager.restoreHandler(
+                fake_request("Mutator", glyph="nope", ref=first)
+            )
+        with pytest.raises(web.HTTPNotFound):
+            await manager.restoreHandler(
+                fake_request("Mutator", glyph="A", ref="0" * 40)
+            )
+        manager.readOnly = True
+        with pytest.raises(web.HTTPForbidden):
+            await manager.restoreHandler(fake_request("Mutator", glyph="A", ref=first))
+
+    run(go())
+
+
+def test_restore_route_reloads_the_open_backend(manager):
+    """When the project is open in the editor, the restored glyph reaches the
+    running backend through the external-changes path."""
+
+    async def go():
+        fontHandler = await manager.getRemoteSubject("Mutator", "dev")
+        backend = fontHandler.backend
+        received = []
+
+        async def callback(pattern):
+            received.append(pattern)
+
+        await backend.watchExternalChanges(callback)
+        assert (await backend.getGlyph("A")).layers == {}  # "Edit A" wrote "{}"
+        first = json.loads(
+            (await manager.logHandler(fake_request("Mutator", glyph="A"))).body
+        )["commits"][-1]["sha"]
+
+        data = json.loads(
+            (
+                await manager.restoreHandler(
+                    fake_request("Mutator", glyph="A", ref=first)
+                )
+            ).body
+        )
+        assert data["changed"]
+        assert received == [{"glyphs": {"A": None}}]
+        glyph = await backend.getGlyph("A")
+        assert glyph.name == "A" and glyph.layers  # the imported glyph is back
+        assert backend.tree.commit_sha == data["head"]
+        await manager.aclose()
 
     run(go())
