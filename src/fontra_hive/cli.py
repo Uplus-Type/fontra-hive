@@ -8,12 +8,18 @@ Examples::
     fontra-hive branch repos/MyFont.git bold-extension
     fontra-hive snapshot repos/MyFont.git "Proofs sent to client"
     fontra-hive log   repos/MyFont.git --snapshots
+
+With hive-api, a project ``owner/name`` lives in ``<root>/<uid>.git``;
+``repo-of`` prints that name, to use with the commands above::
+
+    fontra-hive init repos/$(fontra-hive repo-of uplustype/Mutator) Mutator.fontra
 """
 
 from __future__ import annotations
 
 import argparse
 import datetime
+import os
 import pathlib
 import sys
 
@@ -78,6 +84,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--ref", default=DEFAULT_BRANCH)
     p.add_argument("--message", default="")
 
+    p = sub.add_parser(
+        "repo-of", help="the repository of a hive-api project (owner/name): <uid>.git"
+    )
+    p.add_argument("project")
+    p.add_argument(
+        "--api", default=os.environ.get("HIVE_API_URL", "http://127.0.0.1:8001")
+    )
+    p.add_argument(
+        "--service-key", default=os.environ.get("HIVE_SERVICE_KEY", "dev-service-key")
+    )
+
     p = sub.add_parser("diff", help="list files that differ between two refs")
     p.add_argument("repo", type=pathlib.Path)
     p.add_argument("old")
@@ -85,6 +102,9 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     author = Signature(args.author_name, args.author_email)
+
+    if args.command == "repo-of":
+        return _repoOf(args)
 
     if args.command == "init":
         store = GitRepoStore.create(args.repo)
@@ -147,6 +167,30 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{change.kind:<7} {change.path}")
     finally:
         store.close()
+    return 0
+
+
+def _repoOf(args) -> int:
+    import asyncio
+
+    from .hiveapi import HiveApi, HiveApiUnavailable
+
+    async def ask():
+        api = HiveApi(args.api, args.service_key)
+        try:
+            return await api.project(args.project)
+        finally:
+            await api.aclose()
+
+    try:
+        project = asyncio.run(ask())
+    except HiveApiUnavailable as error:
+        print(f"fontra-hive: hive-api: {error}", file=sys.stderr)
+        return 1
+    if project is None:
+        print(f"fontra-hive: no project {args.project}", file=sys.stderr)
+        return 1
+    print(project["repo"])
     return 0
 
 

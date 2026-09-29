@@ -134,6 +134,50 @@ Routes: `GET /api/hive/me` (who is signed in), `GET
 /api/hive/projects/<name>/presence` (heartbeat, answers with the others),
 `GET|POST /api/hive/projects/<name>/members`.
 
+## With hive-api (real accounts)
+
+`fontra hive` is the project manager of the hosted service: people, roles
+and invitations come from [hive-api](https://github.com/Uplus-Type/hive-api)
+(private), the fonts from git as above.
+
+```bash
+# terminal 1 — hive-api (see its README), told the address people use:
+cd ~/GitHub/hive-api
+HIVE_DEBUG=1 HIVE_PUBLIC_URL=http://localhost:8000 python manage.py runserver 8001
+
+# terminal 2 — Fontra with Hive, relaying /api/* to hive-api:
+fontra --launch hive repos --api http://127.0.0.1:8001
+```
+
+- Projects are `owner/name` (a person's or an organization's), as in
+  hive-api, and `owner/name@branch` for a branch. A project's repository is
+  `repos/<uid>.git`, after hive-api's stable project id: renaming a project
+  moves nothing. The first time a project is opened, its repository is made
+  with an empty font. To start from an existing font instead:
+  `fontra-hive init repos/$(fontra-hive repo-of owner/name) MyFont.fontra`.
+- Signing in: `/` is the sign-in page (username or email, password);
+  `/invitation#<token>` accepts an invitation and creates the account (the
+  only way to sign up); `/forgot-password` and `/reset-password#<token>` do
+  what they say; `/hive/logout` signs out. hive-api sets two HttpOnly
+  cookies; this server checks the short one (`hive_access`, 15 min) with
+  hive-api's public key and asks hive-api for the role, kept 10 s. The views
+  renew the cookie every 10 minutes while open.
+- **File › Share…** invites by username or email (an email with a link),
+  changes roles up to your own, cancels invitations, removes people.
+- This server relays `/api/*` (except its own `/api/hive/*` and hive-api's
+  `/api/internal/*`) to hive-api: one address for the browser, and cookies
+  that just work. In production a reverse proxy can do it instead
+  (`--no-proxy`). `--service-key` (or `$HIVE_SERVICE_KEY`) must match
+  hive-api's; `--issuer` (or `$HIVE_PUBLIC_URL`) checks the tokens' issuer.
+- If hive-api does not answer, the Hive routes say 503 and new connections
+  are refused; open ones keep working with the roles last known.
+
+For a first try: create a staff account in hive-api (`python manage.py
+createsuperuser`), then an organization, its members and a project in the
+admin (`http://localhost:8000/api/admin/`), or invite people with `python
+manage.py invite someone@example.com --project owner/name --role designer`
+(the link is printed; emails go to hive-api's console in development).
+
 ## Glyph history in the editor (plug-in)
 
 The package also ships an editor plug-in: a "Glyph history" panel in the right
@@ -234,6 +278,15 @@ commits, attribution, external changes, concurrent commits, read-only mode,
 the HTTP routes (history, glyph at a ref, restore, snapshots, including
 restore and snapshot with the project open in a running backend), and that
 the repository is readable by `git` itself.
+
+`tests/test_hive_integration.py` runs `fontra hive`'s project manager
+against a real hive-api (a Django development server started by the test,
+from `$HIVE_API_DIR` or a `hive-api` checkout next to this one): sign-in
+through the relay, roles, repository creation, the shared handler per role,
+cross-site refusal, sign-out, sign-up by invitation. Skipped without it.
+
+`tests/test_account_js.py` runs the sign-in and invitation pages and the
+hive-api Share dialog in a headless Chromium, like the next one.
 
 `tests/test_plugin_js.py` runs the editor plug-in in a headless Chromium
 against a fake editor and a mocked server (hover, pin, restore, snapshot

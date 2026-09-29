@@ -14,7 +14,8 @@ The capabilities of each role are in :data:`CAPABILITIES`; the Fontra server
 checks them for every connection (see :mod:`fontra_hive.fonthandler`) and for
 every Hive route.
 
-In production the directory is hive-api. For local development,
+In production the directory is hive-api (:mod:`fontra_hive.hiveapi`). For
+local development,
 :class:`DevDirectory` reads the same model from a JSON file::
 
     {
@@ -87,6 +88,7 @@ class HiveUser:
     username: str
     name: str
     email: str
+    uid: str = ""  # hive-api's stable id (empty in development)
 
     @property
     def signature(self) -> Signature:

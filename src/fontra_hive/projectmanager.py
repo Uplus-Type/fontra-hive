@@ -8,9 +8,10 @@ where ``/path/to/repos`` contains one bare repository per project
 (``<name>.git``). Project identifiers are ``<name>@<branch>``; a bare
 ``<name>`` means the default branch.
 
-This manager is for local development and tests. The Hive service will use a
-``HiveProjectManager`` that checks a JWT and asks hive-api for the user's role
-on the project (see the architecture document); the git side is the same.
+This manager is for local development and tests. The Hive service uses
+:class:`fontra_hive.hivemanager.HiveProjectManager` (``fontra hive``), a
+subclass that checks hive-api's access token and asks hive-api for roles;
+the git side is the same.
 """
 
 from __future__ import annotations
@@ -183,6 +184,16 @@ class DevHiveProjectManager:
             raise web.HTTPForbidden(text=f"{access.role} cannot {capability}")
         return access
 
+    async def _project(
+        self, request: web.Request, name: str, capability: str
+    ) -> tuple[pathlib.Path, Access | None]:
+        """For the Hive routes: the project's repository, and the requester's
+        access, which must include ``capability``."""
+        repoPath = self._repoPath(name)
+        if repoPath is None:
+            raise web.HTTPNotFound()
+        return repoPath, await self._require(request, name, capability)
+
     async def rootDocumentHandler(self, request: web.Request) -> web.Response:
         if self.directory is not None and await self.authorize(request) is None:
             return _htmlResponse(
@@ -245,11 +256,9 @@ class DevHiveProjectManager:
     async def accessHandler(self, request: web.Request) -> web.Response:
         """The requester's role and capabilities on a project."""
         name = request.match_info["name"]
-        if self._repoPath(name) is None:
-            raise web.HTTPNotFound()
-        if self.directory is None:
+        _, access = await self._project(request, name, "read")
+        if access is None:
             return web.json_response({"role": None, "capabilities": ["*"]})
-        access = await self._require(request, name, "read")
         return web.json_response(access.to_json())
 
     def _repoPath(self, name: str) -> pathlib.Path | None:
@@ -262,9 +271,7 @@ class DevHiveProjectManager:
         """Heartbeat of one open view: who, where (view, branch, glyph).
         Answers with the others currently on the project."""
         name = request.match_info["name"]
-        if self._repoPath(name) is None:
-            raise web.HTTPNotFound()
-        access = await self._require(request, name, "read")
+        _, access = await self._project(request, name, "read")
         body = await request.json()
         client = str(body.get("client", ""))[:64]
         if not client:
@@ -380,76 +387,105 @@ class DevHiveProjectManager:
         name, branch = splitProjectIdentifier(projectIdentifier)
         if self.directory is not None and self.accessFor(token, name) is None:
             return None  # not a member: the connection is refused
-        key = f"{name}@{branch}"
+        repoPath = self._repoPath(name)
+        if repoPath is None:
+            return None
+        return await self._openFontHandler(
+            repoPath,
+            branch,
+            identifier=f"{name}@{branch}",
+            accessForToken=(
+                (lambda token, name=name: self.accessFor(token, name))
+                if self.directory is not None
+                else None
+            ),
+            readOnly=readOnly,
+        )
+
+    @staticmethod
+    def _handlerKey(repoPath: pathlib.Path, branch: str) -> str:
+        return f"{repoPath.name}@{branch}"
+
+    async def _openFontHandler(
+        self,
+        repoPath: pathlib.Path,
+        branch: str,
+        *,
+        identifier: str,
+        accessForToken,
+        readOnly: bool,
+    ) -> FontHandler | None:
+        """The one shared handler of a project's branch, opened if needed."""
+        key = self._handlerKey(repoPath, branch)
         fontHandler = self.fontHandlers.get(key)
-        if fontHandler is None:
-            repoPath = self._repoPath(name)
-            if repoPath is None:
-                return None
-            store = GitRepoStore.open(repoPath)
-            if store.head(branch) is None:
-                store.close()
-                return None
-            backend = GitFontraBackend(
-                store,
-                branch,
-                author=self.author,
-                commit_delay=self.commitDelay,
-                read_only=self.readOnly or readOnly,
-            )
+        if fontHandler is not None:
+            return fontHandler
+        store = GitRepoStore.open(repoPath)
+        if store.head(branch) is None:
+            store.close()
+            return None
+        backend = GitFontraBackend(
+            store,
+            branch,
+            author=self.author,
+            commit_delay=self.commitDelay,
+            read_only=self.readOnly or readOnly,
+        )
 
-            async def closeFontHandler():
-                logger.info("closing FontHandler for %r", key)
-                self.fontHandlers.pop(key, None)
-                assert fontHandler is not None
-                await fontHandler.aclose()
-                store.close()
+        async def closeFontHandler():
+            logger.info("closing FontHandler for %r", identifier)
+            self.fontHandlers.pop(key, None)
+            assert fontHandler is not None
+            await fontHandler.aclose()
+            store.close()
 
-            logger.info("new FontHandler for %r (head %s)", key, backend.head)
-            fontHandler = HiveFontHandler(
-                backend=backend,
-                projectIdentifier=key,
-                metaInfoProvider=self,
-                # With accounts, read-only is decided per connection by the
-                # role; the handler itself is shared by everyone.
-                readOnly=self.readOnly or (readOnly and self.directory is None),
-                allConnectionsClosedCallback=closeFontHandler,
-                accessForToken=(
-                    (lambda token, name=name: self.accessFor(token, name))
-                    if self.directory is not None
-                    else None
-                ),
-            )
-            await fontHandler.startTasks()
-            self.fontHandlers[key] = fontHandler
+        logger.info("new FontHandler for %r (head %s)", identifier, backend.head)
+        fontHandler = HiveFontHandler(
+            backend=backend,
+            projectIdentifier=identifier,
+            metaInfoProvider=self,
+            # With accounts, read-only is decided per connection by the
+            # role; the handler itself is shared by everyone.
+            readOnly=self.readOnly or (readOnly and accessForToken is None),
+            allConnectionsClosedCallback=closeFontHandler,
+            accessForToken=accessForToken,
+        )
+        await fontHandler.startTasks()
+        self.fontHandlers[key] = fontHandler
         return fontHandler
 
     def setupWebRoutes(self, server) -> None:
-        server.httpApp.add_routes(
-            [
-                # Registered before Fontra adds its own route for the
-                # "fontra.webcontent" entry point, so this one answers.
-                *(
-                    web.get(f"/{view}.html", partial(self.viewHandler, view=view))
-                    for view in FONTRA_VIEWS
-                ),
-                web.post("/hive/dev-login", self.devLoginHandler),
-                web.get("/hive/logout", self.devLogoutHandler),
-                web.get("/hive/{path:.*}", self.clientFileHandler),
-                web.get("/api/hive/me", self.meHandler),
-                web.get("/api/hive/projects/{name}/access", self.accessHandler),
-                web.post("/api/hive/projects/{name}/presence", self.presenceHandler),
-                web.get("/api/hive/projects/{name}/members", self.membersHandler),
-                web.post("/api/hive/projects/{name}/members", self.setMemberHandler),
-                web.get("/api/hive/projects/{name}/branches", self.branchesHandler),
-                web.get("/api/hive/projects/{name}/log", self.logHandler),
-                web.get("/api/hive/projects/{name}/glyph", self.glyphHandler),
-                web.get("/api/hive/projects/{name}/head", self.headHandler),
-                web.post("/api/hive/projects/{name}/restore", self.restoreHandler),
-                web.get("/api/hive/projects/{name}/snapshots", self.snapshotsHandler),
-                web.post("/api/hive/projects/{name}/snapshot", self.snapshotHandler),
-            ]
-        )
+        server.httpApp.add_routes(self.webRoutes())
+
+    def webRoutes(self) -> list:
+        return [
+            web.post("/hive/dev-login", self.devLoginHandler),
+            web.get("/hive/logout", self.devLogoutHandler),
+            *self.projectRoutes(),
+        ]
+
+    def projectRoutes(self) -> list:
+        return [
+            # Registered before Fontra adds its own route for the
+            # "fontra.webcontent" entry point, so this one answers.
+            *(
+                web.get(f"/{view}.html", partial(self.viewHandler, view=view))
+                for view in FONTRA_VIEWS
+            ),
+            web.get("/hive/{path:.*}", self.clientFileHandler),
+            web.get("/api/hive/me", self.meHandler),
+            web.get("/api/hive/projects/{name}/access", self.accessHandler),
+            web.post("/api/hive/projects/{name}/presence", self.presenceHandler),
+            web.get("/api/hive/projects/{name}/members", self.membersHandler),
+            web.post("/api/hive/projects/{name}/members", self.setMemberHandler),
+            web.get("/api/hive/projects/{name}/branches", self.branchesHandler),
+            web.get("/api/hive/projects/{name}/log", self.logHandler),
+            web.get("/api/hive/projects/{name}/glyph", self.glyphHandler),
+            web.get("/api/hive/projects/{name}/head", self.headHandler),
+            web.post("/api/hive/projects/{name}/restore", self.restoreHandler),
+            web.get("/api/hive/projects/{name}/snapshots", self.snapshotsHandler),
+            web.post("/api/hive/projects/{name}/snapshot", self.snapshotHandler),
+        ]
 
     async def clientFileHandler(self, request: web.Request) -> web.Response:
         """The editor plug-in's files, always revalidated by the browser.
@@ -487,19 +523,17 @@ class DevHiveProjectManager:
         client reloads the glyph.
         """
         name = request.match_info["name"]
-        repoPath = self._repoPath(name)
         glyphName = request.query.get("glyph")
         ref = request.query.get("ref")
         branch = request.query.get("branch", DEFAULT_BRANCH)
-        if repoPath is None:
-            raise web.HTTPNotFound()
+        repoPath, access = await self._project(request, name, "read")
         if not glyphName or not ref:
             raise web.HTTPBadRequest(text="glyph and ref are required")
         if self.readOnly:
             raise web.HTTPForbidden(text="read-only server")
         access = await self._require(request, name, "edit")
 
-        fontHandler = self.fontHandlers.get(f"{name}@{branch}")
+        fontHandler = self.fontHandlers.get(self._handlerKey(repoPath, branch))
         backend = fontHandler.backend if fontHandler is not None else None
         store = backend.store if backend is not None else GitRepoStore.open(repoPath)
         path = glyphPath(glyphName)
@@ -547,10 +581,7 @@ class DevHiveProjectManager:
 
     async def headHandler(self, request: web.Request) -> web.Response:
         """The current commit of a branch: cheap to poll."""
-        repoPath = self._repoPath(request.match_info["name"])
-        if repoPath is None:
-            raise web.HTTPNotFound()
-        await self._require(request, request.match_info["name"], "read")
+        repoPath, _ = await self._project(request, request.match_info["name"], "read")
         branch = request.query.get("branch", DEFAULT_BRANCH)
         store = GitRepoStore.open(repoPath)
         try:
@@ -562,10 +593,7 @@ class DevHiveProjectManager:
         return web.json_response({"branch": branch, "head": head})
 
     async def branchesHandler(self, request: web.Request) -> web.Response:
-        repoPath = self._repoPath(request.match_info["name"])
-        if repoPath is None:
-            raise web.HTTPNotFound()
-        await self._require(request, request.match_info["name"], "read")
+        repoPath, _ = await self._project(request, request.match_info["name"], "read")
         store = GitRepoStore.open(repoPath)
         try:
             data = {b: store.head(b) for b in store.branches()}
@@ -574,10 +602,7 @@ class DevHiveProjectManager:
         return web.json_response({"branches": data, "tags": []})
 
     async def logHandler(self, request: web.Request) -> web.Response:
-        repoPath = self._repoPath(request.match_info["name"])
-        if repoPath is None:
-            raise web.HTTPNotFound()
-        await self._require(request, request.match_info["name"], "read")
+        repoPath, _ = await self._project(request, request.match_info["name"], "read")
         branch = request.query.get("branch", DEFAULT_BRANCH)
         path = request.query.get("path")
         glyphName = request.query.get("glyph")
@@ -613,10 +638,7 @@ class DevHiveProjectManager:
     async def snapshotsHandler(self, request: web.Request) -> web.Response:
         """The snapshots of a branch, newest first, and how many commits were
         made since the latest one (what a new snapshot would group)."""
-        repoPath = self._repoPath(request.match_info["name"])
-        if repoPath is None:
-            raise web.HTTPNotFound()
-        await self._require(request, request.match_info["name"], "read")
+        repoPath, _ = await self._project(request, request.match_info["name"], "read")
         branch = request.query.get("branch", DEFAULT_BRANCH)
         store = GitRepoStore.open(repoPath)
         try:
@@ -643,18 +665,16 @@ class DevHiveProjectManager:
         the previous snapshot. Adds an empty commit and a ``snapshot/<name>``
         tag; history is never rewritten."""
         name = request.match_info["name"]
-        repoPath = self._repoPath(name)
         title = (request.query.get("name") or "").strip()
         branch = request.query.get("branch", DEFAULT_BRANCH)
-        if repoPath is None:
-            raise web.HTTPNotFound()
+        repoPath, access = await self._project(request, name, "read")
         if not title:
             raise web.HTTPBadRequest(text="name is required")
         if self.readOnly:
             raise web.HTTPForbidden(text="read-only server")
         access = await self._require(request, name, "snapshot")
 
-        fontHandler = self.fontHandlers.get(f"{name}@{branch}")
+        fontHandler = self.fontHandlers.get(self._handlerKey(repoPath, branch))
         backend = fontHandler.backend if fontHandler is not None else None
         store = backend.store if backend is not None else GitRepoStore.open(repoPath)
         try:
@@ -687,11 +707,10 @@ class DevHiveProjectManager:
 
     async def glyphHandler(self, request: web.Request) -> web.Response:
         """The JSON of one glyph at a given ref (commit sha, branch or tag)."""
-        repoPath = self._repoPath(request.match_info["name"])
         glyphName = request.query.get("glyph")
-        if repoPath is None or not glyphName:
+        repoPath, _ = await self._project(request, request.match_info["name"], "read")
+        if not glyphName:
             raise web.HTTPNotFound()
-        await self._require(request, request.match_info["name"], "read")
         ref = request.query.get("ref", DEFAULT_BRANCH)
         store = GitRepoStore.open(repoPath)
         try:

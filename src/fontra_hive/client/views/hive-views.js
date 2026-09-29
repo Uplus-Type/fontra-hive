@@ -22,6 +22,8 @@
 // Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
 
 const HEARTBEAT_MS = 5000;
+// hive-api's access cookie lasts 15 minutes: renew it well before.
+const REFRESH_MS = 10 * 60 * 1000;
 const WAIT_TIMEOUT_MS = 20000;
 const AMBER = "#c89222";
 const AVATAR_COLORS = ["#5b7fbf", "#3f9a8a", "#b07cc6", "#c0694e", "#6d8f3a", "#8a6fd1", "#c89222"];
@@ -88,6 +90,21 @@ function avatar(user, size = 26) {
   );
 }
 
+// For hive-api answers ({"detail": "…"} on errors, maybe no body on success).
+async function fetchOk(path, options = {}) {
+  const response = await fetch(path, { credentials: "same-origin", ...options });
+  if (!response.ok) {
+    let detail = "";
+    try {
+      detail = (await response.json()).detail;
+    } catch (error) {
+      detail = response.statusText;
+    }
+    throw new Error(typeof detail === "string" && detail ? detail : `Error ${response.status}`);
+  }
+  return response;
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, { credentials: "same-origin", ...options });
   if (!response.ok) {
@@ -96,6 +113,18 @@ async function api(path, options = {}) {
     throw error;
   }
   return response.json();
+}
+
+// hive-api: exchange the 30-day refresh cookie for a new 15-minute access
+// cookie. 409: another tab just did it (its new cookies are already ours).
+export async function refreshSession() {
+  const response = await fetch("/api/auth/refresh", { method: "POST", credentials: "same-origin" });
+  return response.ok || response.status === 409;
+}
+
+// "owner/name" -> "/api/projects/owner/name" (hive-api's project routes)
+export function hiveApiProjectPath(projectName) {
+  return "/api/projects/" + projectName.split("/").map(encodeURIComponent).join("/");
 }
 
 function waitFor(test, timeout = WAIT_TIMEOUT_MS) {
@@ -188,14 +217,20 @@ const STYLE = `
   .hive-dialog button:disabled { opacity: 0.4; cursor: default; }
   .hive-dialog .note { opacity: 0.6; font-size: 0.85em; margin: 10px 0 0; }
   .hive-dialog .error { color: var(--fontra-red-color, #d33); font-size: 0.9em; margin-top: 8px; }
+  .hive-dialog .hive-member.pending .who { opacity: 0.7; }
+  .hive-dialog .add input { flex: 1; min-width: 0; font: inherit; padding: 4px 6px; border-radius: 4px;
+    border: 1px solid #8884; background: var(--text-input-background-color, #eee);
+    color: var(--text-input-foreground-color, black); }
+  .hive-dialog .done { color: #3f9a8a; font-size: 0.9em; margin-top: 8px; }
   .hive-dialog .footer { display: flex; justify-content: flex-end; margin-top: 16px; }
 `;
 
 // --- the Hive UI ------------------------------------------------------------------
 
 export class HiveViews {
-  constructor({ me, project, access, view }) {
+  constructor({ me, project, access, view, source = "dev" }) {
     this.me = me;
+    this.source = source; // "hive-api", or "dev" (hive-dev-users.json)
     this.project = project;
     this.access = access;
     this.view = view;
@@ -242,8 +277,22 @@ export class HiveViews {
       this.heartbeat();
       this.timer = setInterval(() => this.heartbeat(), HEARTBEAT_MS);
     }
+    if (this.source === "hive-api") this.keepSessionAlive();
     document.addEventListener("click", (event) => {
       if (this.menu && !this.menu.contains(event.target) && !this.chip.contains(event.target)) this.closeMenu();
+    });
+  }
+
+  keepSessionAlive() {
+    this.lastRefresh = Date.now();
+    const renew = async () => {
+      this.lastRefresh = Date.now();
+      await refreshSession();
+    };
+    this.refreshTimer = setInterval(renew, REFRESH_MS);
+    // Timers sleep with the laptop: renew on coming back if it is late.
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && Date.now() - this.lastRefresh > REFRESH_MS) renew();
     });
   }
 
@@ -314,7 +363,7 @@ export class HiveViews {
       el("a", { href: "/" }, ["My projects"]),
       this.project ? el("a", { onclick: () => { this.closeMenu(); this.openShare(); } }, ["Share…"]) : null,
       el("hr"),
-      el("a", { href: "/hive/logout" }, ["Sign out"]),
+      el("a", { href: "/hive/logout" }, ["Sign out"]), // a page that signs out, then goes home
     ]);
     this.menu.style.top = `${rect.bottom + 4}px`;
     this.menu.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
@@ -342,6 +391,7 @@ export class HiveViews {
   }
 
   async openShare() {
+    if (this.source === "hive-api") return this.openShareHiveApi();
     const backdrop = el("div", { class: "hive-backdrop", onclick: () => close() });
     const dialog = el("div", { class: "hive-dialog", role: "dialog" });
     isolateKeys(dialog);
@@ -432,6 +482,128 @@ export class HiveViews {
       dialog.replaceChildren(el("h3", {}, ["Share"]), el("div", { class: "error" }, [error.message]));
     }
   }
+
+  // Share… with hive-api: people join by invitation (by username or email);
+  // roles of those already here can be changed up to one's own.
+  async openShareHiveApi() {
+    const backdrop = el("div", { class: "hive-backdrop", onclick: () => close() });
+    const dialog = el("div", { class: "hive-dialog", role: "dialog" });
+    isolateKeys(dialog);
+    const close = () => {
+      backdrop.remove();
+      dialog.remove();
+      document.removeEventListener("keydown", onKey, true);
+    };
+    const onKey = (event) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        close();
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    document.body.append(backdrop, dialog);
+    this.shareDialog = dialog;
+    const base = hiveApiProjectPath(this.project.name);
+    const json = (method, body) => ({
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const load = async () => {
+      const data = await api(`${base}/members`);
+      data.invitations = data.canManage ? (await api(`${base}/invitations`)).invitations : [];
+      return data;
+    };
+    const act = async (path, options, done) => {
+      try {
+        await fetchOk(path, options);
+        render(await load(), null, done);
+      } catch (error) {
+        render(await load(), error.message);
+      }
+    };
+    const render = (data, error, done) => {
+      dialog.replaceChildren(el("h3", {}, [`Share “${this.project.name}”`]));
+      for (const m of data.members) {
+        const isYou = m.username === data.you;
+        const editable = data.canManage && m.via === "collaborator" && data.roles.includes(m.role);
+        const roleCell = editable
+          ? el(
+              "select",
+              {
+                "aria-label": `Role of ${m.name}`,
+                onchange: (e) => act(`${base}/collaborators/${encodeURIComponent(m.username)}`, json("PUT", { role: e.target.value })),
+              },
+              data.roles.map((r) => el("option", { value: r, selected: r === m.role ? "" : null }, [r]))
+            )
+          : el("span", { class: "role", title: m.via === "collaborator" ? "" : `Role from: ${m.via}` }, [
+              m.via === "collaborator" ? m.role : `${m.role} · ${m.via}`,
+            ]);
+        const canRemove = m.via === "collaborator" && (editable || isYou);
+        dialog.append(
+          el("div", { class: "hive-member", "data-username": m.username }, [
+            avatar(m, 30),
+            el("div", { class: "who" }, [
+              `${m.name}${isYou ? " (you)" : ""}`,
+              el("small", {}, [[m.username, m.email].filter(Boolean).join(" · ")]),
+            ]),
+            roleCell,
+            canRemove
+              ? el("button", {
+                  class: "remove",
+                  title: isYou ? "Leave this project" : `Remove ${m.name}`,
+                  onclick: () => act(`${base}/collaborators/${encodeURIComponent(m.username)}`, { method: "DELETE" }),
+                }, ["×"])
+              : el("span", { style: "width:22px" }),
+          ])
+        );
+      }
+      for (const inv of data.invitations) {
+        const who = inv.invitee ? inv.invitee.name : inv.email;
+        dialog.append(
+          el("div", { class: "hive-member pending", "data-invitation": inv.id }, [
+            avatar({ username: inv.invitee?.username || inv.email, name: who }, 30),
+            el("div", { class: "who" }, [who, el("small", {}, [`invited · ${inv.role}`])]),
+            el("span", { class: "role" }, ["pending"]),
+            el("button", {
+              class: "remove",
+              title: `Cancel the invitation of ${who}`,
+              onclick: () => act(`${base}/invitations/${inv.id}`, { method: "DELETE" }),
+            }, ["×"]),
+          ])
+        );
+      }
+      if (data.canManage) {
+        const who = el("input", { "aria-label": "Username or email", placeholder: "Username or email" });
+        const role = el("select", { "aria-label": "Role" }, data.roles.map((r) =>
+          el("option", { value: r, selected: r === "designer" ? "" : null }, [r])));
+        const add = el("button", { class: "pill blue", disabled: "" }, ["Invite"]);
+        who.addEventListener("input", () => (add.disabled = !who.value.trim()));
+        const invite = () => {
+          const value = who.value.trim();
+          if (!value) return;
+          const body = value.includes("@") ? { email: value, role: role.value } : { username: value, role: role.value };
+          act(`${base}/invitations`, json("POST", body), `Invitation sent to ${value}.`);
+        };
+        add.addEventListener("click", invite);
+        who.addEventListener("keydown", (e) => e.key === "Enter" && invite());
+        dialog.append(el("div", { class: "add" }, [who, role, add]));
+        dialog.append(el("p", { class: "note" }, [
+          "They receive an email with a link, valid 7 days, and join when they accept.",
+        ]));
+      } else {
+        dialog.append(el("p", { class: "note" }, ["Managers and admins can invite people and change roles."]));
+      }
+      if (done) dialog.append(el("div", { class: "done" }, [done]));
+      if (error) dialog.append(el("div", { class: "error" }, [error]));
+      dialog.append(el("div", { class: "footer" }, [el("button", { class: "pill red", onclick: close }, ["Done"])]));
+    };
+    try {
+      render(await load());
+    } catch (error) {
+      dialog.replaceChildren(el("h3", {}, ["Share"]), el("div", { class: "error" }, [error.message]));
+    }
+  }
 }
 
 // The File menu Fontra shows when a view has no getFileMenuItems (copied from
@@ -458,7 +630,13 @@ export async function start() {
   try {
     me = await api("/api/hive/me");
   } catch (error) {
-    return null; // not signed in (the view route redirects before this)
+    // hive-api: the 15-minute cookie may have lapsed (a sleeping laptop).
+    if (error.status !== 401 || !(await refreshSession())) return null;
+    try {
+      me = await api("/api/hive/me");
+    } catch (error2) {
+      return null;
+    }
   }
   if (!me.accounts || !me.user) return null; // no accounts: nothing to show
   const project = currentProject();
@@ -470,7 +648,7 @@ export async function start() {
       access = null;
     }
   }
-  const hive = new HiveViews({ me: me.user, project, access, view: currentView() });
+  const hive = new HiveViews({ me: me.user, project, access, view: currentView(), source: me.source });
   await hive.mount();
   window.hiveViews = hive;
   return hive;

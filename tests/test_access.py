@@ -292,13 +292,15 @@ def test_dev_login_and_logout(manager):
         with pytest.raises(web.HTTPFound) as raised:
             await manager.devLoginHandler(post(user="ana"))
         assert raised.value.location == "/"
-        value, options = raised.value.cookies[DEV_USER_COOKIE]
-        assert value == "ana" and options["httponly"] and options["samesite"] == "Lax"
+        morsel = raised.value.cookies[DEV_USER_COOKIE]
+        assert (
+            morsel.value == "ana" and morsel["httponly"] and morsel["samesite"] == "Lax"
+        )
         with pytest.raises(web.HTTPBadRequest):
             await manager.devLoginHandler(post(user="ghost"))
         with pytest.raises(web.HTTPFound) as raised:
             await manager.devLogoutHandler(request(user="ana"))
-        assert raised.value.cookies[DEV_USER_COOKIE][0] is None
+        assert raised.value.cookies[DEV_USER_COOKIE]["max-age"] == "0"  # deleted
 
     run(go())
 

@@ -1,0 +1,41 @@
+/* Fontra Hive account pages, in Fontra's look (its core.css gives the
+   colors and the light/dark theme). */
+body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 0;
+  min-height: 100vh;
+  font-family: fontra-ui-regular, -apple-system, system-ui, sans-serif;
+  background: var(--background-color, #f6f6f6);
+  color: var(--foreground-color, black);
+}
+.logo { width: 72px; margin-top: 64px; }
+h1 { font-size: 1.5em; margin: 0.5em 0 0.2em; }
+.lead { opacity: 0.65; margin: 0 0 1.5em; text-align: center; max-width: 26em; line-height: 1.4; }
+form, .card {
+  display: flex; flex-direction: column; gap: 0.75em; width: 22em;
+  background: var(--ui-element-background-color, white);
+  border-radius: 0.75em; padding: 1.5em; box-shadow: 1px 2px 8px #0002;
+}
+label { display: flex; flex-direction: column; gap: 0.3em; font-size: 0.9em; }
+label small { opacity: 0.6; }
+input {
+  font: inherit; font-size: 1em; padding: 0.5em 0.6em; border-radius: 0.4em;
+  border: 1px solid #8884;
+  background: var(--text-input-background-color, #eee);
+  color: var(--text-input-foreground-color, black);
+}
+input:focus { outline: 2px solid #46f8; outline-offset: 0; }
+button {
+  font: inherit; border: none; border-radius: 1em; padding: 0.55em 1em; cursor: pointer;
+  background: var(--fontra-red-color, #f11759); color: white; margin-top: 0.25em;
+}
+button:disabled { opacity: 0.5; cursor: default; }
+button.secondary { background: #8883; color: inherit; }
+.links { margin-top: 1em; font-size: 0.9em; opacity: 0.8; display: flex; gap: 1.5em; }
+a { color: inherit; }
+.error { color: var(--fontra-red-color, #f11759); font-size: 0.9em; min-height: 1.2em; }
+.note { font-size: 0.9em; opacity: 0.75; line-height: 1.4; }
+.who { display: flex; align-items: center; gap: 0.75em; }
+.hidden { display: none !important; }

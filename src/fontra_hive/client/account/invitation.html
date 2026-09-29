@@ -1,0 +1,39 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Invitation — Fontra Hive</title>
+<link rel="stylesheet" href="/css/core.css">
+<link rel="stylesheet" href="/hive/account/account.css">
+<script type="module" src="/hive/account/account.js"></script>
+</head>
+<body data-page="invitation">
+  <img class="logo" src="/images/fontra-icon.svg" alt="">
+  <h1>You are invited</h1>
+  <p class="lead">Checking the invitation…</p>
+  <div id="invitation" class="hidden">
+    <form id="accept" class="hidden">
+      <p class="note as"></p>
+      <div class="error"></div>
+      <button type="submit">Accept the invitation</button>
+    </form>
+    <form id="signin" class="hidden">
+      <p class="note">You already have an account: sign in to accept.</p>
+      <label>Username or email <input name="login" autocomplete="username" required></label>
+      <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+      <div class="error"></div>
+      <button type="submit">Sign in and accept</button>
+      <a class="note" href="/forgot-password">Forgot your password?</a>
+    </form>
+    <form id="signup" class="hidden">
+      <p class="note">Create your account for <b class="email"></b>.</p>
+      <label>Username <small>letters, digits and hyphens; how others will find you</small>
+        <input name="username" autocomplete="username" required maxlength="39" pattern="[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}"></label>
+      <label>Your name <small>as shown to your team</small>
+        <input name="fullname" autocomplete="name" maxlength="100"></label>
+      <label>Password <small>at least 10 characters</small>
+        <input name="password" type="password" autocomplete="new-password" required minlength="10"></label>
+      <label>Password, again <input name="password2" type="password" autocomplete="new-password" required></label>
+      <div class="error"></div>
+      <button type="submit">Create the account</button>
+    </form>
+  </div>
+</body></html>

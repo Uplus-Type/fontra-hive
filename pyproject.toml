@@ -13,6 +13,7 @@ requires-python = ">=3.11"
 # install this package in the same environment.
 dependencies = [
     "dulwich>=0.22",
+    "PyJWT[crypto]>=2.8",
 ]
 dynamic = ["version"]
 classifiers = [
@@ -29,6 +30,7 @@ fontra-hive = "fontra_hive.cli:main"
 
 [project.entry-points."fontra.projectmanagers"]
 hive-dev = "fontra_hive.projectmanager:DevHiveProjectManagerFactory"
+hive = "fontra_hive.hivemanager:HiveProjectManagerFactory"
 
 [project.entry-points."fontra.webcontent"]
 hive = "fontra_hive.client"
