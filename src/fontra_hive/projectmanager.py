@@ -473,6 +473,7 @@ class DevHiveProjectManager:
                 for view in FONTRA_VIEWS
             ),
             web.get("/hive/{path:.*}", self.clientFileHandler),
+            web.get("/favicon.ico", self.faviconHandler),
             web.get("/api/hive/me", self.meHandler),
             web.get("/api/hive/projects/{name}/access", self.accessHandler),
             web.post("/api/hive/projects/{name}/presence", self.presenceHandler),
@@ -486,6 +487,15 @@ class DevHiveProjectManager:
             web.get("/api/hive/projects/{name}/snapshots", self.snapshotsHandler),
             web.post("/api/hive/projects/{name}/snapshot", self.snapshotHandler),
         ]
+
+    async def faviconHandler(self, request: web.Request) -> web.Response:
+        """/favicon.ico, which browsers ask for on every site."""
+        data = resources.files("fontra_hive").joinpath("client", "icons", "favicon.ico")
+        return web.Response(
+            body=data.read_bytes(),
+            content_type="image/x-icon",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
 
     async def clientFileHandler(self, request: web.Request) -> web.Response:
         """The editor plug-in's files, always revalidated by the browser.
@@ -745,6 +755,8 @@ CLIENT_CONTENT_TYPES = {
     "css": "text/css",
     "html": "text/html",
     "png": "image/png",
+    "ico": "image/x-icon",
+    "webmanifest": "application/manifest+json",
 }
 
 
@@ -809,6 +821,14 @@ def _devLoginPage(directory: DevDirectory, ref: str = "/") -> str:
 
 
 HIVE_HEAD_SCRIPT = '<script src="/hive/views/register.js"></script>'
+# Hive's icon in the browser tab, on a phone's home screen, as an app. Also
+# written by hand in the account pages (client/account/*.html).
+HIVE_ICON_LINKS = (
+    '<link rel="icon" href="/hive/icons/hive-icon.svg" type="image/svg+xml">'
+    '<link rel="icon" href="/favicon.ico" sizes="48x48">'
+    '<link rel="apple-touch-icon" href="/hive/icons/apple-touch-icon.png">'
+    '<link rel="manifest" href="/hive/icons/site.webmanifest">'
+)
 HIVE_BODY_SCRIPT = '<script type="module" src="/hive/views/hive-views.js"></script>'
 
 
@@ -816,14 +836,14 @@ def injectHiveScripts(html: str) -> str:
     """Add Hive's scripts to one of Fontra's pages: a small classic script at
     the start of <head> (it must run before Fontra's modules: it registers
     the history plug-in before the editor reads its plug-in list), and the
-    Hive UI module at the end of <body>."""
+    Hive UI module at the end of <body>; and Hive's icon links."""
     lower = html.lower()
     head = lower.find("<head>")
     if head != -1:
         cut = head + len("<head>")
-        html = html[:cut] + HIVE_HEAD_SCRIPT + html[cut:]
+        html = html[:cut] + HIVE_HEAD_SCRIPT + HIVE_ICON_LINKS + html[cut:]
     else:
-        html = HIVE_HEAD_SCRIPT + html
+        html = HIVE_HEAD_SCRIPT + HIVE_ICON_LINKS + html
     lower = html.lower()
     body = lower.rfind("</body>")
     if body != -1:

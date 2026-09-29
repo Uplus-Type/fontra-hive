@@ -306,6 +306,25 @@ def test_plugin_files_are_served_with_revalidation(manager):
         assert again.body == response.body
         manifest = await manager.clientFileHandler(request("plugin/plugin.json"))
         assert manifest.content_type == "application/json"
+        # Hive's icon: the files the pages link to, and /favicon.ico.
+        for path, contentType in [
+            ("icons/hive-icon.svg", "image/svg+xml"),
+            ("icons/apple-touch-icon.png", "image/png"),
+            ("icons/icon-192.png", "image/png"),
+            ("icons/icon-512.png", "image/png"),
+            ("icons/site.webmanifest", "application/manifest+json"),
+        ]:
+            assert (await manager.clientFileHandler(request(path))).content_type == (
+                contentType
+            )
+        webmanifest = await manager.clientFileHandler(request("icons/site.webmanifest"))
+        icons = json.loads(webmanifest.body)["icons"]
+        for icon in icons:
+            path = icon["src"].removeprefix("/hive/")
+            assert (await manager.clientFileHandler(request(path))).body
+        favicon = await manager.faviconHandler(request(""))
+        assert favicon.content_type == "image/x-icon"
+        assert favicon.body[:4] == b"\x00\x00\x01\x00"  # an ICO file
         for bad in [
             "plugin/../__init__.py",
             "__init__.py",

@@ -72,6 +72,8 @@ def test_inject_hive_scripts():
     assert page.index('src="/hive/views/register.js"') < page.index("<title>")
     assert page.index('src="/hive/views/hive-views.js"') > page.index("<p>x</p>")
     assert page.endswith("</BODY></html>")
+    assert page.index('href="/hive/icons/hive-icon.svg"') < page.index("<title>")
+    assert 'rel="apple-touch-icon"' in page and 'rel="manifest"' in page
     bare = injectHiveScripts("<p>fragment</p>")
     assert bare.startswith('<script src="/hive/views/register.js">')
     assert "hive-views.js" in bare

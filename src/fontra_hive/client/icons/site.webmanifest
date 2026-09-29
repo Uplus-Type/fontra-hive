@@ -1,0 +1,12 @@
+{
+  "name": "Fontra Hive",
+  "short_name": "Hive",
+  "icons": [
+    {"src": "/hive/icons/icon-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "/hive/icons/icon-512.png", "sizes": "512x512", "type": "image/png"}
+  ],
+  "start_url": "/",
+  "display": "browser",
+  "theme_color": "#E9B02A",
+  "background_color": "#ffffff"
+}
