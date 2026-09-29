@@ -68,6 +68,7 @@ class DevHiveProjectManagerFactory:
     def getProjectManager(arguments: SimpleNamespace) -> ProjectManager:
         root = arguments.root.resolve()
         usersPath = getattr(arguments, "users", None) or root / DEV_USERS_FILE
+        _logAccounts(root, usersPath)
         return DevHiveProjectManager(
             rootPath=root,
             readOnly=arguments.read_only,
@@ -78,6 +79,31 @@ class DevHiveProjectManagerFactory:
 
 
 DEV_USERS_FILE = "hive-dev-users.json"
+
+
+def _logAccounts(root: pathlib.Path, usersPath: pathlib.Path) -> None:
+    """Say at startup whether accounts are on: a misnamed users file would
+    otherwise silently leave the server without sign-in."""
+    if usersPath.exists():
+        directory = DevDirectory(usersPath)
+        logger.info(
+            "Hive accounts: on (%s: %d users, %d projects)",
+            usersPath,
+            len(directory.users()),
+            len(directory.data.get("projects", {})),
+        )
+        return
+    logger.info("Hive accounts: off (no %s)", usersPath)
+    lookalikes = sorted(p.name for p in root.glob("*users*.json"))
+    if lookalikes:
+        logger.warning(
+            "Hive accounts: found %s in %s, but only %s is read: rename it to enable accounts",
+            ", ".join(lookalikes),
+            root,
+            DEV_USERS_FILE,
+        )
+
+
 DEV_USER_COOKIE = "hive-dev-user"
 
 

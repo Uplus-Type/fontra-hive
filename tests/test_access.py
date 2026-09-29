@@ -301,3 +301,20 @@ def test_dev_login_and_logout(manager):
         assert raised.value.cookies[DEV_USER_COOKIE][0] is None
 
     run(go())
+
+
+def test_startup_says_whether_accounts_are_on(tmp_path, caplog):
+    import logging
+
+    from fontra_hive.projectmanager import _logAccounts
+
+    caplog.set_level(logging.INFO)
+    (tmp_path / "hive-dev-users.example.json").write_text(json.dumps(USERS))
+    _logAccounts(tmp_path, tmp_path / "hive-dev-users.json")
+    text = caplog.text
+    assert "Hive accounts: off" in text
+    assert "found hive-dev-users.example.json" in text and "rename it" in text
+    caplog.clear()
+    (tmp_path / "hive-dev-users.json").write_text(json.dumps(USERS))
+    _logAccounts(tmp_path, tmp_path / "hive-dev-users.json")
+    assert "Hive accounts: on" in caplog.text and "4 users, 2 projects" in caplog.text
