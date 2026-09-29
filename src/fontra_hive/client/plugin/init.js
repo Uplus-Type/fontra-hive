@@ -491,7 +491,15 @@ class HiveHistoryPanel extends HTMLElement {
       ["Snapshot…"]
     );
     shadow.append(
-      el("div", { class: "panel" }, [
+      el("div", {
+        class: "panel",
+        // A click on empty space (between or below the rows, the labels, the
+        // panel margins) deselects, like in a file list.
+        onclick: (event) => {
+          const interactive = ".commit, .snapshot, button, input, .snapshot-form, .status";
+          if (!event.target.closest(interactive)) this.clearPreview();
+        },
+      }, [
         el("div", { class: "header" }, [
           el("span", { class: "title" }, ["Glyph history"]),
           this.branchElement,
@@ -691,7 +699,14 @@ class HiveHistoryPanel extends HTMLElement {
   // Hover and click behaviour shared by commit and snapshot rows.
   attachPreviewHandlers(row, sha, glyphName, isCurrent) {
     row.dataset.sha = sha;
-    if (isCurrent) return;
+    if (isCurrent) {
+      // The current version is what the canvas shows already: clicking it
+      // deselects whatever was pinned.
+      row.addEventListener("click", (event) => {
+        if (!event.target.closest("button")) this.clearPreview();
+      });
+      return;
+    }
     row.addEventListener("mouseenter", () => this.hover(sha, glyphName));
     row.addEventListener("mouseleave", () => this.unhover(sha));
     row.addEventListener("click", (event) => {

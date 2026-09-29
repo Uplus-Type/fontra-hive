@@ -390,3 +390,38 @@ def test_no_preview_is_left_without_its_row(page):
     assert page.evaluate("drawCall()") is None
     assert "Hover a version" in page.evaluate("statusText()")
     assert page.evaluate("panel.shadowRoot.querySelectorAll('.previewing').length") == 0
+
+
+def test_click_on_empty_space_or_current_deselects(page):
+    page.evaluate(SETUP)
+    page.evaluate(
+        "() => { document.body.style.cssText = 'margin:0;height:600px;width:320px';"
+        " panel.style.height = '600px'; }"
+    )
+    page.evaluate("wait(300)")
+    pin = "rowFor('2').click()"
+    pinned = "panel.pinned?.sha ?? null"
+    # The current version.
+    page.evaluate(pin)
+    assert page.evaluate(pinned) == "2" * 40
+    page.evaluate("rowFor('3').click()")
+    assert page.evaluate(pinned) is None
+    assert page.evaluate("drawCall()") is None
+    # Empty space below the rows, and the labels above them.
+    for target in [
+        "panel.listElement",
+        "panel.shadowRoot.querySelector('.summary-line')",
+        "panel.shadowRoot.querySelector('.group-label')",
+        "panel.shadowRoot.querySelector('.panel')",
+    ]:
+        page.evaluate(pin)
+        assert page.evaluate(pinned) == "2" * 40
+        page.evaluate(f"{target}.click()")
+        assert page.evaluate(pinned) is None, target
+    # But not the preview bar, its buttons, the header buttons or a row.
+    page.evaluate(pin)
+    page.evaluate("panel.statusElement.querySelector('.text').click()")
+    page.evaluate("panel.shadowRoot.querySelector('.refresh').click()")
+    assert page.evaluate(pinned) == "2" * 40
+    page.evaluate("rowFor('5').click()")
+    assert page.evaluate(pinned) == "5" * 40
