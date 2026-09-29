@@ -279,9 +279,28 @@ def test_sign_in_roles_projects_and_invitations_through_the_relay(
                     "/api/hive/projects/uplustype%2FImported/import", data=data
                 )
 
+            async def hasRepository():
+                response = await browser.get(
+                    "/api/hive/projects/uplustype%2FImported/repository"
+                )
+                assert response.status == 200, await response.text()
+                return (await response.json())["exists"]
+
+            # A failed import creates nothing: the project has no repository
+            # (asking does not create one), and the home page says so.
+            assert await hasRepository() is False
+            bad = aiohttp.FormData()
+            bad.add_field("file", b"not a font", filename="broken.zip")
+            response = await browser.post(
+                "/api/hive/projects/uplustype%2FImported/import", data=bad
+            )
+            assert response.status == 422, await response.text()
+            assert await hasRepository() is False
+
             response = await upload()
             assert response.status == 200, await response.text()
             assert (await response.json())["created"] is True
+            assert await hasRepository() is True
             log = await (
                 await browser.get("/api/hive/projects/uplustype%2FImported/log")
             ).json()

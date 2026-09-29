@@ -16,6 +16,8 @@ import { avatar, hiveApiProjectPath, openShareDialog } from "../views/hive-views
 const ROLES = ["observer", "reviewer", "designer", "manager", "admin"];
 const main = () => document.getElementById("main");
 let me = null;
+// A message for the next section shown (after a redirect within the page).
+let notice = null;
 
 // --- helpers -------------------------------------------------------------------------
 
@@ -240,8 +242,11 @@ async function newProjectSection() {
         try {
           await importWithProgress(project.id, file.files[0], bar, status);
         } catch (error) {
+          // The project exists but has no font: its page says so and offers
+          // to import again or start empty (it does not open on an empty font).
+          notice = `The project was created, but the font could not be imported: ${error.message}`;
           location.hash = projectHash(project.id);
-          throw new Error(`The project was created, but the font could not be imported: ${error.message}`);
+          return;
         }
       }
       location.href = openURL(project.id);
@@ -251,17 +256,55 @@ async function newProjectSection() {
   name.focus();
 }
 
+// Whether the project has its font yet (a repository on the Fontra server).
+// When the server cannot say, assume it does: opening then works as before.
+async function hasFont(projectId) {
+  try {
+    return (await get(`/api/hive/projects/${encodeURIComponent(projectId)}/repository`)).exists !== false;
+  } catch (error) {
+    return true;
+  }
+}
+
 async function projectSection(projectId) {
   const base = hiveApiProjectPath(projectId);
   const { project } = await get(base);
   const admin = project.capabilities.includes("administer");
+  const withFont = project.trashed || (await hasFont(project.id));
+  const message = notice;
+  notice = null;
   const content = [
     el("h2", {}, [
       el("span", { class: "grow" }, [project.id, project.trashed ? " (in the trash)" : ""]),
-      project.trashed ? null : el("a", { href: openURL(project.id) }, [el("button", {}, ["Open"])]),
+      project.trashed || !withFont ? null : el("a", { href: openURL(project.id) }, [el("button", {}, ["Open"])]),
     ]),
     el("p", { class: "note" }, [`Your role: ${project.role}.`]),
   ];
+  if (message) content.splice(1, 0, el("div", { class: "error notice" }, [message]));
+  if (!withFont) {
+    content.push(
+      el("div", { class: "panel no-font" }, [
+        el("h3", { style: "margin-top:0" }, ["No font yet"]),
+        admin
+          ? el("p", { class: "note" }, ["Import a font below, or start with an empty font."])
+          : el("p", { class: "note" }, ["The project's admins have not added its font yet."]),
+        admin
+          ? el("button", {
+              onclick: async (event) => {
+                event.target.disabled = true;
+                try {
+                  // Any read of the project creates it, with an empty font.
+                  await get(`/api/hive/projects/${encodeURIComponent(project.id)}/head`);
+                  location.href = openURL(project.id);
+                } finally {
+                  event.target.disabled = false;
+                }
+              },
+            }, ["Start with an empty font"])
+          : null,
+      ])
+    );
+  }
 
   // People
   content.push(
@@ -297,6 +340,10 @@ async function projectSection(projectId) {
           if (!file.files[0]) throw new Error("Choose a font file.");
           await importWithProgress(project.id, file.files[0], bar, status);
           status.textContent = "";
+          if (!withFont) {
+            notice = null;
+            route(); // the project has its font now: "Open" comes back
+          }
           return `Imported ${file.files[0].name}.`;
         }),
       ])

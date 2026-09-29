@@ -244,3 +244,68 @@ def test_organization_page(browser_and_url):  # noqa: F811
     assert invite["body"] == {"email": "zoe@example.com", "role": "member"}
     assert page.errors == []
     page.close()
+
+
+def test_a_failed_import_leaves_a_project_without_a_font(browser_and_url):  # noqa: F811
+    """New project from a font, the import fails: the project page says so,
+    offers to import again or start empty, and has no "Open" (which would
+    make an empty font without saying anything)."""
+    new_one = project("uplustype", "New-One", "admin")
+    page = open_home(
+        browser_and_url,
+        "#new",
+        {
+            "GET /api/projects/uplustype/New-One": [200, {"project": new_one}],
+            "GET /api/hive/projects/uplustype%2FNew-One/repository": [
+                200,
+                {"exists": False},
+            ],
+            "GET /api/hive/projects/uplustype%2FNew-One/head": [
+                200,
+                {"branch": "main", "head": "a" * 40},
+            ],
+        },
+    )
+    page.route(
+        lambda url: url.endswith("/import"),
+        lambda route: route.fulfill(status=500, body="PermissionError(13)"),
+    )
+    page.wait_for_selector("form select[name=owner]")
+    page.select_option("select[name=owner]", "uplustype")
+    page.fill("input[name=name]", "New-One")
+    page.check("input[value=font]")
+    page.set_input_files(
+        "input[type=file]",
+        files=[{"name": "font.zip", "mimeType": "application/zip", "buffer": b"PK"}],
+    )
+    page.click("form button[type=submit]")
+    page.wait_for_selector(".no-font")
+    assert "could not be imported: PermissionError(13)" in page.inner_text(".notice")
+    assert "No font yet" in page.inner_text(".no-font")
+    assert page.evaluate("[...document.querySelectorAll('h2 button')].length") == 0
+    # Start with an empty font instead: the server makes it, then the editor opens.
+    page.click(".no-font button")
+    page.wait_for_url("**/fontoverview.html?project=uplustype%2FNew-One")
+    assert page.errors == []
+    page.close()
+
+
+def test_a_project_with_its_font_can_be_opened(browser_and_url):  # noqa: F811
+    page = open_home(
+        browser_and_url,
+        "#project/uplustype/Mutator",
+        {
+            "GET /api/projects/uplustype/Mutator": [
+                200,
+                {"project": project("uplustype", "Mutator", "admin")},
+            ],
+            "GET /api/hive/projects/uplustype%2FMutator/repository": [
+                200,
+                {"exists": True},
+            ],
+        },
+    )
+    page.wait_for_selector("h2 button")
+    assert page.query_selector(".no-font") is None
+    assert page.query_selector(".notice") is None
+    page.close()

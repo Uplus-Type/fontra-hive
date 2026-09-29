@@ -241,6 +241,16 @@ class HiveProjectManager(DevHiveProjectManager):
                 shutil.rmtree(building, ignore_errors=True)
         return path
 
+    async def repositoryHandler(self, request: web.Request) -> web.Response:
+        """Whether the project has its repository yet, without creating it
+        (every other route creates it, with an empty font, when missing): a
+        project made "from a font" whose import failed has none, and the
+        home page offers to import again or start empty rather than letting
+        it open on an empty font."""
+        projectAccess = await self._projectAccess(request, request.match_info["name"])
+        exists = self._repoPathFor(projectAccess).is_dir()
+        return web.json_response({"exists": exists})
+
     async def importHandler(self, request: web.Request) -> web.Response:
         """Replace a project's font with an uploaded one (multipart field
         ``file``), converted from any format Fontra reads. A new commit:
@@ -371,6 +381,7 @@ class HiveProjectManager(DevHiveProjectManager):
             web.get("/hive/logout", self.logoutPageHandler),
             *(web.get(path, self.accountPageHandler) for path in ACCOUNT_PAGES),
             web.post("/api/hive/projects/{name}/import", self.importHandler),
+            web.get("/api/hive/projects/{name}/repository", self.repositoryHandler),
             *self.projectRoutes(),
         ]
         if self.proxy:

@@ -166,7 +166,10 @@ fontra --launch hive repos --api http://127.0.0.1:8001
   invitations) and your profile (name, photo, password, where you are signed
   in). Pending invitations show as a banner, accepted in one click.
   Importing is `POST /api/hive/projects/<owner%2Fname>/import` (multipart
-  `file`, admins; up to 300 MB).
+  `file`, admins; up to 300 MB). A failed import creates nothing: the
+  project then has no repository (`GET …/repository` says so without
+  creating one), and its page offers to import again or start with an empty
+  font instead of opening on an empty font.
 - Signing in: `/` is the sign-in page (username or email, password);
   `/invitation#<token>` accepts an invitation and creates the account (the
   only way to sign up); `/forgot-password` and `/reset-password#<token>` do
