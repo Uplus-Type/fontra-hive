@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fontra-hive"
+description = "Git-backed storage and team collaboration plug-in for the Fontra font editor"
+readme = "README.md"
+license = {text = "GNU General Public License v3"}
+requires-python = ">=3.11"
+dependencies = [
+    "fontra>=0.2",
+    "dulwich>=0.22",
+]
+dynamic = ["version"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+
+[project.scripts]
+fontra-hive = "fontra_hive.cli:main"
+
+[project.entry-points."fontra.projectmanagers"]
+hive-dev = "fontra_hive.projectmanager:DevHiveProjectManagerFactory"
+
+[tool.hatch.version]
+path = "src/fontra_hive/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fontra_hive"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
