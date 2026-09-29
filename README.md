@@ -95,8 +95,10 @@ and is served by the Fontra server itself under `/hive/plugin/`.
   one being edited when the old version has it, otherwise its default
   source layer (the preview bar under the list says which; that bar has a
   fixed place and height, so hovering never moves the rows); components are resolved
-  against the same version. The overlay is a visualization layer added at
-  runtime, below the editing nodes.
+  against the same version. Other sources shown with the glyph (several
+  sources edited at once, or background sources) get the old version's
+  outline too, when that version has them. The overlay is a visualization
+  layer added at runtime, below the editing nodes.
 - **Restore this version.** With a version pinned, "Restore" in the
   preview bar (click twice: the button asks to confirm) makes the server commit that
   glyph file again on top of the branch. Nothing is rewritten or deleted:

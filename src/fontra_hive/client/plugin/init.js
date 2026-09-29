@@ -404,6 +404,19 @@ function pickLayerName(glyphJSON, wantedLayerName) {
   return names.length ? names[0] : null;
 }
 
+// The layer of a stored glyph that stands for a source shown in the editor:
+// `key` is a layer name, or (a source without a layer of its own) a font
+// source identifier, matched through the glyph sources' locationBase. Unlike
+// pickLayerName() there is no fallback: null when the version lacks it.
+function matchLayerName(glyphJSON, key) {
+  const layers = glyphJSON.layers || {};
+  if (layers[key]) return key;
+  const source = (glyphJSON.sources || []).find(
+    (s) => (s.locationBase === key || s.layerName === key) && layers[s.layerName]
+  );
+  return source ? source.layerName : null;
+}
+
 // Path of one layer, components included (resolved against the same version,
 // through `getGlyph(name)` which must answer synchronously from a cache).
 function buildLayerPath(glyphJSON, layerName, getGlyph, depth = 0) {
@@ -826,6 +839,8 @@ class HiveHistoryPanel extends HTMLElement {
     else if (p.error) text += ` — ${p.error}`;
     else if (p.shownLayer) text += ` — layer “${p.shownLayer}”`;
     if (p.ready && p.layerNote) text += ` (${p.layerNote})`;
+    const others = p.ready && !p.error && p.otherLayers ? p.otherLayers.split("\n") : [];
+    if (others.length) text += ` + ${others.length} other source${others.length === 1 ? "" : "s"}`;
     this.statusElement.append(
       el("span", { class: p.error ? "text error" : "text", title: text }, [text])
     );
@@ -1042,7 +1057,8 @@ class HiveHistoryPanel extends HTMLElement {
         );
       },
       draw: (context, positionedGlyph, parameters, model, controller) => {
-        const path = this.previewPathFor(positionedGlyph.glyph?.layerName);
+        const primaryLayerName = positionedGlyph.glyph?.layerName;
+        const path = this.previewPathFor(primaryLayerName);
         if (!path) return;
         context.save();
         // A hovered version is drawn like a pinned one, only paler.
@@ -1052,6 +1068,12 @@ class HiveHistoryPanel extends HTMLElement {
         context.lineWidth = parameters.strokeWidth;
         context.fill(path);
         context.stroke(path);
+        // The other sources shown with it (several sources edited at once,
+        // or background sources): the old version of each, outline only,
+        // like Fontra draws them.
+        for (const other of this.previewOtherPaths(primaryLayerName)) {
+          context.stroke(other);
+        }
         context.restore();
       },
     };
@@ -1237,6 +1259,44 @@ class HiveHistoryPanel extends HTMLElement {
     return path;
   }
 
+  // Paths of the old version for the other sources shown on the canvas
+  // (sceneSettings.editingLayers and backgroundLayers, keyed by layer name
+  // or, for a source without its own layer, by font source identifier).
+  // Sources the old version does not have are skipped. Synchronous, cached.
+  previewOtherPaths(primaryLayerName) {
+    const p = this.activePreview;
+    if (!p?.ready || p.error) return [];
+    const main = p.glyphs.get(p.glyphName);
+    const settings = this.editor.sceneController?.sceneSettings;
+    if (!main || !settings) return [];
+    const keys = [
+      ...Object.keys(settings.editingLayers || {}),
+      ...Object.keys(settings.backgroundLayers || {}),
+    ];
+    const primary = pickLayerName(main, primaryLayerName);
+    const names = [];
+    for (const key of keys) {
+      const layerName = matchLayerName(main, key);
+      if (layerName && layerName !== primary && !names.includes(layerName)) {
+        names.push(layerName);
+      }
+    }
+    const paths = names.map((layerName) => {
+      let path = p.paths.get(layerName);
+      if (!path) {
+        path = buildLayerPath(main, layerName, (name) => p.glyphs.get(name));
+        p.paths.set(layerName, path);
+      }
+      return path;
+    });
+    const summary = names.join("\n");
+    if (p.otherLayers !== summary) {
+      p.otherLayers = summary;
+      setTimeout(() => this.renderStatus(), 0);
+    }
+    return paths;
+  }
+
   // Unpin (the × of the status line, a second click on the pinned row).
   clearPreview() {
     this.disarmRestore();
@@ -1264,7 +1324,7 @@ if (!customElements.get("hive-history-panel")) {
 }
 
 // Exported for tests (tests/test_plugin_js.py renders them in a headless browser).
-export { appendContour, buildLayerPath, pickLayerName, transformFromDecomposed };
+export { appendContour, buildLayerPath, matchLayerName, pickLayerName, transformFromDecomposed };
 
 export function init(editor, pluginPath) {
   // Which file the editor actually loaded (handy when a browser cache is suspected).

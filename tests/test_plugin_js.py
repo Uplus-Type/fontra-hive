@@ -99,7 +99,7 @@ async () => {
     }
     return new Response("", { status: 404 });
   };
-  const sceneSettings = { selectedGlyphName: "A" };
+  const sceneSettings = { selectedGlyphName: "A", editingLayers: {}, backgroundLayers: {} };
   const editor = {
     projectIdentifier: "Mutator",
     sceneController: {
@@ -126,8 +126,9 @@ async () => {
       editing: [{ glyphName: sceneSettings.selectedGlyphName }] } });
     if (!selected.length) return null;
     const calls = { alpha: null, fills: 0 };
+    window.strokes = 0;
     const ctx = {
-      save() {}, restore() {}, stroke() {},
+      save() {}, restore() {}, stroke() { window.strokes++; },
       set globalAlpha(v) { calls.alpha = v; },
       fill(path) { calls.fills++; },
     };
@@ -425,3 +426,53 @@ def test_click_on_empty_space_or_current_deselects(page):
     assert page.evaluate(pinned) == "2" * 40
     page.evaluate("rowFor('5').click()")
     assert page.evaluate(pinned) == "5" * 40
+
+
+def test_other_sources_shown_on_the_canvas_are_previewed_too(page):
+    """Sources shown with the edited one (several edited at once, or in the
+    background) get the old version's outline as well."""
+    page.evaluate(SETUP)
+    page.evaluate("""() => {
+          const layer = (size) => ({ glyph: { path: { contours: [
+            { points: [{ x: 0, y: 0 }, { x: size, y: 0 }, { x: size, y: size }],
+              isClosed: true },
+          ] } } });
+          state.glyphs[sha("2")] = {
+            name: "A",
+            sources: [
+              { name: "Regular", layerName: "default", location: {} },
+              { name: "Bold", layerName: "bold^1", locationBase: "font-bold" },
+            ],
+            layers: { default: layer(200), "bold^1": layer(260), wide: layer(300) },
+          };
+          panel.previews.clear();  // drop what the preload already fetched
+          panel.glyphRequests.clear();
+        }""")
+    page.evaluate("wait(300)")
+    page.evaluate("rowFor('2').click()")
+    settings = "editor.sceneController.sceneSettings"
+    assert page.evaluate("drawCall()") == {"alpha": None, "fills": 1}
+    assert page.evaluate("strokes") == 1  # the edited source only
+    # A background layer by name, a source by font source id (locationBase),
+    # one the old version does not have (skipped), the edited one again.
+    page.evaluate(f"""() => {{
+          {settings}.backgroundLayers = {{ wide: "", "font-bold": "", light: "" }};
+          {settings}.editingLayers = {{ default: "" }};
+        }}""")
+    assert page.evaluate("drawCall()") == {"alpha": None, "fills": 1}
+    assert page.evaluate("strokes") == 3  # default (filled) + wide + bold outlines
+    page.evaluate("wait(20)")
+    assert page.evaluate("statusText()").startswith(
+        "Previewing 2222222222 — layer “default” + 2 other sources"
+    )
+    helpers = page.evaluate("""async () => {
+          const m = await import("/init.js");
+          const g = state.glyphs[sha("2")];
+          return [m.matchLayerName(g, "wide"), m.matchLayerName(g, "font-bold"),
+                  m.matchLayerName(g, "light")];
+        }""")
+    assert helpers == ["wide", "bold^1", None]
+    # Back to no background source: only the edited one.
+    page.evaluate(f"() => {{ {settings}.backgroundLayers = {{}}; }}")
+    page.evaluate("drawCall()")
+    assert page.evaluate("strokes") == 1
