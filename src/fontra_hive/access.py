@@ -207,5 +207,75 @@ class DevDirectory:
             return None
         return Access(user, role, CAPABILITIES[role])
 
+    def members(self, project: str) -> list[dict]:
+        """Everyone with a role on the project, highest role first, with where
+        the role comes from (``owner``, ``organization``, ``collaborator``)."""
+        data = self.data
+        info = data.get("projects", {}).get(project)
+        if info is None:
+            return []
+        owner = info.get("owner")
+        org = data.get("organizations", {}).get(owner or "")
+        result = []
+        for username in data.get("users", {}):
+            role = self.role(username, project)
+            if role is None:
+                continue
+            collaborator = info.get("collaborators", {}).get(username)
+            if username == owner:
+                via = "owner"
+            elif (
+                org is not None
+                and username in org.get("members", {})
+                and (role_rank(role) > role_rank(collaborator))
+            ):
+                via = f"organization {org.get('name') or owner}"
+            else:
+                via = "collaborator"
+            user = self.user(username)
+            result.append(
+                {
+                    "username": username,
+                    "name": user.name,
+                    "email": user.email,
+                    "role": role,
+                    "via": via,
+                    "collaboratorRole": collaborator,
+                }
+            )
+        result.sort(key=lambda m: (-role_rank(m["role"]), m["name"].lower()))
+        return result
+
+    def set_collaborator(self, project: str, username: str, role: str | None) -> None:
+        """Add, change or remove (``role=None``) an outside collaborator, and
+        write the file back. Refuses to leave the project without an admin."""
+        data = json.loads(json.dumps(self.data))  # a copy to edit
+        if username not in data.get("users", {}):
+            raise KeyError(f"unknown user {username!r}")
+        if role is not None and role not in ROLES:
+            raise ValueError(f"unknown role {role!r}")
+        info = data.get("projects", {}).get(project)
+        if info is None:
+            raise KeyError(f"unknown project {project!r}")
+        collaborators = info.setdefault("collaborators", {})
+        if role is None:
+            collaborators.pop(username, None)
+        else:
+            collaborators[username] = role
+        previous = self._data
+        self._data = data
+        try:
+            if not any(m["role"] == "admin" for m in self.members(project)):
+                raise ValueError("a project must keep at least one admin")
+        finally:
+            self._data = previous
+        temporary = self.path.with_name(self.path.name + ".tmp")
+        temporary.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        os.replace(temporary, self.path)
+        self._mtime = None
+        self._load()
+
     def projects_for(self, username: str) -> list[str]:
         return [p for p in self.data.get("projects", {}) if self.role(username, p)]

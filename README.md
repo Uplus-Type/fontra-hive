@@ -108,8 +108,31 @@ fontra --launch hive-dev repos
   runs. Without the file, nothing changes (no sign-in, one author, everyone
   may edit).
 
+In Fontra's views (editor, font overview, font info, settings, project
+list), which Hive serves with its own script added (Fontra is not modified):
+
+- **your chip** at the right of the top bar, with a menu: name, username,
+  email and role, *My projects*, *Share…*, *Sign out*;
+- **who else is on the project**: avatars next to the project name, and
+  where each person is ("editing “A”", "in the font overview", branch)
+  in the tooltip and in the menu. Each open view sends a heartbeat every
+  5 s; someone disappears 20 s after their last one;
+- a **Read only · observer** badge when your role cannot edit (next to
+  Fontra's own lock icon);
+- **File › Share…**: the members of the project and where their role comes
+  from (owner, organization, collaborator). Managers and admins can add
+  people, change or remove collaborators; in development this writes
+  `hive-dev-users.json` (invitations by email come with hive-api). A project
+  always keeps at least one admin;
+- the **Glyph history** plug-in registers itself: no more *Application
+  settings → Plugins* by hand;
+- opening a view without being signed in goes to the sign-in page, then
+  back to the page you asked for.
+
 Routes: `GET /api/hive/me` (who is signed in), `GET
-/api/hive/projects/<name>/access` (your role and capabilities).
+/api/hive/projects/<name>/access` (your role and capabilities), `POST
+/api/hive/projects/<name>/presence` (heartbeat, answers with the others),
+`GET|POST /api/hive/projects/<name>/members`.
 
 ## Glyph history in the editor (plug-in)
 
@@ -156,9 +179,9 @@ and is served by the Fontra server itself under `/hive/plugin/`.
   every edit stays available. (Compacting old history into one commit per
   snapshot, on a separate branch or by rewriting, is left for later.)
 
-To enable the panel (once per browser): open *Application settings →
-Plugins*, add the address `/hive/plugin`, then reload the editor. The panel
-appears as a clock icon in the right sidebar.
+The panel registers itself when the editor is served by Hive (it appears as
+a clock icon in the right sidebar). Otherwise, once per browser: *Application
+settings → Plugins*, add the address `/hive/plugin`, then reload the editor.
 
 Why manual registration: Fontra's plug-in list is per browser (local
 storage), with no way for a server to declare plug-ins yet. That is one of

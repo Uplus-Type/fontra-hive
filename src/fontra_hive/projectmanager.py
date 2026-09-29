@@ -19,6 +19,9 @@ import argparse
 import dataclasses
 import hashlib
 import logging
+import time
+from functools import partial
+from urllib.parse import quote
 import pathlib
 from importlib import resources
 from types import SimpleNamespace
@@ -29,7 +32,7 @@ from fontra.backends.filenames import stringToFileName
 from fontra.core.fonthandler import FontHandler
 from fontra.core.protocols import ProjectManager
 
-from .access import Access, DevDirectory, token_for, username_from_token
+from .access import ROLES, Access, DevDirectory, token_for, username_from_token
 from .backend_git import GitFontraBackend
 from .fonthandler import HiveFontHandler
 from .gitstore import (
@@ -79,6 +82,10 @@ class DevHiveProjectManagerFactory:
 
 
 DEV_USERS_FILE = "hive-dev-users.json"
+
+# Fontra's view pages, served by Hive with its script added (see viewHandler).
+FONTRA_VIEWS = ("editor", "fontoverview", "fontinfo", "applicationsettings")
+PRESENCE_TIMEOUT = 20.0  # seconds without a heartbeat before someone is gone
 
 
 def _logAccounts(root: pathlib.Path, usersPath: pathlib.Path) -> None:
@@ -133,6 +140,8 @@ class DevHiveProjectManager:
         # None: no accounts (single author, everyone may edit everything).
         self.directory = directory
         self.fontHandlers: dict[str, FontHandler] = {}
+        # project name -> client id -> presence entry (see presenceHandler)
+        self.presence: dict[str, dict[str, dict]] = {}
 
     async def aclose(self) -> None:
         for fontHandler in list(self.fontHandlers.values()):
@@ -176,18 +185,37 @@ class DevHiveProjectManager:
 
     async def rootDocumentHandler(self, request: web.Request) -> web.Response:
         if self.directory is not None and await self.authorize(request) is None:
-            return web.Response(
-                text=_devLoginPage(self.directory), content_type="text/html"
+            return _htmlResponse(
+                _devLoginPage(
+                    self.directory, getattr(request, "query", {}).get("ref", "/")
+                )
             )
-        htmlPath = resources.files("fontra") / "client" / "landing.html"
-        return web.Response(body=htmlPath.read_bytes(), content_type="text/html")
+        text = self.fontraClientFile("landing.html").read_text(encoding="utf-8")
+        return _htmlResponse(injectHiveScripts(text))
+
+    def fontraClientFile(self, fileName: str):
+        """One of Fontra's built client files (a page of the editor)."""
+        return resources.files("fontra") / "client" / fileName
+
+    async def viewHandler(self, request: web.Request, *, view: str) -> web.Response:
+        """Fontra's own view page, with the Hive script added. With accounts,
+        a visitor who is not signed in goes to the sign-in page first and
+        comes back here afterwards."""
+        if self.directory is not None and await self.authorize(request) is None:
+            ref = quote(str(getattr(request, "path_qs", f"/{view}.html")), safe="")
+            raise web.HTTPFound(f"/?ref={ref}")
+        try:
+            text = self.fontraClientFile(f"{view}.html").read_text(encoding="utf-8")
+        except FileNotFoundError:
+            raise web.HTTPNotFound()
+        return _htmlResponse(injectHiveScripts(text))
 
     async def devLoginHandler(self, request: web.Request) -> web.Response:
         form = await request.post()
         username = form.get("user", "")
         if self.directory is None or self.directory.user(username) is None:
             raise web.HTTPBadRequest(text="unknown user")
-        response = web.HTTPFound("/")
+        response = web.HTTPFound(_safeRef(form.get("ref")))
         response.set_cookie(DEV_USER_COOKIE, username, httponly=True, samesite="Lax")
         raise response
 
@@ -229,6 +257,91 @@ class DevHiveProjectManager:
             return None
         path = self.rootPath / f"{name}.git"
         return path if path.is_dir() else None
+
+    async def presenceHandler(self, request: web.Request) -> web.Response:
+        """Heartbeat of one open view: who, where (view, branch, glyph).
+        Answers with the others currently on the project."""
+        name = request.match_info["name"]
+        if self._repoPath(name) is None:
+            raise web.HTTPNotFound()
+        access = await self._require(request, name, "read")
+        body = await request.json()
+        client = str(body.get("client", ""))[:64]
+        if not client:
+            raise web.HTTPBadRequest(text="client is required")
+        user = access.user if access is not None else None
+        now = time.monotonic()
+        entries = self.presence.setdefault(name, {})
+        entries[client] = {
+            "username": user.username if user else "dev",
+            "name": user.name if user else "Anonymous",
+            "role": access.role if access else None,
+            "view": str(body.get("view", ""))[:32],
+            "branch": str(body.get("branch", ""))[:64],
+            "glyph": body.get("glyph") if isinstance(body.get("glyph"), str) else None,
+            "seen": now,
+        }
+        for key in [
+            k for k, e in entries.items() if now - e["seen"] > PRESENCE_TIMEOUT
+        ]:
+            del entries[key]
+        others = [
+            {k: v for k, v in e.items() if k != "seen"}
+            for k, e in sorted(entries.items(), key=lambda item: item[1]["name"])
+            if k != client
+        ]
+        return web.json_response({"others": others})
+
+    async def membersHandler(self, request: web.Request) -> web.Response:
+        """Who has a role on the project, and whether the requester may
+        change it (in development: outside collaborators in the users file)."""
+        name = request.match_info["name"]
+        if self._repoPath(name) is None:
+            raise web.HTTPNotFound()
+        if self.directory is None:
+            return web.json_response(
+                {"members": [], "canManage": False, "accounts": False}
+            )
+        access = await self._require(request, name, "read")
+        members = self.directory.members(name)
+        canManage = access.can("invite")
+        memberNames = {m["username"] for m in members}
+        users = (
+            [
+                {"username": u.username, "name": u.name}
+                for u in self.directory.users()
+                if u.username not in memberNames
+            ]
+            if canManage
+            else []
+        )
+        return web.json_response(
+            {
+                "members": members,
+                "canManage": canManage,
+                "you": access.user.username,
+                "users": users,
+                "roles": list(ROLES),
+                "accounts": True,
+            }
+        )
+
+    async def setMemberHandler(self, request: web.Request) -> web.Response:
+        """Add, change or remove an outside collaborator (managers, admins)."""
+        name = request.match_info["name"]
+        if self._repoPath(name) is None or self.directory is None:
+            raise web.HTTPNotFound()
+        await self._require(request, name, "invite")
+        body = await request.json()
+        try:
+            self.directory.set_collaborator(
+                name, body.get("username"), body.get("role")
+            )
+        except KeyError as error:
+            raise web.HTTPNotFound(text=str(error))
+        except ValueError as error:
+            raise web.HTTPConflict(text=str(error))
+        return await self.membersHandler(request)
 
     async def projectAvailable(self, projectIdentifier: str, token: str) -> bool:
         name, branch = splitProjectIdentifier(projectIdentifier)
@@ -316,11 +429,18 @@ class DevHiveProjectManager:
             [
                 # Registered before Fontra adds its own route for the
                 # "fontra.webcontent" entry point, so this one answers.
+                *(
+                    web.get(f"/{view}.html", partial(self.viewHandler, view=view))
+                    for view in FONTRA_VIEWS
+                ),
                 web.post("/hive/dev-login", self.devLoginHandler),
                 web.get("/hive/logout", self.devLogoutHandler),
                 web.get("/hive/{path:.*}", self.clientFileHandler),
                 web.get("/api/hive/me", self.meHandler),
                 web.get("/api/hive/projects/{name}/access", self.accessHandler),
+                web.post("/api/hive/projects/{name}/presence", self.presenceHandler),
+                web.get("/api/hive/projects/{name}/members", self.membersHandler),
+                web.post("/api/hive/projects/{name}/members", self.setMemberHandler),
                 web.get("/api/hive/projects/{name}/branches", self.branchesHandler),
                 web.get("/api/hive/projects/{name}/log", self.logHandler),
                 web.get("/api/hive/projects/{name}/glyph", self.glyphHandler),
@@ -632,7 +752,7 @@ def _sameOrigin(request) -> bool:
     return host == getattr(request, "host", host)
 
 
-def _devLoginPage(directory: DevDirectory) -> str:
+def _devLoginPage(directory: DevDirectory, ref: str = "/") -> str:
     """A minimal login page for local development: pick who you are."""
     from html import escape
 
@@ -663,6 +783,45 @@ def _devLoginPage(directory: DevDirectory) -> str:
   <img src="/images/fontra-icon.svg" alt="">
   <h1>Fontra Hive</h1>
   <p>Development server: choose who you are (no password).</p>
-  <form method="post" action="/hive/dev-login">{buttons}</form>
+  <form method="post" action="/hive/dev-login">
+    <input type="hidden" name="ref" value="{escape(_safeRef(ref))}">{buttons}</form>
 </body></html>
 """
+
+
+HIVE_HEAD_SCRIPT = '<script src="/hive/views/register.js"></script>'
+HIVE_BODY_SCRIPT = '<script type="module" src="/hive/views/hive-views.js"></script>'
+
+
+def injectHiveScripts(html: str) -> str:
+    """Add Hive's scripts to one of Fontra's pages: a small classic script at
+    the start of <head> (it must run before Fontra's modules: it registers
+    the history plug-in before the editor reads its plug-in list), and the
+    Hive UI module at the end of <body>."""
+    lower = html.lower()
+    head = lower.find("<head>")
+    if head != -1:
+        cut = head + len("<head>")
+        html = html[:cut] + HIVE_HEAD_SCRIPT + html[cut:]
+    else:
+        html = HIVE_HEAD_SCRIPT + html
+    lower = html.lower()
+    body = lower.rfind("</body>")
+    if body != -1:
+        html = html[:body] + HIVE_BODY_SCRIPT + html[body:]
+    else:
+        html = html + HIVE_BODY_SCRIPT
+    return html
+
+
+def _htmlResponse(text: str) -> web.Response:
+    return web.Response(
+        text=text, content_type="text/html", headers={"Cache-Control": "no-cache"}
+    )
+
+
+def _safeRef(ref) -> str:
+    """Where to go after signing in: a path on this site, never elsewhere."""
+    if isinstance(ref, str) and ref.startswith("/") and not ref.startswith("//"):
+        return ref
+    return "/"
