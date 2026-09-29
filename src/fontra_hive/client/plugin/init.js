@@ -663,8 +663,29 @@ class HiveHistoryPanel extends HTMLElement {
         }
       }
     }
+    this.dropHiddenPreviews();
     this.updateRowHighlights();
     this.renderStatus();
+  }
+
+  // A pinned or hovered version whose row is no longer in the list (its
+  // group was collapsed, a snapshot just grouped it, another glyph…) is
+  // dropped: nothing stays orange on the canvas without a row to explain it.
+  dropHiddenPreviews() {
+    const visible = new Set(
+      [...this.listElement.querySelectorAll("[data-sha]")].map((row) => row.dataset.sha)
+    );
+    if (this.hovered && !visible.has(this.hovered.sha)) {
+      clearTimeout(this.hoverTimer);
+      this.hoverTimer = null;
+      this.hovered = null;
+      this.requestCanvasUpdate();
+    }
+    if (this.pinned && !visible.has(this.pinned.sha)) {
+      this.disarmRestore();
+      this.pinned = null;
+      this.requestCanvasUpdate();
+    }
   }
 
   // Hover and click behaviour shared by commit and snapshot rows.
@@ -902,6 +923,7 @@ class HiveHistoryPanel extends HTMLElement {
       const data = await response.json();
       this.head = data.head;
       this.snapshotForm = null;
+      this.clearAllPreviews(); // the versions just got grouped under the snapshot
       this.renderSnapshotForm();
       await this.refresh(true);
     } catch (error) {

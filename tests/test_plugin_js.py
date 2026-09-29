@@ -358,3 +358,35 @@ def test_hovering_and_pinning_never_move_the_rows(page):
         page.evaluate(script)
         page.evaluate("wait(20)")
         assert page.evaluate(layout) == before, script
+
+
+def test_no_preview_is_left_without_its_row(page):
+    """A pinned version whose row disappears is dropped: nothing stays orange."""
+    page.evaluate(SETUP)
+    page.evaluate("wait(300)")
+    # A version inside a snapshot group, then the group is collapsed.
+    page.evaluate("""() => {
+          panel.shadowRoot.querySelector('.snapshot .caret').click();
+          rowFor('1').click();
+        }""")
+    assert page.evaluate("panel.pinned?.sha") == "1" * 40
+    page.evaluate("panel.shadowRoot.querySelector('.snapshot .caret').click()")
+    assert page.evaluate("[panel.pinned, panel.hovered]") == [None, None]
+    assert page.evaluate("drawCall()") is None
+    assert "Hover a version" in page.evaluate("statusText()")
+
+    # A version pinned (and one hovered) when a snapshot is created: the
+    # versions are grouped under the new snapshot, the previews go.
+    page.evaluate("""async () => {
+          rowFor('2').click();
+          rowFor('5').dispatchEvent(new MouseEvent('mouseenter'));
+          panel.snapshotButton.click();
+          await wait(50);
+          await panel.createSnapshot("Proofs");
+          await wait(50);
+        }""")
+    assert page.evaluate("state.posts.at(-1).route") == "snapshot"
+    assert page.evaluate("[panel.pinned, panel.hovered]") == [None, None]
+    assert page.evaluate("drawCall()") is None
+    assert "Hover a version" in page.evaluate("statusText()")
+    assert page.evaluate("panel.shadowRoot.querySelectorAll('.previewing').length") == 0
