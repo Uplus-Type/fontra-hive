@@ -1,5 +1,14 @@
 /* Fontra Hive account pages, in Fontra's look (its core.css gives the
    colors and the light/dark theme). */
+/* core.css fixes html and body to the window and hides overflow (right for
+   the editor's canvas); these pages are documents and must scroll. */
+html, body {
+  height: auto;
+  overflow: visible;
+  overscroll-behavior: auto;
+  touch-action: auto;
+}
+html { overflow-y: auto; }
 body {
   display: flex;
   flex-direction: column;

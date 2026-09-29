@@ -104,7 +104,8 @@ function waitlist() {
   const show = () => {
     open.classList.add("hidden");
     form.classList.remove("hidden");
-    form.email.focus();
+    form.email.focus({ preventScroll: true });
+    form.scrollIntoView({ behavior: "smooth", block: "center" });
   };
   open.addEventListener("click", show);
   if (location.hash === "#request") show();
