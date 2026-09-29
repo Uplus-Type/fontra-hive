@@ -1,3 +1,4 @@
+import json
 import asyncio
 import copy
 
@@ -234,5 +235,38 @@ def test_from_path_with_branch(tmp_path, fixture_fontra):
             GitFontraBackend(store, "nope")
         await backend.aclose()
         await b.aclose()
+
+    run(go())
+
+
+def test_glyphs_using_a_glyph_follow_external_changes(tmp_path, fixture_fontra):
+    """ "Glyphs using this glyph as a component" (Fontra's Related Glyphs
+    panel) stays true after a change made elsewhere: a Restore, an import."""
+
+    async def go():
+        store, sha0, backend = make(tmp_path, fixture_fontra)
+        assert await backend.findGlyphsThatUseGlyph("A") == ["A.alt"]
+        other = Signature("Other", "x@example.com")
+        # Elsewhere: A.alt no longer uses A; a new glyph Aring does.
+        aalt = json.loads(store.read_file(sha0, "glyphs/A.alt^1.json"))
+        for layer in aalt["layers"].values():
+            layer["glyph"]["components"] = []
+        aring = json.loads(store.read_file(sha0, "glyphs/A.alt^1.json"))
+        aring["name"] = "Aring"
+        store.commit(
+            {
+                "glyphs/A.alt^1.json": json.dumps(aalt).encode(),
+                "glyphs/Aring^1.json": json.dumps(aring).encode(),
+            },
+            message="elsewhere",
+            author=other,
+        )
+        await backend.check_external_changes()
+        assert await backend.findGlyphsThatUseGlyph("A") == ["Aring"]
+        # Elsewhere again: Aring deleted.
+        store.commit({"glyphs/Aring^1.json": None}, message="delete", author=other)
+        await backend.check_external_changes()
+        assert await backend.findGlyphsThatUseGlyph("A") == []
+        await backend.aclose()
 
     run(go())

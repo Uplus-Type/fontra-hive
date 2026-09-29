@@ -217,6 +217,34 @@ class GitFontraBackend(FontraBackend):
 
         return get()
 
+    def _updateGlyphDependencies(self, changes) -> None:
+        """Keep "glyphs using this glyph" true after a change made elsewhere
+        (a Restore, an import, another server): FontraBackend only updates it
+        for edits made through putGlyph()/deleteGlyph(). Only the glyph files
+        that changed are read again; not built yet = nothing to do."""
+        import json
+
+        from fontra.backends.filenames import fileNameToString
+
+        if self._glyphDependencies is None:
+            return
+        glyphsDir = str(self.glyphsDir)
+        for _, path in changes:
+            if not (path.startswith(glyphsDir + "/") and path.endswith(".json")):
+                continue
+            glyphPath = GitPath(self.tree, path[len(str(self.path)) + 1 :])
+            glyphName = fileNameToString(glyphPath.stem)
+            try:
+                glyphData = json.loads(glyphPath.read_text())
+            except FileNotFoundError:
+                componentNames = ()  # deleted
+            except json.JSONDecodeError as e:
+                logger.error("error while reading components of %s: %r", path, e)
+                continue
+            else:
+                componentNames = componentNamesFromGlyphData(glyphData)
+            self._glyphDependencies.update(glyphName, componentNames)
+
     async def findGlyphsThatUseGlyph(self, glyphName):
         return sorted((await self.glyphDependencies).usedBy.get(glyphName, []))
 
@@ -262,6 +290,7 @@ class GitFontraBackend(FontraBackend):
         pending = self.tree.pending
         self.tree.reset(head)
         self.tree.pending = pending
+        self._updateGlyphDependencies(changes)
         reloadPattern = await self.fileWatcherProcessChanges(changes)
         if reloadPattern or reloadPattern is None:
             await self.fileWatcherNotifyCallbacks(reloadPattern)
