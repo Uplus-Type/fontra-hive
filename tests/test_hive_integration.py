@@ -311,12 +311,41 @@ def test_sign_in_roles_projects_and_invitations_through_the_relay(
             response = await upload()  # again: a new version on top
             assert (await response.json())["created"] is False
 
+            # Download: the sources, zipped (fonts only where fontmake is).
+            formats = await (await browser.get("/api/hive/export-formats")).json()
+            assert [f["format"] for f in formats["formats"]][:2] == [
+                "fontra",
+                "designspace",
+            ]
+            response = await browser.get(
+                "/api/hive/projects/uplustype%2FImported/export?format=fontra"
+            )
+            assert response.status == 200, await response.text()
+            assert (
+                'filename="Imported.fontra.zip"'
+                in response.headers["Content-Disposition"]
+            )
+            archive_bytes = await response.read()
+            import io
+
+            names = zipfile.ZipFile(io.BytesIO(archive_bytes)).namelist()
+            assert "Imported.fontra/font-data.json" in names
+            response = await browser.get(
+                "/api/hive/projects/uplustype%2FImported/export?format=exe"
+            )
+            assert response.status == 400
+
             # A designer cannot replace the font.
             await browser.post("/api/auth/logout")
             await browser.post(
                 "/api/auth/login", json={"login": "fabio", "password": PASSWORD}
             )
             assert (await upload()).status == 403
+            # Nor download it (export is for managers and admins).
+            response = await browser.get(
+                "/api/hive/projects/uplustype%2FImported/export?format=fontra"
+            )
+            assert response.status == 403
         finally:
             await browser.close()
             await manager.aclose()

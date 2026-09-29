@@ -114,6 +114,34 @@ async function fetchOk(path, options = {}) {
   return response;
 }
 
+// Build a project's file on the server and hand it to the browser as a
+// download (a notice while it builds: fonts can take a while).
+export async function exportDownload(project, format) {
+  const url =
+    `/api/hive/projects/${encodeURIComponent(project.name)}/export` +
+    `?format=${encodeURIComponent(format || "fontra")}&branch=${encodeURIComponent(project.branch || "main")}`;
+  const notice = el("div", { class: "hive-notice" }, [`Preparing ${format}…`]);
+  ensureStyle();
+  document.body.append(notice);
+  try {
+    const response = await fetch(url, { credentials: "same-origin" });
+    if (!response.ok) throw new Error((await response.text()) || `Error ${response.status}`);
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const name = /filename="([^"]+)"/.exec(disposition)?.[1] || `font.${format}`;
+    const blob = await response.blob();
+    const link = el("a", { href: URL.createObjectURL(blob), download: name });
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 60000);
+    notice.remove();
+  } catch (error) {
+    notice.textContent = `Export failed: ${error.message}`;
+    notice.classList.add("error");
+    setTimeout(() => notice.remove(), 8000);
+  }
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, { credentials: "same-origin", ...options });
   if (!response.ok) {
@@ -238,6 +266,10 @@ const STYLE = `
     color: var(--text-input-foreground-color, black); }
   .hive-dialog .done { color: #3f9a8a; font-size: 0.9em; margin-top: 8px; }
   .hive-dialog .footer { display: flex; justify-content: flex-end; margin-top: 16px; }
+  .hive-notice { position: fixed; bottom: 1.5em; left: 50%; transform: translateX(-50%);
+    background: #222; color: white; padding: 0.6em 1.1em; border-radius: 0.6em; z-index: 1000;
+    font-family: fontra-ui-regular, sans-serif; box-shadow: 1px 2px 8px #0005; }
+  .hive-notice.error { background: var(--fontra-red-color, #f11759); }
 `;
 
 // --- the Hive UI ------------------------------------------------------------------
@@ -289,6 +321,7 @@ export class HiveViews {
 
     if (this.project) {
       this.installFileMenu();
+      this.installExport();
       this.heartbeat();
       this.timer = setInterval(() => this.heartbeat(), HEARTBEAT_MS);
     }
@@ -402,6 +435,18 @@ export class HiveViews {
         { title: "-" },
         ...defaultFileMenuItems(controller),
       ];
+    });
+  }
+
+  // --- File › Export as: a download ---------------------------------------------
+
+  // Fontra's "Export as" asks the server to write a file (Fontra Pak opens a
+  // save dialog); in a browser it must be a download. The formats come from
+  // Hive's export manager; the choice becomes a GET of …/export.
+  installExport() {
+    waitFor(() => viewController()?.fontController).then((fontController) => {
+      if (!fontController) return;
+      fontController.exportAs = (options) => exportDownload(this.project, options?.format);
     });
   }
 

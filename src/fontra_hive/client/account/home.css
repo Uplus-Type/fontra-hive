@@ -77,3 +77,4 @@ main h2 button { font-size: 0.68em; margin: 0; }
 main h2 .badge { font-size: 0.6em; font-weight: normal; }
 table.people td:nth-child(2), table.people td:nth-child(3) { width: 1%; white-space: nowrap; }
 label.check { flex-direction: row; align-items: center; gap: 0.5em; }
+.downloads { flex-wrap: wrap; gap: 0.5em; }

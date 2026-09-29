@@ -17,6 +17,7 @@ the git side is the same.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import dataclasses
 import hashlib
 import logging
@@ -24,6 +25,10 @@ import time
 from functools import partial
 from urllib.parse import quote
 import pathlib
+import re
+import shutil
+import sys
+import tempfile
 from importlib import resources
 from types import SimpleNamespace
 from typing import Any
@@ -449,6 +454,9 @@ class DevHiveProjectManager:
             readOnly=self.readOnly or (readOnly and accessForToken is None),
             allConnectionsClosedCallback=closeFontHandler,
             accessForToken=accessForToken,
+            # "File › Export as" lists these; Hive's page script turns the
+            # choice into a download from /api/hive/projects/<id>/export.
+            exportManager=HiveExportManager(),
         )
         await fontHandler.startTasks()
         self.fontHandlers[key] = fontHandler
@@ -486,7 +494,104 @@ class DevHiveProjectManager:
             web.post("/api/hive/projects/{name}/restore", self.restoreHandler),
             web.get("/api/hive/projects/{name}/snapshots", self.snapshotsHandler),
             web.post("/api/hive/projects/{name}/snapshot", self.snapshotHandler),
+            web.get("/api/hive/projects/{name}/export", self.exportHandler),
+            web.get("/api/hive/export-formats", self.exportFormatsHandler),
         ]
+
+    async def exportFormatsHandler(self, request: web.Request) -> web.Response:
+        """What this server can export: sources always, fonts when it can build them."""
+        from . import export
+
+        labels = {**export.SOURCE_FORMATS, **export.FONT_FORMATS}
+        return web.json_response(
+            {
+                "formats": [
+                    {"format": f, "label": labels[f][0]}
+                    for f in export.supported_formats()
+                ]
+            }
+        )
+
+    async def exportHandler(self, request: web.Request) -> web.StreamResponse:
+        """Download a branch of a project: its sources (.fontra or
+        .designspace + UFOs, zipped) or, when the server can build them,
+        fonts. Needs the "export" capability (managers and admins). Edits not
+        yet committed are committed first; the build runs in its own process
+        (see export.py), one at a time."""
+        from . import export
+
+        name = request.match_info["name"]
+        repoPath, _ = await self._project(request, name, "export")
+        format = request.query.get("format", "fontra")
+        if format not in export.supported_formats():
+            raise web.HTTPBadRequest(text=f"Cannot export as {format!r} here.")
+        branch = request.query.get("branch", DEFAULT_BRANCH)
+        fontHandler = self.fontHandlers.get(self._handlerKey(repoPath, branch))
+        if fontHandler is not None:
+            fontHandler.backend.flush()
+        store = GitRepoStore.open(repoPath)
+        try:
+            head = store.head(branch)
+            if head is None:
+                raise web.HTTPNotFound(text=f"No branch {branch!r}.")
+            projectName = name.split("/")[-1]
+            stem = _safeStem(
+                projectName + ("" if branch == DEFAULT_BRANCH else f"-{branch}")
+            )
+            work = pathlib.Path(
+                tempfile.mkdtemp(dir=repoPath.parent, prefix=".export-")
+            )
+            source = work / "source" / f"{stem}.fontra"
+            store.export(head, source)
+        finally:
+            store.close()
+        try:
+            async with _exportSlot:
+                process = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "-m",
+                    "fontra_hive.export",
+                    str(source),
+                    str(work),
+                    stem,
+                    format,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                try:
+                    out, err = await asyncio.wait_for(
+                        process.communicate(), timeout=EXPORT_TIMEOUT
+                    )
+                except asyncio.TimeoutError:
+                    process.kill()
+                    raise web.HTTPGatewayTimeout(text="The export took too long.")
+            if process.returncode != 0:
+                logger.error(
+                    "export of %s as %s failed: %s", name, format, err.decode()[-2000:]
+                )
+                lastLine = (err.decode().strip().splitlines() or ["unknown error"])[-1]
+                raise web.HTTPInternalServerError(text=f"The export failed: {lastLine}")
+            result = pathlib.Path(out.decode().strip().splitlines()[-1])
+            response = web.StreamResponse(
+                headers={
+                    "Content-Type": (
+                        "application/zip"
+                        if result.suffix == ".zip"
+                        else "application/octet-stream"
+                    ),
+                    "Content-Disposition": f'attachment; filename="{result.name}"',
+                    "Content-Length": str(result.stat().st_size),
+                    "Cache-Control": "no-store",
+                }
+            )
+            await response.prepare(request)
+            with result.open("rb") as file:
+                while chunk := file.read(1 << 20):
+                    await response.write(chunk)
+            await response.write_eof()
+            return response
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
 
     async def faviconHandler(self, request: web.Request) -> web.Response:
         """/favicon.ico, which browsers ask for on every site."""
@@ -818,6 +923,29 @@ def _devLoginPage(directory: DevDirectory, ref: str = "/") -> str:
     <input type="hidden" name="ref" value="{escape(_safeRef(ref))}">{buttons}</form>
 </body></html>
 """
+
+
+EXPORT_TIMEOUT = 30 * 60  # seconds: a large CJK font can take long to build
+_exportSlot = asyncio.Semaphore(1)  # one build at a time on the server
+
+
+def _safeStem(name: str) -> str:
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip(".-")
+    return stem or "font"
+
+
+class HiveExportManager:
+    """Fontra's ExportManager protocol: the formats "File › Export as" lists.
+    The download itself goes through exportHandler (a browser needs a URL,
+    not a file written on the server)."""
+
+    def getSupportedExportFormats(self) -> list[str]:
+        from .export import supported_formats
+
+        return supported_formats()
+
+    async def exportAs(self, projectIdentifier: str, options: dict) -> None:
+        raise NotImplementedError("Hive exports through /api/hive/projects/<id>/export")
 
 
 HIVE_HEAD_SCRIPT = '<script src="/hive/views/register.js"></script>'

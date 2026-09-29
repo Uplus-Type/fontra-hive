@@ -11,7 +11,7 @@
 // Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
 
 import { call } from "./account.js";
-import { avatar, hiveApiProjectPath, openShareDialog } from "../views/hive-views.js";
+import { avatar, exportDownload, hiveApiProjectPath, openShareDialog } from "../views/hive-views.js";
 
 const ROLES = ["observer", "reviewer", "designer", "manager", "admin"];
 const main = () => document.getElementById("main");
@@ -314,6 +314,37 @@ async function projectSection(projectId) {
       el("button", { onclick: () => openShareDialog(project.id) }, ["Manage people…"]),
     ])
   );
+
+  // Download: the sources, or fonts built on the server (managers, admins).
+  if (withFont && !project.trashed && project.capabilities.includes("export")) {
+    let formats = [];
+    try {
+      formats = (await get("/api/hive/export-formats")).formats;
+    } catch (error) {
+      formats = [];
+    }
+    if (formats.length) {
+      content.push(
+        el("div", { class: "panel" }, [
+          el("h3", { style: "margin-top:0" }, ["Download"]),
+          el("p", { class: "note" }, ["The latest version of the main branch."]),
+          el("div", { class: "row downloads" }, formats.map(({ format, label }) =>
+            el("button", {
+              class: "secondary",
+              onclick: async (event) => {
+                event.target.disabled = true;
+                try {
+                  await exportDownload({ name: project.id, branch: "main" }, format);
+                } finally {
+                  event.target.disabled = false;
+                }
+              },
+            }, [label])
+          )),
+        ])
+      );
+    }
+  }
 
   if (admin) {
     const name = el("input", { value: project.name, required: true, maxlength: 100 });

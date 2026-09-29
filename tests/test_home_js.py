@@ -28,7 +28,7 @@ def project(owner, name, role, description=""):
         "role": role,
         "trashed": False,
         "capabilities": (
-            ["read", "edit", "invite", "administer"] if role == "admin" else ["read"]
+            ["read", "edit", "export", "invite", "administer"] if role == "admin" else ["read"]
         ),
     }
 
@@ -314,9 +314,30 @@ def test_a_project_with_its_font_can_be_opened(browser_and_url):  # noqa: F811
                 200,
                 {"exists": True},
             ],
+            "GET /api/hive/export-formats": [
+                200,
+                {
+                    "formats": [
+                        {"format": "fontra", "label": "Fontra package"},
+                        {"format": "otf", "label": "OpenType (.otf)"},
+                    ]
+                },
+            ],
+            "GET /api/hive/projects/uplustype%2FMutator/export": [200, {"zip": 1}],
         },
     )
     page.wait_for_selector("h2 button")
     assert page.query_selector(".no-font") is None
     assert page.query_selector(".notice") is None
+    # Download: one button per format the server offers.
+    page.wait_for_selector(".downloads button")
+    assert page.eval_on_selector_all(
+        ".downloads button", "bs => bs.map(b => b.textContent)"
+    ) == [
+        "Fontra package",
+        "OpenType (.otf)",
+    ]
+    page.click("text=OpenType (.otf)")
+    page.wait_for_function("calls.some(c => c.path.endsWith('/export'))")
+    assert page.errors == []
     page.close()
