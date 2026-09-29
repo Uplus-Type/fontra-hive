@@ -88,9 +88,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"exported {args.ref} to {args.destination}")
         elif args.command == "log":
             for c in store.log(args.ref, path=args.path, limit=args.limit):
-                when = datetime.datetime.fromtimestamp(
-                    c.time, datetime.timezone.utc
-                ).strftime("%Y-%m-%d %H:%M")
+                when = datetime.datetime.fromtimestamp(c.time).astimezone()
+                when = when.strftime("%Y-%m-%d %H:%M")
                 print(
                     f"{c.sha[:10]}  {when}  {c.author:<20}  {c.message.splitlines()[0]}"
                 )
