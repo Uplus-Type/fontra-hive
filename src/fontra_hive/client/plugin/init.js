@@ -32,6 +32,27 @@ const MAX_CACHED_PREVIEWS = 60;
 const MAX_CACHED_GLYPHS = 600;
 
 const STYLES = `
+  /* Soft amber for everything "history": kept away from Fontra's red
+     (--fontra-red-color). Follows Fontra's theme setting (a class on the
+     root element), else the system setting. */
+  :host {
+    --hive-accent: #c89222;
+    --hive-accent-rgb: 200, 146, 34;
+  }
+  @media (prefers-color-scheme: dark) {
+    :host {
+      --hive-accent: #e6be5a;
+      --hive-accent-rgb: 230, 190, 90;
+    }
+  }
+  :host-context(.light-theme) {
+    --hive-accent: #c89222;
+    --hive-accent-rgb: 200, 146, 34;
+  }
+  :host-context(.dark-theme) {
+    --hive-accent: #e6be5a;
+    --hive-accent-rgb: 230, 190, 90;
+  }
   :host {
     display: block;
     height: 100%;
@@ -138,12 +159,12 @@ const STYLES = `
     cursor: default;
   }
   .commit.previewing, .snapshot.previewing {
-    outline: 2px solid #e8781e;
+    outline: 2px solid var(--hive-accent);
     outline-offset: -1px;
-    background: rgba(232, 120, 30, 0.14);
+    background: rgba(var(--hive-accent-rgb), 0.16);
   }
   .commit.hovering, .snapshot.hovering {
-    outline: 1px solid rgba(232, 120, 30, 0.75);
+    outline: 1px solid rgba(var(--hive-accent-rgb), 0.75);
   }
   .commit .author {
     flex: none;
@@ -216,12 +237,12 @@ const STYLES = `
     background: rgba(128, 128, 128, 0.08);
   }
   .status.pinned {
-    background: rgba(232, 120, 30, 0.15);
-    border-left-color: #e8781e;
+    background: rgba(var(--hive-accent-rgb), 0.16);
+    border-left-color: var(--hive-accent);
   }
   .status.hover {
-    background: rgba(232, 120, 30, 0.07);
-    border-left: 3px dotted #e8781e;
+    background: rgba(var(--hive-accent-rgb), 0.08);
+    border-left: 3px dotted var(--hive-accent);
   }
   .status .text {
     flex: 1;
@@ -254,12 +275,12 @@ const STYLES = `
   }
   button.restore {
     flex: none;
-    border-color: #e8781e;
-    color: #e8781e;
+    border-color: var(--hive-accent);
+    color: var(--hive-accent);
   }
   button.restore.armed {
-    background: #e8781e;
-    color: white;
+    background: var(--hive-accent);
+    color: #1b1300;
   }
   button.close {
     flex: none;
@@ -691,7 +712,7 @@ class HiveHistoryPanel extends HTMLElement {
 
   // A pinned or hovered version whose row is no longer in the list (its
   // group was collapsed, a snapshot just grouped it, another glyph…) is
-  // dropped: nothing stays orange on the canvas without a row to explain it.
+  // dropped: nothing stays highlighted on the canvas without a row to explain it.
   dropHiddenPreviews() {
     const visible = new Set(
       [...this.listElement.querySelectorAll("[data-sha]")].map((row) => row.dataset.sha)
@@ -1046,8 +1067,8 @@ class HiveHistoryPanel extends HTMLElement {
       userSwitchable: false,
       zIndex: 250, // above the glyph fill (200), below the editing nodes (500)
       screenParameters: { strokeWidth: 1.5 },
-      colors: { fillColor: "rgba(232, 120, 30, 0.28)", strokeColor: "#E8781E" },
-      colorsDarkMode: { fillColor: "rgba(255, 150, 60, 0.32)", strokeColor: "#FF9A3C" },
+      colors: { fillColor: "rgba(214, 160, 40, 0.20)", strokeColor: "#C89222" }, // soft amber
+      colorsDarkMode: { fillColor: "rgba(238, 196, 90, 0.20)", strokeColor: "#E6BE5A" },
       selectionFunc: (visContext, layer) => {
         const glyphName = this.activePreview?.glyphName;
         if (!glyphName) return [];

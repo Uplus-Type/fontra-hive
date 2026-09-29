@@ -84,7 +84,7 @@ tooltip), refreshed as you edit. It uses Fontra's editor plug-in mechanism
 and is served by the Fontra server itself under `/hive/plugin/`.
 
 - **Preview a version on the canvas.** Hover a commit: that version of the
-  glyph is drawn in orange over the glyph itself, in glyph coordinates, so
+  glyph is drawn in a soft amber over the glyph itself, in glyph coordinates, so
   the two outlines can be compared point by point; moving off the row
   removes it. Click to keep a version on the canvas ("pinned", drawn
   stronger; hovering other rows still shows them, paler, and leaving them
