@@ -8,8 +8,10 @@ description = "Git-backed storage and team collaboration plug-in for the Fontra 
 readme = "README.md"
 license = {text = "GNU General Public License v3"}
 requires-python = ">=3.11"
+# Fontra itself is not on PyPI under this name: install it from source first
+# (https://github.com/fontra/fontra, `pip install -e .` in its checkout), then
+# install this package in the same environment.
 dependencies = [
-    "fontra>=0.2",
     "dulwich>=0.22",
 ]
 dynamic = ["version"]

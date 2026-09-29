@@ -42,7 +42,15 @@ in this repository.
 ## Try it
 
 ```bash
-# in a virtualenv where fontra is installed
+# 1. Fontra from source, in a virtualenv (Python >= 3.11, Node >= 24):
+#    see https://github.com/fontra/fontra#install-from-the-source-code
+git clone https://github.com/fontra/fontra.git && cd fontra
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt && pip install -e .
+
+# 2. this plug-in, in the same virtualenv (do not `pip install fontra`:
+#    the PyPI package of that name is unrelated to the editor)
+cd ../fontra-hive
 pip install -e ".[dev]"
 
 # create a project repository from an existing .fontra package
