@@ -30,6 +30,9 @@ fontra-hive = "fontra_hive.cli:main"
 [project.entry-points."fontra.projectmanagers"]
 hive-dev = "fontra_hive.projectmanager:DevHiveProjectManagerFactory"
 
+[project.entry-points."fontra.webcontent"]
+hive = "fontra_hive.client"
+
 [tool.hatch.version]
 path = "src/fontra_hive/__init__.py"
 

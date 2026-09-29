@@ -23,6 +23,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from aiohttp import web
+from fontra.backends.filenames import stringToFileName
 from fontra.core.fonthandler import FontHandler
 from fontra.core.protocols import ProjectManager
 
@@ -53,6 +54,10 @@ class DevHiveProjectManagerFactory:
             author=Signature(arguments.author_name, arguments.author_email),
             commitDelay=arguments.commit_delay,
         )
+
+
+def glyphPath(glyphName: str) -> str:
+    return f"glyphs/{stringToFileName(glyphName)}.json"
 
 
 def splitProjectIdentifier(identifier: str) -> tuple[str, str]:
@@ -111,10 +116,10 @@ class DevHiveProjectManager:
             store = GitRepoStore.open(repoPath)
             try:
                 name = repoPath.name[: -len(".git")]
-                for branch in store.branches():
-                    projects.append(
-                        name if branch == DEFAULT_BRANCH else f"{name}@{branch}"
-                    )
+                branches = store.branches()
+                if DEFAULT_BRANCH in branches:  # the default branch comes first
+                    projects.append(name)
+                projects.extend(f"{name}@{b}" for b in branches if b != DEFAULT_BRANCH)
             finally:
                 store.close()
         return projects
@@ -165,6 +170,7 @@ class DevHiveProjectManager:
             [
                 web.get("/api/hive/projects/{name}/branches", self.branchesHandler),
                 web.get("/api/hive/projects/{name}/log", self.logHandler),
+                web.get("/api/hive/projects/{name}/glyph", self.glyphHandler),
             ]
         )
 
@@ -185,13 +191,38 @@ class DevHiveProjectManager:
             raise web.HTTPNotFound()
         branch = request.query.get("branch", DEFAULT_BRANCH)
         path = request.query.get("path")
-        limit = int(request.query.get("limit", "50"))
+        glyphName = request.query.get("glyph")
+        if glyphName and not path:
+            path = glyphPath(glyphName)
+        limit = min(int(request.query.get("limit", "50")), 500)
         store = GitRepoStore.open(repoPath)
         try:
+            head = store.head(branch)
+            if head is None:
+                raise web.HTTPNotFound()
             commits = [c.__dict__ for c in store.log(branch, path=path, limit=limit)]
         finally:
             store.close()
-        return web.json_response({"commits": commits})
+        return web.json_response(
+            {"branch": branch, "head": head, "path": path, "commits": commits}
+        )
+
+    async def glyphHandler(self, request: web.Request) -> web.Response:
+        """The JSON of one glyph at a given ref (commit sha, branch or tag)."""
+        repoPath = self._repoPath(request.match_info["name"])
+        glyphName = request.query.get("glyph")
+        if repoPath is None or not glyphName:
+            raise web.HTTPNotFound()
+        ref = request.query.get("ref", DEFAULT_BRANCH)
+        store = GitRepoStore.open(repoPath)
+        try:
+            try:
+                data = store.read_file(store.resolve(ref), glyphPath(glyphName))
+            except KeyError:
+                raise web.HTTPNotFound()
+        finally:
+            store.close()
+        return web.Response(body=data, content_type="application/json")
 
     async def getMetaInfo(
         self, projectIdentifier: str, authorizationToken: str

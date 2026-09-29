@@ -73,6 +73,30 @@ Edits made in the editor are committed about two seconds after the last
 change (`--commit-delay`), one commit per user. Open `MyFont@bold-extension`
 to edit the branch.
 
+## Glyph history in the editor (plug-in)
+
+The package also ships an editor plug-in: a "Glyph history" panel in the right
+sidebar listing every commit that touched the selected glyph (author, time,
+message), refreshed as you edit. It uses Fontra's editor plug-in mechanism
+and is served by the Fontra server itself under `/hive/plugin/`.
+
+To enable it (once per browser): open *Application settings → Plugins*, add
+the address `/hive/plugin`, then reload the editor. The panel appears as a
+clock icon in the right sidebar.
+
+Why manual registration: Fontra's plug-in list is per browser (local
+storage), with no way for a server to declare plug-ins yet. That is one of
+the extension points to propose upstream; until then, this one step is
+needed.
+
+Routes used by the panel (also handy from the command line):
+
+```
+GET /api/hive/projects/<name>/log?branch=main&glyph=A&limit=50
+GET /api/hive/projects/<name>/glyph?glyph=A&ref=<sha|branch|tag>
+GET /api/hive/projects/<name>/branches
+```
+
 ## Tests
 
 ```bash
