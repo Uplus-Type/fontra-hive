@@ -17,3 +17,14 @@ def test_account_pages_link_hives_icon():
         assert "fontra-icon.svg" not in html, page.name
         for src in re.findall(r'(?:src|href)="/hive/icons/([^"]+)"', html):
             assert (ACCOUNT.parent / "icons" / src).is_file(), (page.name, src)
+
+
+def test_landing_images_exist_and_are_served_as_jpeg():
+    html = (ACCOUNT / "login.html").read_text(encoding="utf-8")
+    images = re.findall(r'src="/hive/landing/([^"]+)"', html)
+    assert len(images) >= 4
+    for name in images:
+        assert (ACCOUNT.parent / "landing" / name).is_file(), name
+    from fontra_hive.projectmanager import CLIENT_CONTENT_TYPES
+
+    assert CLIENT_CONTENT_TYPES["jpg"] == "image/jpeg"

@@ -28,7 +28,9 @@ def project(owner, name, role, description=""):
         "role": role,
         "trashed": False,
         "capabilities": (
-            ["read", "edit", "export", "invite", "administer"] if role == "admin" else ["read"]
+            ["read", "edit", "export", "invite", "administer"]
+            if role == "admin"
+            else ["read"]
         ),
     }
 

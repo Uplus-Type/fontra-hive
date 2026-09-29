@@ -860,6 +860,7 @@ CLIENT_CONTENT_TYPES = {
     "css": "text/css",
     "html": "text/html",
     "png": "image/png",
+    "jpg": "image/jpeg",
     "ico": "image/x-icon",
     "webmanifest": "application/manifest+json",
 }

@@ -82,3 +82,32 @@ body:not([data-page="home"]) a:hover { color: var(--fontra-red-color, #f11759); 
 .tagline { font-size: 1.2rem; margin: 0 0 1.2em; opacity: 0.9; }
 .offer { line-height: 1.5; max-width: 26em; text-align: center; margin: 0; }
 .offer a { text-decoration: underline; }
+
+/* What Hive adds to Fontra (sign-in page). */
+.features { max-width: 60em; width: 100%; margin: 1em 0 4em; }
+.features h2 { font-size: 1.8rem; font-weight: normal; text-align: center; margin: 0 0 0.3em; }
+.features .intro { text-align: center; opacity: 0.8; margin: 0 auto 2em; max-width: 34em; line-height: 1.45; }
+.feature {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 1.5em; align-items: center;
+  margin: 0 0 2.5em;
+}
+.feature img {
+  width: 100%; border-radius: 0.6em; box-shadow: 0.3rem 0.4rem 1.2rem #000a;
+  background: #f6f6f6;
+}
+.feature.wide { grid-template-columns: 3fr 2fr; }
+.feature:nth-of-type(even) img { order: 2; }
+.feature h3 { font-size: 1.3rem; font-weight: normal; margin: 0 0 0.4em; color: #E9B02A; }
+.feature p { margin: 0; line-height: 1.5; opacity: 0.9; }
+.features .more {
+  list-style: none; padding: 0; margin: 1em 0 0; display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15em, 1fr)); gap: 1.2em 2em; line-height: 1.45;
+}
+.features .more strong { color: #E9B02A; font-weight: normal; display: block; }
+.feature.stacked { grid-template-columns: 1fr; }
+.feature.stacked img { order: 2; max-width: 46em; justify-self: center; }
+.feature.stacked div { text-align: center; max-width: 36em; justify-self: center; }
+@media (max-width: 720px) {
+  .feature, .feature.wide { grid-template-columns: 1fr; }
+  .feature:nth-of-type(even) img { order: 0; }
+}
