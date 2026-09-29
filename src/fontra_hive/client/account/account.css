@@ -66,3 +66,10 @@ body:not([data-page="home"]) .note { opacity: 0.8; }
 body:not([data-page="home"]) form,
 body:not([data-page="home"]) .card { color: var(--foreground-color, black); }
 body:not([data-page="home"]) a:hover { color: var(--fontra-red-color, #f11759); }
+.beta {
+  font-size: 0.4em; vertical-align: middle; letter-spacing: 0.08em; text-transform: uppercase;
+  background: #E9B02A; color: #04232D; border-radius: 0.5em; padding: 0.25em 0.6em; margin-left: 0.3em;
+}
+.tagline { font-size: 1.2rem; margin: 0 0 1.2em; opacity: 0.9; }
+.offer { line-height: 1.5; max-width: 26em; text-align: center; margin: 0; }
+.offer a { text-decoration: underline; }
