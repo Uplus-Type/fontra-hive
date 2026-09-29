@@ -120,7 +120,7 @@ async () => {
   window.rowFor = (c) => window.panel.shadowRoot.querySelector(`[data-sha="${sha(c)}"]`);
   window.restoreButton = () => window.panel.statusElement.querySelector("button.restore");
   window.statusText = () => window.panel.shadowRoot.querySelector(".status").textContent;
-  window.drawCall = () => {
+  window.drawCall = (positional = false) => {
     const def = editor.visualizationLayers.definitions[0];
     const selected = def.selectionFunc({ glyphsBySelectionMode: {
       editing: [{ glyphName: sceneSettings.selectedGlyphName }] } });
@@ -132,8 +132,13 @@ async () => {
       set globalAlpha(v) { calls.alpha = v; },
       fill(path) { calls.fills++; },
     };
-    def.draw(ctx, { glyph: { layerName: "default" } },
-      { fillColor: "f", strokeColor: "s", strokeWidth: 1 });
+    const positionedGlyph = { glyph: { layerName: "default" } };
+    const parameters = { fillColor: "f", strokeColor: "s", strokeWidth: 1 };
+    if (positional) {
+      def.draw(ctx, positionedGlyph, parameters);  // Fontra before fontra/fontra#2785
+    } else {
+      def.draw({ context: ctx, positionedGlyph, parameters, model: {}, controller: {} });
+    }
     return calls;
   };
   window.wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -476,3 +481,14 @@ def test_other_sources_shown_on_the_canvas_are_previewed_too(page):
     page.evaluate(f"() => {{ {settings}.backgroundLayers = {{}}; }}")
     page.evaluate("drawCall()")
     assert page.evaluate("strokes") == 1
+
+
+def test_draw_accepts_both_of_fontras_signatures(page):
+    """Fontra passes one object to draw() since fontra/fontra#2785; before,
+    positional arguments. The preview draws with either."""
+    page.evaluate(SETUP)
+    page.evaluate("wait(300)")
+    page.evaluate("rowFor('2').click()")
+    page.evaluate("panel.pinned.loaded")
+    assert page.evaluate("drawCall()") == {"alpha": None, "fills": 1}
+    assert page.evaluate("drawCall(true)") == {"alpha": None, "fills": 1}

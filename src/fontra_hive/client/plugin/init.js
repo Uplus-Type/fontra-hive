@@ -438,6 +438,17 @@ function matchLayerName(glyphJSON, key) {
   return source ? source.layerName : null;
 }
 
+// The arguments of a visualization layer's draw(), whichever way Fontra
+// passes them: one object (current) or positional (before fontra/fontra#2785).
+function drawArguments(args) {
+  const [first] = args;
+  if (first && typeof first === "object" && "context" in first && "positionedGlyph" in first) {
+    return first;
+  }
+  const [context, positionedGlyph, parameters, model, controller] = args;
+  return { context, positionedGlyph, parameters, model, controller };
+}
+
 // Path of one layer, components included (resolved against the same version,
 // through `getGlyph(name)` which must answer synchronously from a cache).
 function buildLayerPath(glyphJSON, layerName, getGlyph, depth = 0) {
@@ -1077,7 +1088,12 @@ class HiveHistoryPanel extends HTMLElement {
           (positionedGlyph) => positionedGlyph.glyphName === glyphName
         );
       },
-      draw: (context, positionedGlyph, parameters, model, controller) => {
+      // Fontra calls draw({ context, positionedGlyph, parameters, model,
+      // controller }) since fontra/fontra#2785 (29 Sept 2026), and
+      // draw(context, positionedGlyph, parameters, model, controller) before.
+      draw: (...args) => {
+        const { context, positionedGlyph, parameters } = drawArguments(args);
+        if (!context || !positionedGlyph) return;
         const primaryLayerName = positionedGlyph.glyph?.layerName;
         const path = this.previewPathFor(primaryLayerName);
         if (!path) return;
