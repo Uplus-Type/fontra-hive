@@ -22,11 +22,13 @@ MOCK = """
 window.calls = [];
 window.went = null;
 window.fetch = async (url, options = {}) => {
-  const path = new URL(url, location.href).pathname;
+  const parsed = new URL(url, location.href);
+  const path = parsed.pathname;
   const method = options.method || "GET";
   const body = options.body ? JSON.parse(options.body) : null;
   window.calls.push({ method, path, body });
-  const [status, data] = window.answers[`${method} ${path}`] || [404, { detail: "Not found." }];
+  const [status, data] = window.answers[`${method} ${path}${parsed.search}`] ||
+    window.answers[`${method} ${path}`] || [404, { detail: "Not found." }];
   return new Response(data === null ? null : JSON.stringify(data), { status });
 };
 """

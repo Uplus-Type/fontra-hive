@@ -155,6 +155,18 @@ fontra --launch hive repos --api http://127.0.0.1:8001
   moves nothing. The first time a project is opened, its repository is made
   with an empty font. To start from an existing font instead:
   `fontra-hive init repos/$(fontra-hive repo-of owner/name) MyFont.fontra`.
+- **Hive's home page** (`/` once signed in) replaces Fontra's project list:
+  your projects (grouped by owner, open in one click, trash and restore),
+  **New project** (yours or an organization's you own; empty, or from a
+  font: a `.zip` of a `.designspace` with its UFOs, `.ufo`, `.fontra` or
+  `.glyphspackage`, or a single `.ttf`/`.otf`/`.woff2`/`.glyphs`… file, any
+  format Fontra reads, converted to `.fontra`), project settings (rename,
+  description, people and invitations, import a font again as a new
+  version, trash), organizations (create, members and roles, base role,
+  invitations) and your profile (name, photo, password, where you are signed
+  in). Pending invitations show as a banner, accepted in one click.
+  Importing is `POST /api/hive/projects/<owner%2Fname>/import` (multipart
+  `file`, admins; up to 300 MB).
 - Signing in: `/` is the sign-in page (username or email, password);
   `/invitation#<token>` accepts an invitation and creates the account (the
   only way to sign up); `/forgot-password` and `/reset-password#<token>` do

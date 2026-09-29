@@ -1,0 +1,78 @@
+/* Hive's home page: projects, organizations, profile. */
+body[data-page="home"] { display: block; align-items: stretch; }
+.home-bar {
+  display: flex; align-items: center; gap: 2em; height: 44px; padding: 0 1.2em;
+  background: var(--top-bar-background-color, #eee); position: sticky; top: 0; z-index: 10;
+}
+.home-bar .brand { display: flex; align-items: center; gap: 0.5em; text-decoration: none; font-weight: 600; }
+.home-bar .brand img { width: 26px; }
+.home-bar nav { display: flex; gap: 1.2em; }
+.home-bar nav a { text-decoration: none; opacity: 0.65; padding: 0.3em 0; }
+.home-bar nav a.current { opacity: 1; border-bottom: 2px solid var(--fontra-red-color, #f11759); }
+.home-bar .hive-right { margin-left: auto; }
+
+main { max-width: 64em; margin: 0 auto; padding: 1.5em 1.2em 4em; }
+main h2 { font-size: 1.35em; margin: 0.6em 0 0.8em; display: flex; align-items: center; gap: 0.6em; }
+main h2 .grow, .row .grow { flex: 1; }
+main h3 { font-size: 1.05em; margin: 1.8em 0 0.6em; }
+.row { display: flex; align-items: center; gap: 0.75em; flex-wrap: wrap; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(15em, 1fr)); gap: 1em; }
+.project-card {
+  display: flex; flex-direction: column; gap: 0.4em; padding: 1em 1.1em; border-radius: 0.75em;
+  background: var(--ui-element-background-color, white); box-shadow: 1px 2px 6px #0002;
+  text-decoration: none; color: inherit; min-height: 6.5em;
+}
+.project-card:hover { outline: 2px solid #46f6; }
+.project-card .owner { font-size: 0.85em; opacity: 0.6; }
+.project-card .name { font-size: 1.15em; font-weight: 600; word-break: break-word; }
+.project-card .description { font-size: 0.9em; opacity: 0.75; flex: 1; }
+.project-card .foot { display: flex; align-items: center; justify-content: space-between; font-size: 0.85em; }
+.badge { font-size: 0.8em; padding: 0.1em 0.55em; border-radius: 1em; background: #8882; }
+.badge.admin { background: #c8922233; }
+.link-button { background: none; color: inherit; padding: 0.2em 0.4em; margin: 0; text-decoration: underline; opacity: 0.75; border-radius: 0.3em; }
+.link-button:hover { opacity: 1; background: #8882; }
+
+.panel {
+  background: var(--ui-element-background-color, white); border-radius: 0.75em; padding: 1.2em 1.4em;
+  box-shadow: 1px 2px 6px #0002; margin-bottom: 1.2em;
+}
+.panel form, .panel .card { box-shadow: none; padding: 0; width: auto; background: none; }
+.panel label { max-width: 30em; }
+.choices { display: flex; flex-direction: column; gap: 0.5em; }
+.choices label { flex-direction: row; align-items: center; gap: 0.5em; font-size: 1em; }
+input[type=radio], input[type=file] { padding: 0; border: none; background: none; }
+select {
+  font: inherit; padding: 0.45em 0.5em; border-radius: 0.4em; border: 1px solid #8884;
+  background: var(--text-input-background-color, #eee); color: var(--text-input-foreground-color, black);
+}
+textarea {
+  font: inherit; padding: 0.5em 0.6em; border-radius: 0.4em; border: 1px solid #8884; min-height: 4em;
+  background: var(--text-input-background-color, #eee); color: var(--text-input-foreground-color, black);
+}
+.danger { background: none; color: var(--fontra-red-color, #f11759); border: 1px solid currentColor; }
+.ok { color: #3f9a8a; font-size: 0.9em; min-height: 1.2em; }
+
+table.people { width: 100%; border-collapse: collapse; }
+table.people td { padding: 0.45em 0.4em; border-top: 1px solid #8882; vertical-align: middle; }
+table.people td.who { display: flex; align-items: center; gap: 0.6em; }
+table.people small { display: block; opacity: 0.6; }
+table.people button { margin: 0; padding: 0.3em 0.7em; }
+
+#invitations .invitation {
+  max-width: 64em; margin: 1em auto 0; padding: 0.8em 1.2em; border-radius: 0.75em; display: flex;
+  align-items: center; gap: 1em; background: #c8922222; border: 1px solid #c8922266;
+}
+#invitations .invitation span { flex: 1; }
+#invitations button { margin: 0; }
+
+.progress { height: 6px; border-radius: 3px; background: #8883; overflow: hidden; max-width: 30em; }
+.progress div { height: 100%; width: 0; background: var(--fontra-red-color, #f11759); transition: width 0.2s; }
+.empty { opacity: 0.65; padding: 2em 0; text-align: center; line-height: 1.6; }
+.photo { display: flex; align-items: center; gap: 1em; }
+.photo .avatar { width: 64px; height: 64px; font-size: 26px; }
+/* No empty space for messages that are not there. */
+.error:empty, .ok:empty, p.note:empty { display: none; }
+main h2 button { font-size: 0.68em; margin: 0; }
+main h2 .badge { font-size: 0.6em; font-weight: normal; }
+table.people td:nth-child(2), table.people td:nth-child(3) { width: 1%; white-space: nowrap; }

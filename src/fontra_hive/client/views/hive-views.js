@@ -78,7 +78,16 @@ function el(tag, attrs = {}, children = []) {
   return element;
 }
 
-function avatar(user, size = 26) {
+export function avatar(user, size = 26) {
+  if (user.avatar) {
+    return el("img", {
+      class: "avatar",
+      src: user.avatar,
+      alt: "",
+      title: user.name,
+      style: `width:${size}px;height:${size}px;object-fit:cover`,
+    });
+  }
   return el(
     "span",
     {
@@ -159,6 +168,12 @@ function viewController() {
 }
 
 // Keys typed in Hive's fields must not reach Fontra's shortcuts (window listener).
+function ensureStyle() {
+  if (!document.getElementById("hive-views-style")) {
+    document.head.append(el("style", { id: "hive-views-style" }, [STYLE]));
+  }
+}
+
 function isolateKeys(element) {
   for (const type of ["keydown", "keyup", "keypress"]) {
     element.addEventListener(type, (event) => event.stopPropagation());
@@ -240,7 +255,7 @@ export class HiveViews {
   }
 
   async mount() {
-    document.head.append(el("style", { id: "hive-views-style" }, [STYLE]));
+    ensureStyle();
     // Fontra adds #fontra-project-name to the top bar once the project is
     // open; wait for it so that ours sits next to it.
     const topBar = await waitFor(() => {
@@ -483,127 +498,136 @@ export class HiveViews {
     }
   }
 
-  // Share… with hive-api: people join by invitation (by username or email);
-  // roles of those already here can be changed up to one's own.
-  async openShareHiveApi() {
-    const backdrop = el("div", { class: "hive-backdrop", onclick: () => close() });
-    const dialog = el("div", { class: "hive-dialog", role: "dialog" });
-    isolateKeys(dialog);
-    const close = () => {
-      backdrop.remove();
-      dialog.remove();
-      document.removeEventListener("keydown", onKey, true);
-    };
-    const onKey = (event) => {
-      if (event.key === "Escape") {
-        event.stopPropagation();
-        close();
-      }
-    };
-    document.addEventListener("keydown", onKey, true);
-    document.body.append(backdrop, dialog);
-    this.shareDialog = dialog;
-    const base = hiveApiProjectPath(this.project.name);
-    const json = (method, body) => ({
-      method,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const load = async () => {
-      const data = await api(`${base}/members`);
-      data.invitations = data.canManage ? (await api(`${base}/invitations`)).invitations : [];
-      return data;
-    };
-    const act = async (path, options, done) => {
-      try {
-        await fetchOk(path, options);
-        render(await load(), null, done);
-      } catch (error) {
-        render(await load(), error.message);
-      }
-    };
-    const render = (data, error, done) => {
-      dialog.replaceChildren(el("h3", {}, [`Share “${this.project.name}”`]));
-      for (const m of data.members) {
-        const isYou = m.username === data.you;
-        const editable = data.canManage && m.via === "collaborator" && data.roles.includes(m.role);
-        const roleCell = editable
-          ? el(
-              "select",
-              {
-                "aria-label": `Role of ${m.name}`,
-                onchange: (e) => act(`${base}/collaborators/${encodeURIComponent(m.username)}`, json("PUT", { role: e.target.value })),
-              },
-              data.roles.map((r) => el("option", { value: r, selected: r === m.role ? "" : null }, [r]))
-            )
-          : el("span", { class: "role", title: m.via === "collaborator" ? "" : `Role from: ${m.via}` }, [
-              m.via === "collaborator" ? m.role : `${m.role} · ${m.via}`,
-            ]);
-        const canRemove = m.via === "collaborator" && (editable || isYou);
-        dialog.append(
-          el("div", { class: "hive-member", "data-username": m.username }, [
-            avatar(m, 30),
-            el("div", { class: "who" }, [
-              `${m.name}${isYou ? " (you)" : ""}`,
-              el("small", {}, [[m.username, m.email].filter(Boolean).join(" · ")]),
-            ]),
-            roleCell,
-            canRemove
-              ? el("button", {
-                  class: "remove",
-                  title: isYou ? "Leave this project" : `Remove ${m.name}`,
-                  onclick: () => act(`${base}/collaborators/${encodeURIComponent(m.username)}`, { method: "DELETE" }),
-                }, ["×"])
-              : el("span", { style: "width:22px" }),
-          ])
-        );
-      }
-      for (const inv of data.invitations) {
-        const who = inv.invitee ? inv.invitee.name : inv.email;
-        dialog.append(
-          el("div", { class: "hive-member pending", "data-invitation": inv.id }, [
-            avatar({ username: inv.invitee?.username || inv.email, name: who }, 30),
-            el("div", { class: "who" }, [who, el("small", {}, [`invited · ${inv.role}`])]),
-            el("span", { class: "role" }, ["pending"]),
-            el("button", {
-              class: "remove",
-              title: `Cancel the invitation of ${who}`,
-              onclick: () => act(`${base}/invitations/${inv.id}`, { method: "DELETE" }),
-            }, ["×"]),
-          ])
-        );
-      }
-      if (data.canManage) {
-        const who = el("input", { "aria-label": "Username or email", placeholder: "Username or email" });
-        const role = el("select", { "aria-label": "Role" }, data.roles.map((r) =>
-          el("option", { value: r, selected: r === "designer" ? "" : null }, [r])));
-        const add = el("button", { class: "pill blue", disabled: "" }, ["Invite"]);
-        who.addEventListener("input", () => (add.disabled = !who.value.trim()));
-        const invite = () => {
-          const value = who.value.trim();
-          if (!value) return;
-          const body = value.includes("@") ? { email: value, role: role.value } : { username: value, role: role.value };
-          act(`${base}/invitations`, json("POST", body), `Invitation sent to ${value}.`);
-        };
-        add.addEventListener("click", invite);
-        who.addEventListener("keydown", (e) => e.key === "Enter" && invite());
-        dialog.append(el("div", { class: "add" }, [who, role, add]));
-        dialog.append(el("p", { class: "note" }, [
-          "They receive an email with a link, valid 7 days, and join when they accept.",
-        ]));
-      } else {
-        dialog.append(el("p", { class: "note" }, ["Managers and admins can invite people and change roles."]));
-      }
-      if (done) dialog.append(el("div", { class: "done" }, [done]));
-      if (error) dialog.append(el("div", { class: "error" }, [error]));
-      dialog.append(el("div", { class: "footer" }, [el("button", { class: "pill red", onclick: close }, ["Done"])]));
-    };
-    try {
-      render(await load());
-    } catch (error) {
-      dialog.replaceChildren(el("h3", {}, ["Share"]), el("div", { class: "error" }, [error.message]));
-    }
+  // Share… with hive-api (the dialog is shared with Hive's home page).
+  openShareHiveApi() {
+    this.shareDialog = openShareDialog(this.project.name);
   }
+}
+
+
+// People and invitations of a hive-api project: who has which role (and
+// from where), change roles up to one's own, invite by username or email,
+// cancel invitations. Returns the dialog element (closed with Escape, the
+// backdrop or Done; onClose is then called).
+export function openShareDialog(projectName, { onClose } = {}) {
+  ensureStyle();
+  const backdrop = el("div", { class: "hive-backdrop", onclick: () => close() });
+  const dialog = el("div", { class: "hive-dialog", role: "dialog" });
+  isolateKeys(dialog);
+  const close = () => {
+    onClose?.();
+    backdrop.remove();
+    dialog.remove();
+    document.removeEventListener("keydown", onKey, true);
+  };
+  const onKey = (event) => {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      close();
+    }
+  };
+  document.addEventListener("keydown", onKey, true);
+  document.body.append(backdrop, dialog);
+  const base = hiveApiProjectPath(projectName);
+  const json = (method, body) => ({
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const load = async () => {
+    const data = await api(`${base}/members`);
+    data.invitations = data.canManage ? (await api(`${base}/invitations`)).invitations : [];
+    return data;
+  };
+  const act = async (path, options, done) => {
+    try {
+      await fetchOk(path, options);
+      render(await load(), null, done);
+    } catch (error) {
+      render(await load(), error.message);
+    }
+  };
+  const render = (data, error, done) => {
+    dialog.replaceChildren(el("h3", {}, [`Share “${projectName}”`]));
+    for (const m of data.members) {
+      const isYou = m.username === data.you;
+      const editable = data.canManage && m.via === "collaborator" && data.roles.includes(m.role);
+      const roleCell = editable
+        ? el(
+            "select",
+            {
+              "aria-label": `Role of ${m.name}`,
+              onchange: (e) => act(`${base}/collaborators/${encodeURIComponent(m.username)}`, json("PUT", { role: e.target.value })),
+            },
+            data.roles.map((r) => el("option", { value: r, selected: r === m.role ? "" : null }, [r]))
+          )
+        : el("span", { class: "role", title: m.via === "collaborator" ? "" : `Role from: ${m.via}` }, [
+            m.via === "collaborator" ? m.role : `${m.role} · ${m.via}`,
+          ]);
+      const canRemove = m.via === "collaborator" && (editable || isYou);
+      dialog.append(
+        el("div", { class: "hive-member", "data-username": m.username }, [
+          avatar(m, 30),
+          el("div", { class: "who" }, [
+            `${m.name}${isYou ? " (you)" : ""}`,
+            el("small", {}, [[m.username, m.email].filter(Boolean).join(" · ")]),
+          ]),
+          roleCell,
+          canRemove
+            ? el("button", {
+                class: "remove",
+                title: isYou ? "Leave this project" : `Remove ${m.name}`,
+                onclick: () => act(`${base}/collaborators/${encodeURIComponent(m.username)}`, { method: "DELETE" }),
+              }, ["×"])
+            : el("span", { style: "width:22px" }),
+        ])
+      );
+    }
+    for (const inv of data.invitations) {
+      const who = inv.invitee ? inv.invitee.name : inv.email;
+      dialog.append(
+        el("div", { class: "hive-member pending", "data-invitation": inv.id }, [
+          avatar({ username: inv.invitee?.username || inv.email, name: who }, 30),
+          el("div", { class: "who" }, [who, el("small", {}, [`invited · ${inv.role}`])]),
+          el("span", { class: "role" }, ["pending"]),
+          el("button", {
+            class: "remove",
+            title: `Cancel the invitation of ${who}`,
+            onclick: () => act(`${base}/invitations/${inv.id}`, { method: "DELETE" }),
+          }, ["×"]),
+        ])
+      );
+    }
+    if (data.canManage) {
+      const who = el("input", { "aria-label": "Username or email", placeholder: "Username or email" });
+      const role = el("select", { "aria-label": "Role" }, data.roles.map((r) =>
+        el("option", { value: r, selected: r === "designer" ? "" : null }, [r])));
+      const add = el("button", { class: "pill blue", disabled: "" }, ["Invite"]);
+      who.addEventListener("input", () => (add.disabled = !who.value.trim()));
+      const invite = () => {
+        const value = who.value.trim();
+        if (!value) return;
+        const body = value.includes("@") ? { email: value, role: role.value } : { username: value, role: role.value };
+        act(`${base}/invitations`, json("POST", body), `Invitation sent to ${value}.`);
+      };
+      add.addEventListener("click", invite);
+      who.addEventListener("keydown", (e) => e.key === "Enter" && invite());
+      dialog.append(el("div", { class: "add" }, [who, role, add]));
+      dialog.append(el("p", { class: "note" }, [
+        "They receive an email with a link, valid 7 days, and join when they accept.",
+      ]));
+    } else {
+      dialog.append(el("p", { class: "note" }, ["Managers and admins can invite people and change roles."]));
+    }
+    if (done) dialog.append(el("div", { class: "done" }, [done]));
+    if (error) dialog.append(el("div", { class: "error" }, [error]));
+    dialog.append(el("div", { class: "footer" }, [el("button", { class: "pill red", onclick: close }, ["Done"])]));
+  };
+  load().then(
+    (data) => render(data),
+    (error) => dialog.replaceChildren(el("h3", {}, ["Share"]), el("div", { class: "error" }, [error.message]))
+  );
+  return dialog;
 }
 
 // The File menu Fontra shows when a view has no getFileMenuItems (copied from
@@ -639,6 +663,14 @@ export async function start() {
     }
   }
   if (!me.accounts || !me.user) return null; // no accounts: nothing to show
+  if (me.source === "hive-api") {
+    try {
+      const full = (await api("/api/me")).user; // email and photo, from hive-api
+      Object.assign(me.user, { name: full.name, email: full.email, avatar: full.avatar });
+    } catch (error) {
+      // keep what the token says
+    }
+  }
   const project = currentProject();
   let access = null;
   if (project) {

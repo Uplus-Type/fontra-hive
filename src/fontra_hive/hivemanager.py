@@ -20,6 +20,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import os
 import pathlib
@@ -33,6 +34,7 @@ from aiohttp import web
 from fontra.core.fonthandler import FontHandler
 from multidict import CIMultiDict
 
+from . import importer
 from .access import Access
 from .gitstore import DEFAULT_BRANCH, SERVER_SIGNATURE, GitRepoStore
 from .hiveapi import (
@@ -195,27 +197,37 @@ class HiveProjectManager(DevHiveProjectManager):
 
     # --- repositories -----------------------------------------------------------
 
-    def _ensureRepo(self, projectAccess: ProjectAccess) -> pathlib.Path:
-        """The project's repository, created with an empty font the first
-        time (built aside, then moved in place: never half-made)."""
+    def _repoPathFor(self, projectAccess: ProjectAccess) -> pathlib.Path:
         repo = projectAccess.repo
         if not repo.endswith(".git") or "/" in repo or repo.startswith("."):
             raise web.HTTPInternalServerError(text="unexpected repository name")
-        path = self.rootPath / repo
+        return self.rootPath / repo
+
+    def _ensureRepo(
+        self,
+        projectAccess: ProjectAccess,
+        font: pathlib.Path | None = None,
+        message: str | None = None,
+    ) -> pathlib.Path:
+        """The project's repository, created the first time with ``font``
+        (a .fontra package), or an empty font. Built aside, then moved in
+        place: never half-made."""
+        path = self._repoPathFor(projectAccess)
         if path.is_dir():
             return path
         from fontra.backends.fontra import FontraBackend
 
         with tempfile.TemporaryDirectory(dir=self.rootPath, prefix=".new-") as tmp:
-            font = pathlib.Path(tmp) / "font.fontra"
-            FontraBackend.createFromPath(font)
-            building = pathlib.Path(tmp) / repo
+            if font is None:
+                font = pathlib.Path(tmp) / "font.fontra"
+                FontraBackend.createFromPath(font)
+            building = pathlib.Path(tmp) / projectAccess.repo
             store = GitRepoStore.create(building)
             try:
                 store.import_directory(
                     font,
                     branch=projectAccess.defaultBranch,
-                    message=f"New project {projectAccess.projectId}",
+                    message=message or f"New project {projectAccess.projectId}",
                     author=projectAccess.access.user.signature,
                 )
             finally:
@@ -228,6 +240,69 @@ class HiveProjectManager(DevHiveProjectManager):
                     raise
                 shutil.rmtree(building, ignore_errors=True)
         return path
+
+    async def importHandler(self, request: web.Request) -> web.Response:
+        """Replace a project's font with an uploaded one (multipart field
+        ``file``), converted from any format Fontra reads. A new commit:
+        the history before it stays. Admins only."""
+        name = request.match_info["name"]
+        projectAccess = await self._projectAccess(request, name)
+        if not projectAccess.access.can("administer"):
+            raise web.HTTPForbidden(
+                text="Only the admins of a project can import a font."
+            )
+        reader = await request.multipart()
+        part = await reader.next()
+        while part is not None and part.name != "file":
+            part = await reader.next()
+        if part is None or not part.filename:
+            raise web.HTTPBadRequest(text="Choose a font file.")
+        filename = pathlib.PurePath(part.filename).name
+        with tempfile.TemporaryDirectory(dir=self.rootPath, prefix=".import-") as tmp:
+            work = pathlib.Path(tmp)
+            upload = work / "upload"
+            size = 0
+            with open(upload, "wb") as out:
+                while chunk := await part.read_chunk(1 << 20):
+                    size += len(chunk)
+                    if size > importer.MAX_UPLOAD:
+                        raise web.HTTPRequestEntityTooLarge(
+                            max_size=importer.MAX_UPLOAD, actual_size=size
+                        )
+                    out.write(chunk)
+            try:
+                font = await asyncio.to_thread(
+                    importer.convertToFontra, upload, filename, work
+                )
+            except importer.ImportError_ as error:
+                raise web.HTTPUnprocessableEntity(text=str(error))
+            message = f"Import {filename}"
+            author = projectAccess.access.user.signature
+            path = self._repoPathFor(projectAccess)
+            if not path.is_dir():
+                self._ensureRepo(projectAccess, font, message)
+                store = GitRepoStore.open(path)
+                try:
+                    head = store.head(projectAccess.defaultBranch)
+                finally:
+                    store.close()
+                return web.json_response({"head": head, "created": True})
+            branch = projectAccess.defaultBranch
+            fontHandler = self.fontHandlers.get(self._handlerKey(path, branch))
+            backend = fontHandler.backend if fontHandler is not None else None
+            store = backend.store if backend is not None else GitRepoStore.open(path)
+            try:
+                if backend is not None:
+                    backend.flush()  # pending edits first: they stay in the history
+                head = store.import_directory(
+                    font, branch=branch, message=message, author=author
+                )
+                if backend is not None:
+                    await backend.check_external_changes()
+            finally:
+                if backend is None:
+                    store.close()
+        return web.json_response({"head": head, "created": False})
 
     # --- Fontra's project manager protocol --------------------------------------
 
@@ -295,6 +370,7 @@ class HiveProjectManager(DevHiveProjectManager):
         routes = [
             web.get("/hive/logout", self.logoutPageHandler),
             *(web.get(path, self.accountPageHandler) for path in ACCOUNT_PAGES),
+            web.post("/api/hive/projects/{name}/import", self.importHandler),
             *self.projectRoutes(),
         ]
         if self.proxy:
@@ -309,9 +385,11 @@ class HiveProjectManager(DevHiveProjectManager):
         )
 
     async def rootDocumentHandler(self, request: web.Request) -> web.Response:
+        """Signed in: Hive's home (projects, organizations, profile);
+        otherwise the sign-in page."""
         if await self.authorize(request) is None:
             return _htmlResponse(self.accountFile("login.html"))
-        return await super().rootDocumentHandler(request)
+        return _htmlResponse(self.accountFile("home.html"))
 
     async def accountPageHandler(self, request: web.Request) -> web.Response:
         return _htmlResponse(self.accountFile(ACCOUNT_PAGES[request.path]))

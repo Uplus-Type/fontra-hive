@@ -12,6 +12,7 @@ import socket
 import subprocess
 import sys
 import time
+import zipfile
 from types import SimpleNamespace
 
 import pytest
@@ -140,7 +141,9 @@ def run(coroutine):
     return asyncio.new_event_loop().run_until_complete(coroutine)
 
 
-def test_sign_in_roles_projects_and_invitations_through_the_relay(stack, tmp_path):
+def test_sign_in_roles_projects_and_invitations_through_the_relay(
+    stack, tmp_path, fixture_fontra
+):
     origin = f"http://127.0.0.1:{stack.fontraPort}"
 
     async def go():
@@ -252,6 +255,49 @@ def test_sign_in_roles_projects_and_invitations_through_the_relay(stack, tmp_pat
             zoeConnection = SimpleNamespace(authorizationToken=zoe, clientUUID="c2")
             await manager.api.access(zoe, "uplustype/Mutator")
             assert await handler.isReadOnly(connection=zoeConnection) is True
+
+            # Jérémie, from Hive's home page: a new project from a font.
+            await browser.post("/api/auth/logout")
+            response = await browser.post(
+                "/api/auth/login", json={"login": "jeremie", "password": PASSWORD}
+            )
+            assert response.status == 200
+            assert 'data-page="home"' in await (await browser.get("/")).text()
+            response = await browser.post(
+                "/api/projects", json={"name": "Imported", "owner": "uplustype"}
+            )
+            assert response.status == 201, await response.text()
+            archive = tmp_path / "upload.zip"
+            with zipfile.ZipFile(archive, "w") as zf:
+                for path in sorted(fixture_fontra.rglob("*")):
+                    zf.write(path, f"MyFont.fontra/{path.relative_to(fixture_fontra)}")
+
+            async def upload():
+                data = aiohttp.FormData()
+                data.add_field("file", archive.read_bytes(), filename="MyFont.zip")
+                return await browser.post(
+                    "/api/hive/projects/uplustype%2FImported/import", data=data
+                )
+
+            response = await upload()
+            assert response.status == 200, await response.text()
+            assert (await response.json())["created"] is True
+            log = await (
+                await browser.get("/api/hive/projects/uplustype%2FImported/log")
+            ).json()
+            assert [c["message"].splitlines()[0] for c in log["commits"]] == [
+                "Import MyFont.zip"
+            ]
+            assert log["commits"][0]["author"] == "Jérémie Hornus"
+            response = await upload()  # again: a new version on top
+            assert (await response.json())["created"] is False
+
+            # A designer cannot replace the font.
+            await browser.post("/api/auth/logout")
+            await browser.post(
+                "/api/auth/login", json={"login": "fabio", "password": PASSWORD}
+            )
+            assert (await upload()).status == 403
         finally:
             await browser.close()
             await manager.aclose()
