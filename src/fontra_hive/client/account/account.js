@@ -109,6 +109,8 @@ function waitlist() {
   };
   open.addEventListener("click", show);
   if (location.hash === "#request") show();
+  // Links to #request further down the page open it too.
+  window.addEventListener("hashchange", () => location.hash === "#request" && show());
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     busy(form, async () => {

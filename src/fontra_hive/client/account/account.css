@@ -114,3 +114,9 @@ body:not([data-page="home"]) a:hover { color: var(--fontra-red-color, #f11759); 
   .feature, .feature.wide { grid-template-columns: 1fr; }
   .feature:nth-of-type(even) img { order: 0; }
 }
+.features .coming {
+  margin: 2.5em auto 0; max-width: 36em; text-align: center; line-height: 1.5;
+  border-top: 1px solid #fff3; padding-top: 1.5em;
+}
+.features .coming strong { color: #E9B02A; font-weight: normal; font-size: 1.2em; display: block; margin-bottom: 0.3em; }
+.features .coming a { text-decoration: underline; }
