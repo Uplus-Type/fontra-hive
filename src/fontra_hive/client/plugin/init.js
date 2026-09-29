@@ -12,7 +12,7 @@
 //   - hover a version to see it as an overlay on the glyph canvas itself (a
 //     visualization layer added at runtime, drawn in glyph coordinates); click
 //     to keep it there ("pinned", drawn stronger than a hovered one);
-//   - "Restore this version" asks the server to commit that glyph file again
+//   - "Restore" (in the preview bar under the list) asks the server to commit that glyph file again
 //     on top of the branch: history is never rewritten, and the editor picks
 //     the change up like any external change;
 //   - "Snapshot…" names the current state of the branch: the commits made
@@ -42,18 +42,27 @@ const STYLES = `
     display: flex;
     flex-direction: column;
     height: 100%;
-    gap: 0.5em;
-    padding: 1em;
+    gap: 0.4em;
+    padding: 0.8em 0.8em 0.6em;
     box-sizing: border-box;
   }
   .header {
     display: flex;
-    justify-content: space-between;
     align-items: baseline;
     gap: 0.5em;
+    min-width: 0;
   }
   .header .title {
     font-weight: bold;
+    white-space: nowrap;
+  }
+  .header .branch {
+    opacity: 0.7;
+    font-size: 0.9em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
   }
   .header .tools {
     display: flex;
@@ -87,147 +96,142 @@ const STYLES = `
     display: flex;
     gap: 0.4em;
   }
-  .header .branch {
-    opacity: 0.7;
-    font-size: 0.9em;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .status {
-    display: flex;
-    align-items: baseline;
-    gap: 0.5em;
-    font-size: 0.9em;
-    padding: 0.35em 0.6em;
-    border-radius: 0.4em;
-    background: rgba(232, 120, 30, 0.15);
-    border-left: 3px solid #e8781e;
-  }
-  .status:empty {
-    display: none;
-  }
-  .status.hover {
-    background: rgba(232, 120, 30, 0.07);
-    border-left-style: dotted;
-  }
-  .status .text {
-    flex: 1;
+  .summary-line {
+    font-size: 0.85em;
+    opacity: 0.6;
   }
   .list {
     flex: 1;
+    min-height: 0;
     overflow: hidden auto;
     display: flex;
     flex-direction: column;
-    gap: 0.35em;
+    gap: 2px;
+    padding: 2px; /* room for the row outlines */
   }
-  .commit {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 0.1em 0.6em;
-    padding: 0.45em 0.6em;
-    border-radius: 0.4em;
-    background: var(--text-input-background-color, rgba(128,128,128,0.12));
-    line-height: 1.3;
+  /* One line per version: author · message ... date. Details in the tooltip. */
+  .commit, .snapshot {
+    flex: none;
+    display: flex;
+    align-items: baseline;
+    gap: 0.45em;
+    height: 1.8em;
+    line-height: 1.8em;
+    padding: 0 0.5em;
+    box-sizing: border-box;
+    border-radius: 0.3em;
+    font-size: 0.9em;
+    white-space: nowrap;
     cursor: pointer;
   }
-  .commit:hover {
+  .commit {
+    background: var(--text-input-background-color, rgba(128,128,128,0.1));
+  }
+  .commit:hover, .snapshot:hover {
     background: var(--text-input-background-color-hover, rgba(128,128,128,0.2));
   }
+  .commit.nested {
+    margin-left: 1.2em;
+  }
   .commit.current, .snapshot.current {
-    outline: 1.5px solid var(--foreground-color, currentColor);
+    outline: 1px solid var(--foreground-color, currentColor);
     cursor: default;
   }
   .commit.previewing, .snapshot.previewing {
     outline: 2px solid #e8781e;
-    background: rgba(232, 120, 30, 0.12);
+    outline-offset: -1px;
+    background: rgba(232, 120, 30, 0.14);
   }
   .commit.hovering, .snapshot.hovering {
-    outline: 1px solid rgba(232, 120, 30, 0.7);
+    outline: 1px solid rgba(232, 120, 30, 0.75);
   }
-  .commit.nested {
-    margin-left: 1.1em;
+  .commit .author {
+    flex: none;
+    max-width: 40%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .commit .message, .snapshot .name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .commit .message {
+    opacity: 0.65;
+  }
+  .when, .count {
+    flex: none;
+    opacity: 0.65;
+    font-size: 0.9em;
+    font-variant-numeric: tabular-nums;
+  }
+  .current-mark {
+    flex: none;
+    font-size: 0.85em;
+    opacity: 0.7;
   }
   .group-label {
-    font-size: 0.85em;
+    flex: none;
+    font-size: 0.8em;
     opacity: 0.6;
-    margin-top: 0.2em;
+    margin: 0.4em 0 0.1em;
   }
   .snapshot {
-    display: grid;
-    grid-template-columns: auto 1fr auto;
-    align-items: baseline;
-    gap: 0.1em 0.4em;
-    padding: 0.45em 0.6em 0.45em 0.3em;
-    border-radius: 0.4em;
+    padding-left: 0.1em;
     border-left: 3px solid rgba(128, 128, 128, 0.6);
     background: rgba(128, 128, 128, 0.2);
-    line-height: 1.3;
-    cursor: pointer;
-  }
-  .snapshot.current {
-    cursor: default;
+    margin-top: 0.3em;
   }
   .snapshot .name {
     font-weight: bold;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .snapshot .when {
-    opacity: 0.75;
-    font-size: 0.9em;
-    white-space: nowrap;
-  }
-  .snapshot .meta {
-    grid-column: 2 / span 2;
-    opacity: 0.7;
-    font-size: 0.85em;
-  }
-  .snapshot .actions {
-    grid-column: 2 / span 2;
-    display: flex;
-    gap: 0.4em;
-    margin-top: 0.3em;
   }
   button.caret {
+    flex: none;
     border: none;
-    padding: 0 0.2em;
-    width: 1.2em;
-  }
-  .commit .message {
-    grid-column: 1 / span 2;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .commit .author {
-    opacity: 0.75;
-    font-size: 0.9em;
-  }
-  .commit .when {
-    opacity: 0.75;
-    font-size: 0.9em;
-    white-space: nowrap;
-  }
-  .commit .sha {
-    grid-column: 1 / span 2;
-    font-family: fontra-ui-mono, monospace;
-    font-size: 0.8em;
-    opacity: 0.5;
-  }
-  .commit .actions {
-    grid-column: 1 / span 2;
-    display: flex;
-    gap: 0.4em;
-    margin-top: 0.3em;
+    padding: 0;
+    width: 1.3em;
+    line-height: inherit;
   }
   .empty {
     opacity: 0.6;
-    padding: 0.5em 0;
+    padding: 0.4em 0;
   }
   .error {
     color: var(--fontra-red-color, #d33);
+  }
+  /* The preview bar: always there, always the same height, below the list,
+     so that hovering never moves the rows. */
+  .status {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 0.4em;
+    height: 2.2em;
+    padding: 0 0.3em 0 0.6em;
+    box-sizing: border-box;
+    border-radius: 0.4em;
+    border-left: 3px solid transparent;
+    font-size: 0.85em;
+    background: rgba(128, 128, 128, 0.08);
+  }
+  .status.pinned {
+    background: rgba(232, 120, 30, 0.15);
+    border-left-color: #e8781e;
+  }
+  .status.hover {
+    background: rgba(232, 120, 30, 0.07);
+    border-left: 3px dotted #e8781e;
+  }
+  .status .text {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .status .hint {
+    opacity: 0.55;
   }
   button {
     font: inherit;
@@ -239,6 +243,7 @@ const STYLES = `
     opacity: 0.8;
     padding: 0.1em 0.5em;
     cursor: pointer;
+    white-space: nowrap;
   }
   button:hover {
     opacity: 1;
@@ -248,6 +253,7 @@ const STYLES = `
     cursor: default;
   }
   button.restore {
+    flex: none;
     border-color: #e8781e;
     color: #e8781e;
   }
@@ -256,8 +262,9 @@ const STYLES = `
     color: white;
   }
   button.close {
+    flex: none;
     border: none;
-    padding: 0 0.2em;
+    padding: 0 0.3em;
   }
 `;
 
@@ -272,13 +279,25 @@ function previewKey(sha, glyphName) {
   return `${sha}\n${glyphName}`;
 }
 
+// Short date for the rows: the time today, the day this year, else the year.
 function formatDate(unixSeconds) {
   const date = new Date(unixSeconds * 1000);
   const now = new Date();
-  const sameDay = date.toDateString() === now.toDateString();
-  const time = date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  if (sameDay) return time;
-  return `${date.toLocaleDateString(undefined, { day: "numeric", month: "short" })} ${time}`;
+  if (date.toDateString() === now.toDateString()) {
+    return date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  }
+  if (date.getFullYear() === now.getFullYear()) {
+    return date.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  }
+  return date.toLocaleDateString(undefined, { month: "short", year: "numeric" });
+}
+
+// Full date and time, for tooltips.
+function formatFullDate(unixSeconds) {
+  return new Date(unixSeconds * 1000).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
 }
 
 function el(tag, attrs = {}, children = []) {
@@ -454,6 +473,7 @@ class HiveHistoryPanel extends HTMLElement {
 
     this.branchElement = el("span", { class: "branch" });
     this.formElement = el("div", { class: "snapshot-form" });
+    // Always shown, fixed height, under the list: see renderStatus().
     this.statusElement = el("div", { class: "status" });
     this.listElement = el("div", {
       class: "list",
@@ -481,8 +501,8 @@ class HiveHistoryPanel extends HTMLElement {
           ]),
         ]),
         this.formElement,
-        this.statusElement,
         this.listElement,
+        this.statusElement,
       ])
     );
 
@@ -614,7 +634,7 @@ class HiveHistoryPanel extends HTMLElement {
     this.listElement.replaceChildren();
     if (glyphName) {
       this.listElement.append(
-        el("div", { class: "empty" }, [
+        el("div", { class: "summary-line" }, [
           `${glyphName} — ${commits.length} version${commits.length === 1 ? "" : "s"}`,
         ])
       );
@@ -660,6 +680,7 @@ class HiveHistoryPanel extends HTMLElement {
     });
   }
 
+  // One line: author · message … date. The rest is in the tooltip.
   commitRow(commit, glyphName, nested) {
     const isCurrent = commit.sha === this.head;
     const isPinned = this.pinned?.sha === commit.sha;
@@ -668,28 +689,29 @@ class HiveHistoryPanel extends HTMLElement {
     if (nested) classes.push("nested");
     if (isCurrent) classes.push("current");
     if (isPinned) classes.push("previewing");
+    const details =
+      `${commit.author || "?"} — ${formatFullDate(commit.time)}\n` +
+      `${commit.sha.slice(0, 10)}${isCurrent ? " (current)" : ""}\n\n${commit.message || ""}`;
     const row = el(
       "div",
       {
         class: classes.join(" "),
         title: isCurrent
-          ? commit.message || ""
-          : `${commit.message || ""}\n\nHover to preview this version on the canvas, click to keep it`,
+          ? details
+          : `${details}\n\nHover to preview this version on the canvas, click to keep it`,
       },
       [
         el("span", { class: "author" }, [commit.author || "?"]),
-        el("span", { class: "when" }, [formatDate(commit.time)]),
         el("span", { class: "message" }, [title]),
-        el("span", { class: "sha" }, [commit.sha.slice(0, 10) + (isCurrent ? " · current" : "")]),
+        ...(isCurrent ? [el("span", { class: "current-mark" }, ["current"])] : []),
+        el("span", { class: "when" }, [formatDate(commit.time)]),
       ]
     );
     this.attachPreviewHandlers(row, commit.sha, glyphName, isCurrent);
-    if (isPinned && !isCurrent) {
-      row.append(el("div", { class: "actions" }, [this.restoreButton(commit.sha, glyphName)]));
-    }
     return row;
   }
 
+  // One line: ▸ title … versions of the glyph · date.
   snapshotRow(snapshot, grouped, glyphName) {
     const isCurrent = snapshot.sha === this.head;
     const isPinned = this.pinned?.sha === snapshot.sha;
@@ -719,24 +741,20 @@ class HiveHistoryPanel extends HTMLElement {
         class: classes.join(" "),
         title:
           `Snapshot “${snapshot.title}” (snapshot/${snapshot.name})\n` +
-          `${snapshot.changes} change${snapshot.changes === 1 ? "" : "s"} to the project, by ${snapshot.author}` +
-          (isCurrent ? "" : "\n\nHover to preview the glyph at this snapshot, click to keep it"),
+          `${snapshot.author} — ${formatFullDate(snapshot.time)}\n` +
+          `${count} version${count === 1 ? "" : "s"} of ${glyphName}, ` +
+          `${snapshot.changes} change${snapshot.changes === 1 ? "" : "s"} in the project` +
+          (isCurrent ? " (current)" : "\n\nHover to preview the glyph at this snapshot, click to keep it"),
       },
       [
         caret,
         el("span", { class: "name" }, [snapshot.title]),
+        ...(isCurrent ? [el("span", { class: "current-mark" }, ["current"])] : []),
+        el("span", { class: "count" }, [`${count}`]),
         el("span", { class: "when" }, [formatDate(snapshot.time)]),
-        el("span", { class: "meta" }, [
-          `${count} version${count === 1 ? "" : "s"} of ${glyphName} · ` +
-            `${snapshot.changes} change${snapshot.changes === 1 ? "" : "s"} in the project` +
-            (isCurrent ? " · current" : ""),
-        ]),
       ]
     );
     this.attachPreviewHandlers(row, snapshot.sha, glyphName, isCurrent);
-    if (isPinned && !isCurrent) {
-      row.append(el("div", { class: "actions" }, [this.restoreButton(snapshot.sha, glyphName)]));
-    }
     return row;
   }
 
@@ -750,19 +768,35 @@ class HiveHistoryPanel extends HTMLElement {
     }
   }
 
+  // The preview bar under the list. It is always there and never changes
+  // height, so that hovering does not move the rows under the pointer; the
+  // "Restore" of the pinned version lives here too (rows stay one line).
   renderStatus() {
-    this.statusElement.replaceChildren();
     const p = this.activePreview;
-    if (!p) return;
-    const isHover = p !== this.pinned;
+    const isHover = !!p && p !== this.pinned;
+    this.statusElement.replaceChildren();
+    this.statusElement.classList.toggle("hover", isHover);
+    this.statusElement.classList.toggle("pinned", !!p && !isHover);
+    if (!p) {
+      this.statusElement.append(
+        el("span", { class: "text hint" }, [
+          this.lastGlyph ? "Hover a version to preview it, click to keep it" : "",
+        ])
+      );
+      return;
+    }
     let text = `${isHover ? "Hovering" : "Previewing"} ${this.describeRef(p.sha)}`;
     if (!p.ready) text += " — loading…";
     else if (p.error) text += ` — ${p.error}`;
     else if (p.shownLayer) text += ` — layer “${p.shownLayer}”`;
     if (p.ready && p.layerNote) text += ` (${p.layerNote})`;
-    this.statusElement.classList.toggle("hover", isHover);
-    this.statusElement.append(el("span", { class: p.error ? "text error" : "text" }, [text]));
-    if (this.pinned) {
+    this.statusElement.append(
+      el("span", { class: p.error ? "text error" : "text", title: text }, [text])
+    );
+    if (!isHover) {
+      if (p.sha !== this.head && !p.error) {
+        this.statusElement.append(this.restoreButton(p.sha, p.glyphName));
+      }
       this.statusElement.append(
         el("button", { class: "close", title: "Stop previewing", onclick: () => this.clearPreview() }, ["×"])
       );
@@ -898,7 +932,7 @@ class HiveHistoryPanel extends HTMLElement {
           }
         },
       },
-      [armed ? "Confirm restore?" : "Restore this version"]
+      [armed ? "Confirm?" : "Restore"]
     );
     return button;
   }
@@ -909,10 +943,10 @@ class HiveHistoryPanel extends HTMLElement {
       sha,
       timer: setTimeout(() => {
         this.armedRestore = null;
-        this.render(this.lastGlyph, null);
+        this.renderStatus();
       }, CONFIRM_TIMEOUT_MS),
     };
-    this.render(this.lastGlyph, null);
+    this.renderStatus();
   }
 
   disarmRestore() {

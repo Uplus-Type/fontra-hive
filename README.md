@@ -78,8 +78,9 @@ to edit the branch.
 ## Glyph history in the editor (plug-in)
 
 The package also ships an editor plug-in: a "Glyph history" panel in the right
-sidebar listing every commit that touched the selected glyph (author, time,
-message), refreshed as you edit. It uses Fontra's editor plug-in mechanism
+sidebar listing every commit that touched the selected glyph, one compact
+line each (author, message, date; the full message, sha and time in the
+tooltip), refreshed as you edit. It uses Fontra's editor plug-in mechanism
 and is served by the Fontra server itself under `/hive/plugin/`.
 
 - **Preview a version on the canvas.** Hover a commit: that version of the
@@ -92,11 +93,12 @@ and is served by the Fontra server itself under `/hive/plugin/`.
   (the eight most recent ones are fetched in the background when the list
   is shown) appear at once. The layer shown is the
   one being edited when the old version has it, otherwise its default
-  source layer (the status line says which); components are resolved
+  source layer (the preview bar under the list says which; that bar has a
+  fixed place and height, so hovering never moves the rows); components are resolved
   against the same version. The overlay is a visualization layer added at
   runtime, below the editing nodes.
-- **Restore this version.** With a version pinned, "Restore this version"
-  (click twice: the button asks to confirm) makes the server commit that
+- **Restore this version.** With a version pinned, "Restore" in the
+  preview bar (click twice: the button asks to confirm) makes the server commit that
   glyph file again on top of the branch. Nothing is rewritten or deleted:
   the restore is a new commit, marked `Hive-Restore: <sha>`, attributed to
   the user, and every editor connected to the project reloads the glyph

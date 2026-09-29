@@ -118,6 +118,7 @@ async () => {
   window.rows = () => [...window.panel.shadowRoot.querySelectorAll(".list > *")].map(
     (e) => e.className + (e.dataset.sha ? ":" + e.dataset.sha[0] : ""));
   window.rowFor = (c) => window.panel.shadowRoot.querySelector(`[data-sha="${sha(c)}"]`);
+  window.restoreButton = () => window.panel.statusElement.querySelector("button.restore");
   window.statusText = () => window.panel.shadowRoot.querySelector(".status").textContent;
   window.drawCall = () => {
     const def = editor.visualizationLayers.definitions[0];
@@ -171,7 +172,7 @@ def test_pure_helpers_render_paths(page):
 def test_rows_are_grouped_under_snapshots(page):
     page.evaluate(SETUP)
     assert page.evaluate("rows()") == [
-        "empty",
+        "summary-line",
         "group-label",
         "commit current:3",
         "commit:2",
@@ -179,8 +180,9 @@ def test_rows_are_grouped_under_snapshots(page):
     ]
     page.evaluate("panel.shadowRoot.querySelector('.snapshot .caret').click()")
     assert page.evaluate("rows()")[-2:] == ["snapshot:5", "commit nested:1"]
-    assert "1 version of A · 4 changes in the project" in page.evaluate(
-        "panel.shadowRoot.querySelector('.snapshot .meta').textContent"
+    assert page.evaluate("rowFor('5').querySelector('.count').textContent") == "1"
+    assert "1 version of A, 4 changes in the project" in page.evaluate(
+        "rowFor('5').title"
     )
 
 
@@ -203,7 +205,9 @@ def test_hover_previews_and_leaving_clears(page):
     assert page.evaluate("panel.hovered") is None
     assert page.evaluate("drawCall()") is None
     assert "hovering" not in page.evaluate("rowFor('2').className")
-    assert page.evaluate("statusText()") == ""
+    assert page.evaluate("statusText()") == (
+        "Hover a version to preview it, click to keep it"
+    )
     # Hovering again uses the cache: still one request for that version.
     page.evaluate("rowFor('2').dispatchEvent(new MouseEvent('mouseenter'))")
     page.evaluate("rowFor('2').dispatchEvent(new MouseEvent('mouseleave'))")
@@ -247,7 +251,7 @@ def test_click_pins_and_hover_does_not_disturb_it(page):
     assert "previewing" in page.evaluate("rowFor('2').className")
     # Pinned and hovered are the same version: drawn at full strength.
     assert page.evaluate("drawCall()") == {"alpha": None, "fills": 1}
-    page.evaluate("rowFor('2').querySelector('button.restore').click()")  # arm
+    page.evaluate("restoreButton().click()")  # arm
     assert page.evaluate("panel.armedRestore?.sha") == "2" * 40
 
     # Hovering the snapshot row shows it (paler) instead; leaving comes back
@@ -262,13 +266,13 @@ def test_click_pins_and_hover_does_not_disturb_it(page):
     assert page.evaluate("statusText()").startswith("Previewing 2222222222")
     assert page.evaluate("drawCall()") == {"alpha": None, "fills": 1}
     assert page.evaluate("panel.armedRestore?.sha") == "2" * 40
-    assert page.evaluate("rowFor('2').querySelector('button.restore.armed') !== null")
+    assert page.evaluate("restoreButton().classList.contains('armed')")
 
     # A snapshot can be pinned and restored like a commit.
     page.evaluate("rowFor('5').click()")
     assert page.evaluate("panel.pinned?.sha") == "5" * 40
-    page.evaluate("rowFor('5').querySelector('button.restore').click()")
-    page.evaluate("rowFor('5').querySelector('button.restore').click()")
+    page.evaluate("restoreButton().click()")
+    page.evaluate("restoreButton().click()")
     page.evaluate("wait(100)")
     assert page.evaluate("state.posts") == [
         {"route": "restore", "branch": "main", "glyph": "A", "ref": "5" * 40}
@@ -321,3 +325,36 @@ def test_snapshot_form(page):
 def test_plugin_manifest_points_at_init():
     manifest = json.loads((PLUGIN_DIR / "plugin.json").read_text())
     assert manifest["init"] == "init.js" and manifest["function"] == "init"
+
+
+def test_hovering_and_pinning_never_move_the_rows(page):
+    """The preview bar has a fixed place and height, and rows stay one line:
+    nothing under the pointer moves (no flicker)."""
+    page.evaluate(SETUP)
+    page.evaluate(
+        "() => { document.body.style.cssText = 'margin:0;height:600px;width:320px';"
+        " panel.style.height = '600px'; }"
+    )
+    page.evaluate("wait(300)")
+    layout = """() => [...panel.shadowRoot.querySelectorAll('.list > *, .status')].map(
+        (e) => { const r = e.getBoundingClientRect(); return [r.top, r.height]; })"""
+    before = page.evaluate(layout)
+    heights = page.evaluate(
+        "[...panel.shadowRoot.querySelectorAll('.commit, .snapshot')]"
+        ".map((e) => e.getBoundingClientRect().height)"
+    )
+    assert (
+        len(set(heights)) == 1 and heights[0] < 30
+    )  # one line each (16px font here), all the same
+    for script in [
+        "rowFor('2').dispatchEvent(new MouseEvent('mouseenter'))",
+        "rowFor('2').click()",
+        "restoreButton().click()",  # armed
+        "rowFor('2').dispatchEvent(new MouseEvent('mouseleave'))",
+        "rowFor('5').dispatchEvent(new MouseEvent('mouseenter'))",
+        "rowFor('5').dispatchEvent(new MouseEvent('mouseleave'))",
+        "panel.clearPreview()",
+    ]:
+        page.evaluate(script)
+        page.evaluate("wait(20)")
+        assert page.evaluate(layout) == before, script
