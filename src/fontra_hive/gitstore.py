@@ -326,16 +326,62 @@ class GitRepoStore:
         ref: str = DEFAULT_BRANCH,
         *,
         path: str | None = None,
+        glyph: str | None = None,
         limit: int | None = None,
     ) -> list[CommitInfo]:
         """Commits reachable from ``ref``, newest first, optionally only those
-        touching ``path`` (a file or a directory prefix)."""
+        that changed ``path`` (a file, or a directory: its subtree).
+
+        ``glyph`` is the glyph name stored at ``path``: commits written by
+        Fontra Hive carry a ``Hive-Glyphs:`` trailer listing the glyphs they
+        changed, which answers the question without reading any tree.
+        """
         sha = self.resolve(ref)
-        paths = [_b(_normalize_path(path))] if path else None
-        result = []
-        walker = self.repo.get_walker(include=[_b(sha)], paths=paths, max_entries=limit)
-        for entry in walker:
-            result.append(self.commit_info(_s(entry.commit.id)))
+        if path is None:
+            walker = self.repo.get_walker(include=[_b(sha)], max_entries=limit)
+            return [self.commit_info(_s(entry.commit.id)) for entry in walker]
+        return self._log_for_path(sha, _normalize_path(path), glyph, limit)
+
+    def _log_for_path(
+        self, sha: str, path: str, glyph: str | None, limit: int | None
+    ) -> list[CommitInfo]:
+        """History of one path along the first-parent line.
+
+        For each commit, the ``Hive-Glyphs`` trailer decides when it is
+        present and ``glyph`` is given (tiny commit objects only). Otherwise
+        the object at ``path`` (a blob, or a subtree) is compared with the one
+        in the first parent: two tree lookups, no full tree diff, which keeps
+        this usable on repositories with tens of thousands of glyph files.
+        """
+        store = self.repo.object_store
+        parts = _b(path)
+        cache: dict[bytes, bytes | None] = {}
+
+        def object_at(commit_id: bytes) -> bytes | None:
+            if commit_id not in cache:
+                tree = store[store[commit_id].tree]
+                try:
+                    _mode, obj = tree.lookup_path(store.__getitem__, parts)
+                except KeyError:
+                    obj = None
+                cache[commit_id] = obj
+            return cache[commit_id]
+
+        result: list[CommitInfo] = []
+        commit_id: bytes | None = _b(sha)
+        while commit_id is not None and (limit is None or len(result) < limit):
+            commit = store[commit_id]
+            parent = commit.parents[0] if commit.parents else None
+            glyphs = _hive_glyphs_trailer(commit.message) if glyph is not None else None
+            if glyphs is not None:
+                touched = glyph in glyphs
+            else:
+                touched = object_at(commit_id) != (
+                    object_at(parent) if parent else None
+                )
+            if touched:
+                result.append(self.commit_info(_s(commit_id)))
+            commit_id = parent
         return result
 
     def diff(self, old_ref: str | None, new_ref: str) -> list[TreeChange]:
@@ -372,6 +418,18 @@ class GitRepoStore:
         ):
             raise RefMovedError(branch, current, self.head(branch))
         return target
+
+
+HIVE_GLYPHS_TRAILER = b"Hive-Glyphs:"
+
+
+def _hive_glyphs_trailer(message: bytes) -> set[str] | None:
+    """The glyph names listed in a commit's ``Hive-Glyphs:`` trailer, or None
+    when the commit has no such trailer (an import, an external commit)."""
+    for line in message.splitlines():
+        if line.startswith(HIVE_GLYPHS_TRAILER):
+            return set(_s(line[len(HIVE_GLYPHS_TRAILER) :]).split())
+    return None
 
 
 def _normalize_path(path: str) -> str:

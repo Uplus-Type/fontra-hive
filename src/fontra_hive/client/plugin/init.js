@@ -9,7 +9,7 @@
 //
 // Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
 
-const REFRESH_INTERVAL_MS = 5000;
+const POLL_INTERVAL_MS = 1500; // how often the branch head is checked (a tiny request)
 
 const STYLES = `
   :host {
@@ -140,7 +140,9 @@ class HiveHistoryPanel extends HTMLElement {
     super();
     this.editor = editor;
     this.visible = false;
-    this.lastKey = null;
+    this.lastGlyph = null;
+    this.head = null;
+    this.loading = false;
     this.timer = null;
 
     const shadow = this.attachShadow({ mode: "open" });
@@ -168,7 +170,7 @@ class HiveHistoryPanel extends HTMLElement {
 
     const settings = editor.sceneController?.sceneSettingsController;
     if (settings) {
-      settings.addKeyListener(["selectedGlyphName"], () => this.refresh());
+      settings.addKeyListener(["selectedGlyphName"], () => this.refresh(true));
     }
   }
 
@@ -176,18 +178,18 @@ class HiveHistoryPanel extends HTMLElement {
     this.visible = on;
     if (on) {
       this.refresh(true);
-      this.startTimer();
+      this.startPolling();
     } else {
-      this.stopTimer();
+      this.stopPolling();
     }
   }
 
-  startTimer() {
-    this.stopTimer();
-    this.timer = setInterval(() => this.refresh(), REFRESH_INTERVAL_MS);
+  startPolling() {
+    this.stopPolling();
+    this.timer = setInterval(() => this.checkHead(), POLL_INTERVAL_MS);
   }
 
-  stopTimer() {
+  stopPolling() {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
@@ -198,30 +200,64 @@ class HiveHistoryPanel extends HTMLElement {
     return this.editor.sceneController?.sceneSettings?.selectedGlyphName || null;
   }
 
+  apiURL(route, params) {
+    const url = new URL(
+      `/api/hive/projects/${encodeURIComponent(this.projectName)}/${route}`,
+      window.location.origin
+    );
+    url.searchParams.set("branch", this.branch);
+    for (const [key, value] of Object.entries(params)) {
+      url.searchParams.set(key, value);
+    }
+    return url;
+  }
+
+  // Cheap poll: only the branch head; the list is reloaded when it moved.
+  async checkHead() {
+    if (!this.visible || this.loading) return;
+    try {
+      const response = await fetch(this.apiURL("head", {}));
+      if (!response.ok) return;
+      const { head } = await response.json();
+      if (head !== this.head) {
+        this.refresh(true);
+      }
+    } catch (error) {
+      // network hiccup: try again at the next tick
+    }
+  }
+
   async refresh(force = false) {
     if (!this.visible && !force) return;
     const glyphName = this.selectedGlyphName;
     if (!glyphName) {
-      this.lastKey = null;
+      this.lastGlyph = null;
       this.render([], null, "Select a glyph to see its history.");
       return;
     }
-    const url =
-      `/api/hive/projects/${encodeURIComponent(this.projectName)}/log` +
-      `?branch=${encodeURIComponent(this.branch)}&glyph=${encodeURIComponent(glyphName)}&limit=50`;
+    if (glyphName === this.lastGlyph && !force) return;
+    this.loading = true;
     let data;
     try {
-      const response = await fetch(url);
+      const response = await fetch(this.apiURL("log", { glyph: glyphName, limit: 100 }));
       if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
       data = await response.json();
     } catch (error) {
       this.render([], null, `Could not load history (${error.message}).`, true);
       return;
+    } finally {
+      this.loading = false;
     }
-    const key = `${glyphName}:${data.head}:${data.commits.length}`;
-    if (key === this.lastKey && !force) return;
-    this.lastKey = key;
-    this.render(data.commits, data.head, data.commits.length ? null : `No history yet for ${glyphName}.`, false, glyphName);
+    if (glyphName !== this.selectedGlyphName) return; // the user moved on meanwhile
+    this.lastGlyph = glyphName;
+    this.head = data.head;
+    this.render(
+      data.commits,
+      data.head,
+      data.commits.length ? null : `No history yet for ${glyphName}.`,
+      false,
+      glyphName
+    );
   }
 
   render(commits, head, note, isError = false, glyphName = null) {

@@ -81,3 +81,16 @@ def test_project_list_and_availability(manager):
         assert not await manager.projectAvailable("../etc", "dev")
 
     run(go())
+
+
+def test_head_route(manager):
+    async def go():
+        response = await manager.headHandler(fake_request("Mutator"))
+        data = json.loads(response.body)
+        assert data["branch"] == "main" and len(data["head"]) == 40
+        bold = json.loads(
+            (await manager.headHandler(fake_request("Mutator", branch="bold"))).body
+        )
+        assert bold["head"] != data["head"]
+
+    run(go())

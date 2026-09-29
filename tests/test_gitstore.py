@@ -102,3 +102,24 @@ def test_repository_is_readable_by_git(tmp_path, fixture_fontra):
     clone = tmp_path / "clone"
     subprocess.run(["git", "clone", "-q", str(store.path), str(clone)], check=True)
     assert (clone / "font-data.json").is_file() and (clone / "glyphs").is_dir()
+
+
+def test_glyph_log_uses_trailers_and_falls_back_to_trees(tmp_path, fixture_fontra):
+    store, sha1 = make_store(tmp_path, fixture_fontra)  # "Import": no trailer
+    store.commit(
+        {"glyphs/A^1.json": b"{}\n"}, message="Edit A\n\nHive-Glyphs: A\n", author=ME
+    )
+    store.commit(
+        {"glyphs/B^1.json": b"{}\n"}, message="Edit B\n\nHive-Glyphs: B\n", author=ME
+    )
+    store.commit({"glyphs/A^1.json": b"[]\n"}, message="external edit of A", author=ME)
+    messages = [
+        c.message.splitlines()[0] for c in store.log(path="glyphs/A^1.json", glyph="A")
+    ]
+    assert messages == ["external edit of A", "Edit A", "Import"]
+    assert [c.message for c in store.log(path="glyphs/B^1.json", glyph="B")] == [
+        "Edit B\n\nHive-Glyphs: B",
+        "Import",
+    ]
+    # A commit whose trailer lists a glyph but which did not change its file is trusted as is.
+    assert len(store.log(path="glyphs/A^1.json", glyph="A", limit=2)) == 2

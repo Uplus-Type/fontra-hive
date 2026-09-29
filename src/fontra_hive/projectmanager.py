@@ -171,8 +171,24 @@ class DevHiveProjectManager:
                 web.get("/api/hive/projects/{name}/branches", self.branchesHandler),
                 web.get("/api/hive/projects/{name}/log", self.logHandler),
                 web.get("/api/hive/projects/{name}/glyph", self.glyphHandler),
+                web.get("/api/hive/projects/{name}/head", self.headHandler),
             ]
         )
+
+    async def headHandler(self, request: web.Request) -> web.Response:
+        """The current commit of a branch: cheap to poll."""
+        repoPath = self._repoPath(request.match_info["name"])
+        if repoPath is None:
+            raise web.HTTPNotFound()
+        branch = request.query.get("branch", DEFAULT_BRANCH)
+        store = GitRepoStore.open(repoPath)
+        try:
+            head = store.head(branch)
+        finally:
+            store.close()
+        if head is None:
+            raise web.HTTPNotFound()
+        return web.json_response({"branch": branch, "head": head})
 
     async def branchesHandler(self, request: web.Request) -> web.Response:
         repoPath = self._repoPath(request.match_info["name"])
@@ -200,7 +216,10 @@ class DevHiveProjectManager:
             head = store.head(branch)
             if head is None:
                 raise web.HTTPNotFound()
-            commits = [c.__dict__ for c in store.log(branch, path=path, limit=limit)]
+            commits = [
+                c.__dict__
+                for c in store.log(branch, path=path, glyph=glyphName, limit=limit)
+            ]
         finally:
             store.close()
         return web.json_response(
