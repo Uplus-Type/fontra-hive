@@ -282,3 +282,37 @@ def test_snapshot_route_with_the_project_open(manager):
         await manager.aclose()
 
     run(go())
+
+
+def test_plugin_files_are_served_with_revalidation(manager):
+    """The plug-in files are served by Hive itself, never cached blindly."""
+
+    def request(path, **headers):
+        return SimpleNamespace(match_info={"path": path}, headers=headers, query={})
+
+    async def go():
+        response = await manager.clientFileHandler(request("plugin/init.js"))
+        assert response.content_type == "text/javascript"
+        assert b"export function init" in response.body
+        assert response.headers["Cache-Control"] == "no-cache"
+        etag = response.headers["ETag"]
+        with pytest.raises(web.HTTPNotModified):
+            await manager.clientFileHandler(
+                request("plugin/init.js", **{"If-None-Match": etag})
+            )
+        again = await manager.clientFileHandler(
+            request("plugin/init.js", **{"If-None-Match": '"old"'})
+        )
+        assert again.body == response.body
+        manifest = await manager.clientFileHandler(request("plugin/plugin.json"))
+        assert manifest.content_type == "application/json"
+        for bad in [
+            "plugin/../__init__.py",
+            "__init__.py",
+            "plugin/",
+            "plugin/nope.js",
+        ]:
+            with pytest.raises(web.HTTPNotFound):
+                await manager.clientFileHandler(request(bad))
+
+    run(go())

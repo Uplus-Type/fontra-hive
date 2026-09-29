@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import hashlib
 import logging
 import pathlib
 from importlib import resources
@@ -176,6 +177,9 @@ class DevHiveProjectManager:
     def setupWebRoutes(self, server) -> None:
         server.httpApp.add_routes(
             [
+                # Registered before Fontra adds its own route for the
+                # "fontra.webcontent" entry point, so this one answers.
+                web.get("/hive/{path:.*}", self.clientFileHandler),
                 web.get("/api/hive/projects/{name}/branches", self.branchesHandler),
                 web.get("/api/hive/projects/{name}/log", self.logHandler),
                 web.get("/api/hive/projects/{name}/glyph", self.glyphHandler),
@@ -185,6 +189,33 @@ class DevHiveProjectManager:
                 web.post("/api/hive/projects/{name}/snapshot", self.snapshotHandler),
             ]
         )
+
+    async def clientFileHandler(self, request: web.Request) -> web.Response:
+        """The editor plug-in's files, always revalidated by the browser.
+
+        Fontra's own static handler sends ``Last-Modified`` (server start) and
+        no ``Cache-Control``: browsers then reuse a cached ``init.js`` without
+        asking, and a reload does not refresh a module the editor loads with
+        ``import()``, so a new plug-in version may never show. Here every
+        request is revalidated (``no-cache``) against an ETag of the content:
+        a 304 when nothing changed, the new file as soon as it did.
+        """
+        parts = request.match_info.get("path", "").split("/")
+        if not parts or any(p in ("", ".", "..") or p.startswith(".") for p in parts):
+            raise web.HTTPNotFound()
+        contentType = CLIENT_CONTENT_TYPES.get(parts[-1].rsplit(".", 1)[-1].lower())
+        if contentType is None:
+            raise web.HTTPNotFound()
+        resource = resources.files("fontra_hive").joinpath("client", *parts)
+        try:
+            data = resource.read_bytes()
+        except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
+            raise web.HTTPNotFound()
+        etag = '"' + hashlib.sha1(data).hexdigest()[:20] + '"'
+        headers = {"Cache-Control": "no-cache", "ETag": etag}
+        if request.headers.get("If-None-Match") == etag:
+            raise web.HTTPNotModified(headers=headers)
+        return web.Response(body=data, content_type=contentType, headers=headers)
 
     async def restoreHandler(self, request: web.Request) -> web.Response:
         """Bring one glyph back to the state it had at ``ref``, as a new commit.
@@ -418,6 +449,16 @@ class DevHiveProjectManager:
         self, projectIdentifier: str, metaInfo: dict[str, Any], authorizationToken: str
     ) -> None:
         pass
+
+
+CLIENT_CONTENT_TYPES = {
+    "js": "text/javascript",
+    "json": "application/json",
+    "svg": "image/svg+xml",
+    "css": "text/css",
+    "html": "text/html",
+    "png": "image/png",
+}
 
 
 def _snapshotJSON(snapshot: SnapshotInfo) -> dict[str, Any]:

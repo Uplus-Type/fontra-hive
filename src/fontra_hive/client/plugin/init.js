@@ -1230,6 +1230,8 @@ if (!customElements.get("hive-history-panel")) {
 export { appendContour, buildLayerPath, pickLayerName, transformFromDecomposed };
 
 export function init(editor, pluginPath) {
+  // Which file the editor actually loaded (handy when a browser cache is suspected).
+  console.info(`Fontra Hive plug-in: ${import.meta.url}`);
   const panel = new HiveHistoryPanel(editor);
   panel.iconPath = `${pluginPath}/history.svg`;
   editor.addSidebarPanel(panel, "right");
