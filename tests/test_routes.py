@@ -11,8 +11,8 @@ from fontra_hive.projectmanager import DevHiveProjectManager, glyphPath
 ME = Signature("Jérémie", "j@example.com")
 
 
-def fake_request(name, **query):
-    return SimpleNamespace(match_info={"name": name}, query=query)
+def fake_request(project, **query):
+    return SimpleNamespace(match_info={"name": project}, query=query)
 
 
 @pytest.fixture
@@ -189,6 +189,96 @@ def test_restore_route_reloads_the_open_backend(manager):
         glyph = await backend.getGlyph("A")
         assert glyph.name == "A" and glyph.layers  # the imported glyph is back
         assert backend.tree.commit_sha == data["head"]
+        await manager.aclose()
+
+    run(go())
+
+
+def test_snapshot_routes_group_commits(manager):
+    async def go():
+        data = json.loads(
+            (await manager.snapshotsHandler(fake_request("Mutator"))).body
+        )
+        assert data["snapshots"] == [] and data["pending"] == 2  # Import, Edit A
+
+        response = await manager.snapshotHandler(
+            fake_request("Mutator", name="Épreuves 1")
+        )
+        created = json.loads(response.body)
+        snap = created["snapshot"]
+        assert snap["name"] == "epreuves-1" and snap["title"] == "Épreuves 1"
+        assert snap["changes"] == 2 and snap["glyphs"] == []  # no trailers here
+        assert created["head"] == snap["sha"]
+
+        data = json.loads(
+            (await manager.snapshotsHandler(fake_request("Mutator"))).body
+        )
+        assert [s["name"] for s in data["snapshots"]] == ["epreuves-1"]
+        assert data["pending"] == 0 and data["head"] == snap["sha"]
+
+        # Nothing new since: 409. Same name later: 409. Missing name: 400.
+        with pytest.raises(web.HTTPConflict):
+            await manager.snapshotHandler(fake_request("Mutator", name="again"))
+        with pytest.raises(web.HTTPBadRequest):
+            await manager.snapshotHandler(fake_request("Mutator"))
+
+        # The glyph log says which snapshot each version belongs to.
+        first = json.loads(
+            (await manager.logHandler(fake_request("Mutator", glyph="A"))).body
+        )["commits"][-1]["sha"]
+        await manager.restoreHandler(fake_request("Mutator", glyph="A", ref=first))
+        with pytest.raises(web.HTTPConflict):
+            await manager.snapshotHandler(fake_request("Mutator", name="Épreuves-1"))
+        log = json.loads(
+            (await manager.logHandler(fake_request("Mutator", glyph="A"))).body
+        )
+        assert [
+            (c["message"].splitlines()[0], c["snapshot"]) for c in log["commits"]
+        ] == [
+            (f"Restore A to {first[:10]}", None),
+            ("Edit A", "epreuves-1"),
+            ("Import", "epreuves-1"),
+        ]
+        assert [s["name"] for s in log["snapshots"]] == ["epreuves-1"]
+        # Other branches are independent.
+        bold = json.loads(
+            (
+                await manager.snapshotsHandler(fake_request("Mutator", branch="bold"))
+            ).body
+        )
+        assert bold["snapshots"] == [] and bold["pending"] == 3
+
+        manager.readOnly = True
+        with pytest.raises(web.HTTPForbidden):
+            await manager.snapshotHandler(fake_request("Mutator", name="v2"))
+
+    run(go())
+
+
+def test_snapshot_route_with_the_project_open(manager):
+    """Pending edits are committed first; the open backend follows the new
+    head without reloading anything (the tree did not change)."""
+
+    async def go():
+        fontHandler = await manager.getRemoteSubject("Mutator", "dev")
+        backend = fontHandler.backend
+        received = []
+
+        async def callback(pattern):
+            received.append(pattern)
+
+        await backend.watchExternalChanges(callback)
+        glyph = await backend.getGlyph("B")
+        await backend.putGlyph("B", glyph, [66])
+        assert backend.tree.pending  # not committed yet (commit delay)
+
+        created = json.loads(
+            (await manager.snapshotHandler(fake_request("Mutator", name="v1"))).body
+        )
+        assert created["snapshot"]["glyphs"] == ["B"]  # "Edit A" has no trailer
+        assert created["snapshot"]["changes"] == 3
+        assert backend.tree.commit_sha == created["head"]
+        assert received == []  # nothing to reload
         await manager.aclose()
 
     run(go())

@@ -16,6 +16,7 @@ on the project (see the architecture document); the git side is the same.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import logging
 import pathlib
 from importlib import resources
@@ -28,7 +29,14 @@ from fontra.core.fonthandler import FontHandler
 from fontra.core.protocols import ProjectManager
 
 from .backend_git import GitFontraBackend
-from .gitstore import DEFAULT_BRANCH, SERVER_SIGNATURE, GitRepoStore, Signature
+from .gitstore import (
+    DEFAULT_BRANCH,
+    SERVER_SIGNATURE,
+    GitRepoStore,
+    RefMovedError,
+    Signature,
+    SnapshotInfo,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +181,8 @@ class DevHiveProjectManager:
                 web.get("/api/hive/projects/{name}/glyph", self.glyphHandler),
                 web.get("/api/hive/projects/{name}/head", self.headHandler),
                 web.post("/api/hive/projects/{name}/restore", self.restoreHandler),
+                web.get("/api/hive/projects/{name}/snapshots", self.snapshotsHandler),
+                web.post("/api/hive/projects/{name}/snapshot", self.snapshotHandler),
             ]
         )
 
@@ -283,14 +293,98 @@ class DevHiveProjectManager:
             head = store.head(branch)
             if head is None:
                 raise web.HTTPNotFound()
+            snapshots: list[SnapshotInfo] = []
             commits = [
-                c.__dict__
-                for c in store.log(branch, path=path, glyph=glyphName, limit=limit)
+                dataclasses.asdict(c)
+                for c in store.log(
+                    branch, path=path, glyph=glyphName, limit=limit, snapshots=snapshots
+                )
             ]
         finally:
             store.close()
         return web.json_response(
-            {"branch": branch, "head": head, "path": path, "commits": commits}
+            {
+                "branch": branch,
+                "head": head,
+                "path": path,
+                "commits": commits,
+                # The snapshots met while walking back to the oldest commit
+                # returned, newest first; each commit names its snapshot.
+                "snapshots": [_snapshotJSON(s) for s in snapshots],
+            }
+        )
+
+    async def snapshotsHandler(self, request: web.Request) -> web.Response:
+        """The snapshots of a branch, newest first, and how many commits were
+        made since the latest one (what a new snapshot would group)."""
+        repoPath = self._repoPath(request.match_info["name"])
+        if repoPath is None:
+            raise web.HTTPNotFound()
+        branch = request.query.get("branch", DEFAULT_BRANCH)
+        store = GitRepoStore.open(repoPath)
+        try:
+            head = store.head(branch)
+            if head is None:
+                raise web.HTTPNotFound()
+            snapshots = store.snapshots(head)
+            base = snapshots[0].sha if snapshots else None
+            pending = store.commits_between(base, head)
+        finally:
+            store.close()
+        return web.json_response(
+            {
+                "branch": branch,
+                "head": head,
+                "snapshots": [_snapshotJSON(s) for s in snapshots],
+                "pending": len(pending),
+                "pendingAuthors": sorted({c.author for c in pending}),
+            }
+        )
+
+    async def snapshotHandler(self, request: web.Request) -> web.Response:
+        """Name the current state of a branch: groups the commits made since
+        the previous snapshot. Adds an empty commit and a ``snapshot/<name>``
+        tag; history is never rewritten."""
+        name = request.match_info["name"]
+        repoPath = self._repoPath(name)
+        title = (request.query.get("name") or "").strip()
+        branch = request.query.get("branch", DEFAULT_BRANCH)
+        if repoPath is None:
+            raise web.HTTPNotFound()
+        if not title:
+            raise web.HTTPBadRequest(text="name is required")
+        if self.readOnly:
+            raise web.HTTPForbidden(text="read-only server")
+
+        fontHandler = self.fontHandlers.get(f"{name}@{branch}")
+        backend = fontHandler.backend if fontHandler is not None else None
+        store = backend.store if backend is not None else GitRepoStore.open(repoPath)
+        try:
+            if store.head(branch) is None:
+                raise web.HTTPNotFound(text=f"no branch {branch}")
+            if backend is not None:
+                backend.flush()  # the snapshot includes edits not yet committed
+            try:
+                snapshot = store.create_snapshot(
+                    title,
+                    branch=branch,
+                    author=self.author or SERVER_SIGNATURE,
+                    expected_head=store.head(branch),
+                )
+            except (ValueError, RefMovedError) as error:
+                raise web.HTTPConflict(text=str(error))
+            if backend is not None:
+                # The tree did not change: this only moves the backend's head.
+                await backend.check_external_changes()
+        finally:
+            if backend is None:
+                store.close()
+        return web.json_response(
+            {
+                "branch": branch,
+                "head": snapshot.sha,
+                "snapshot": _snapshotJSON(snapshot),
+            }
         )
 
     async def glyphHandler(self, request: web.Request) -> web.Response:
@@ -324,3 +418,9 @@ class DevHiveProjectManager:
         self, projectIdentifier: str, metaInfo: dict[str, Any], authorizationToken: str
     ) -> None:
         pass
+
+
+def _snapshotJSON(snapshot: SnapshotInfo) -> dict[str, Any]:
+    data = dataclasses.asdict(snapshot)
+    data["glyphs"] = list(snapshot.glyphs)
+    return data

@@ -20,9 +20,11 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import stat
 import time
-from dataclasses import dataclass
+import unicodedata
+from dataclasses import dataclass, replace
 from typing import Iterable, Iterator, Mapping
 
 from dulwich import diff_tree
@@ -75,6 +77,28 @@ class CommitInfo:
     time: int
     message: str
     parents: tuple[str, ...]
+    # Name of the snapshot this commit belongs to (the first snapshot made
+    # after it on the branch), or None for changes since the last snapshot.
+    # Only filled in by ``log(..., snapshots=...)``.
+    snapshot: str | None = None
+
+
+@dataclass(frozen=True)
+class SnapshotInfo:
+    """A named point of a branch: an empty commit (same tree as its parent)
+    whose message carries a ``Hive-Snapshot:`` trailer, plus an annotated tag
+    ``snapshot/<name>`` pointing at it. Nothing is rewritten: the commits
+    since the previous snapshot stay in the history, the snapshot groups them.
+    """
+
+    name: str  # tag-safe slug, unique in the repository
+    title: str  # as typed by the user
+    sha: str
+    author: str
+    time: int
+    base: str | None  # sha of the previous snapshot on the branch, if any
+    changes: int  # commits grouped by this snapshot (since ``base``)
+    glyphs: tuple[str, ...]  # glyphs changed by those commits, sorted
 
 
 @dataclass(frozen=True)
@@ -97,6 +121,21 @@ def _branch_ref(branch: str) -> bytes:
 
 def _tag_ref(tag: str) -> bytes:
     return _b(f"refs/tags/{tag}")
+
+
+SNAPSHOT_TAG_PREFIX = "snapshot/"
+
+
+def snapshot_slug(title: str) -> str:
+    """A tag-safe name for a snapshot title: ASCII letters, digits, ``.``,
+    ``_`` and ``-`` (``"Relecture client n°1"`` -> ``"relecture-client-n1"``)."""
+    text = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode()
+    text = re.sub(r"[^A-Za-z0-9._-]+", "-", text.strip().lower())
+    text = re.sub(r"-{2,}", "-", text).strip("-.")
+    text = re.sub(r"\.{2,}", ".", text)
+    if text.endswith(".lock"):
+        text = text[: -len(".lock")]
+    return text[:64].strip("-.")
 
 
 class GitRepoStore:
@@ -328,6 +367,7 @@ class GitRepoStore:
         path: str | None = None,
         glyph: str | None = None,
         limit: int | None = None,
+        snapshots: list[SnapshotInfo] | None = None,
     ) -> list[CommitInfo]:
         """Commits reachable from ``ref``, newest first, optionally only those
         that changed ``path`` (a file, or a directory: its subtree).
@@ -335,17 +375,35 @@ class GitRepoStore:
         ``glyph`` is the glyph name stored at ``path``: commits written by
         Fontra Hive carry a ``Hive-Glyphs:`` trailer listing the glyphs they
         changed, which answers the question without reading any tree.
+
+        When ``snapshots`` is a list, the walk follows first parents only,
+        every returned commit gets the name of the snapshot it belongs to
+        (``CommitInfo.snapshot``) and the snapshots met on the way are
+        appended to the list, newest first. Snapshot commits themselves are
+        not returned in path mode (they change nothing).
         """
         sha = self.resolve(ref)
-        if path is None:
+        if path is None and snapshots is None:
             walker = self.repo.get_walker(include=[_b(sha)], max_entries=limit)
             return [self.commit_info(_s(entry.commit.id)) for entry in walker]
-        return self._log_for_path(sha, _normalize_path(path), glyph, limit)
+        return self._log_first_parent(
+            sha,
+            _normalize_path(path) if path is not None else None,
+            glyph,
+            limit,
+            snapshots,
+        )
 
-    def _log_for_path(
-        self, sha: str, path: str, glyph: str | None, limit: int | None
+    def _log_first_parent(
+        self,
+        sha: str,
+        path: str | None,
+        glyph: str | None,
+        limit: int | None,
+        snapshots: list[SnapshotInfo] | None,
     ) -> list[CommitInfo]:
-        """History of one path along the first-parent line.
+        """History along the first-parent line, of one path (or of everything
+        when ``path`` is None), optionally annotated with snapshots.
 
         For each commit, the ``Hive-Glyphs`` trailer decides when it is
         present and ``glyph`` is given (tiny commit objects only). Otherwise
@@ -354,7 +412,7 @@ class GitRepoStore:
         this usable on repositories with tens of thousands of glyph files.
         """
         store = self.repo.object_store
-        parts = _b(path)
+        parts = _b(path) if path is not None else b""
         cache: dict[bytes, bytes | None] = {}
 
         def object_at(commit_id: bytes) -> bytes | None:
@@ -368,21 +426,197 @@ class GitRepoStore:
             return cache[commit_id]
 
         result: list[CommitInfo] = []
+        current_snapshot: str | None = None
         commit_id: bytes | None = _b(sha)
         while commit_id is not None and (limit is None or len(result) < limit):
             commit = store[commit_id]
             parent = commit.parents[0] if commit.parents else None
-            glyphs = _hive_glyphs_trailer(commit.message) if glyph is not None else None
-            if glyphs is not None:
-                touched = glyph in glyphs
+            if snapshots is not None:
+                snapshot_name = _trailer(commit.message, HIVE_SNAPSHOT_TRAILER)
+                if snapshot_name is not None:
+                    snapshots.append(self._snapshot_info(commit))
+                    current_snapshot = snapshot_name
+                    if path is not None:
+                        commit_id = parent
+                        continue
+            if path is None:
+                touched = True
             else:
-                touched = object_at(commit_id) != (
-                    object_at(parent) if parent else None
+                glyphs = (
+                    _hive_glyphs_trailer(commit.message) if glyph is not None else None
                 )
+                if glyphs is not None:
+                    touched = glyph in glyphs
+                else:
+                    touched = object_at(commit_id) != (
+                        object_at(parent) if parent else None
+                    )
             if touched:
-                result.append(self.commit_info(_s(commit_id)))
+                info = self.commit_info(_s(commit_id))
+                if snapshots is not None:
+                    info = replace(info, snapshot=current_snapshot)
+                result.append(info)
             commit_id = parent
         return result
+
+    # --- snapshots ---------------------------------------------------------
+
+    def snapshots(self, ref: str = DEFAULT_BRANCH) -> list[SnapshotInfo]:
+        """Snapshots on the first-parent line of ``ref``, newest first.
+
+        Only commit objects are read (no trees): the same cost as the
+        per-glyph history.
+        """
+        store = self.repo.object_store
+        result = []
+        commit_id: bytes | None = _b(self.resolve(ref))
+        while commit_id is not None:
+            commit = store[commit_id]
+            if _trailer(commit.message, HIVE_SNAPSHOT_TRAILER) is not None:
+                result.append(self._snapshot_info(commit))
+            commit_id = commit.parents[0] if commit.parents else None
+        return result
+
+    def latest_snapshot(self, ref: str = DEFAULT_BRANCH) -> SnapshotInfo | None:
+        """The newest snapshot on the first-parent line of ``ref``."""
+        store = self.repo.object_store
+        commit_id: bytes | None = _b(self.resolve(ref))
+        while commit_id is not None:
+            commit = store[commit_id]
+            if _trailer(commit.message, HIVE_SNAPSHOT_TRAILER) is not None:
+                return self._snapshot_info(commit)
+            commit_id = commit.parents[0] if commit.parents else None
+        return None
+
+    def commits_between(self, base: str | None, head: str) -> list[CommitInfo]:
+        """First-parent commits after ``base`` up to ``head`` included, newest
+        first (all of them down to the root when ``base`` is None)."""
+        store = self.repo.object_store
+        stop = _b(self.resolve(base)) if base else None
+        result = []
+        commit_id: bytes | None = _b(self.resolve(head))
+        while commit_id is not None and commit_id != stop:
+            commit = store[commit_id]
+            result.append(self.commit_info(_s(commit_id)))
+            commit_id = commit.parents[0] if commit.parents else None
+        if stop is not None and commit_id != stop:
+            raise ValueError(f"{base} is not on the first-parent line of {head}")
+        return result
+
+    def create_snapshot(
+        self,
+        title: str,
+        *,
+        branch: str = DEFAULT_BRANCH,
+        author: Signature,
+        expected_head: str | None | object = ...,
+        timestamp: int | None = None,
+    ) -> SnapshotInfo:
+        """Name the current state of ``branch``, grouping the commits made
+        since the previous snapshot.
+
+        Adds an empty commit (same tree as the head) whose message summarises
+        the grouped commits (count, authors, glyphs) and carries the
+        ``Hive-Snapshot:`` trailer, then an annotated tag
+        ``snapshot/<name>`` on it. History is not rewritten.
+
+        Raises ``ValueError`` for an empty or already used name, or when
+        nothing was committed since the previous snapshot;
+        :class:`RefMovedError` when the branch moved (compare-and-swap).
+        """
+        title = " ".join(title.split())
+        name = snapshot_slug(title)
+        if not name:
+            raise ValueError("a snapshot needs a name")
+        if self.repo.refs.read_ref(_tag_ref(SNAPSHOT_TAG_PREFIX + name)):
+            raise ValueError(f"snapshot {name!r} already exists")
+        head = self.head(branch)
+        if head is None:
+            raise KeyError(f"no branch {branch!r}")
+        if expected_head is not ... and expected_head != head:
+            raise RefMovedError(branch, expected_head, head)
+        previous = self.latest_snapshot(head)
+        grouped = self.commits_between(previous.sha if previous else None, head)
+        if not grouped:
+            raise ValueError(
+                f"nothing changed since snapshot {previous.name!r}"
+                if previous
+                else "nothing to snapshot"
+            )
+
+        store = self.repo.object_store
+        glyphs: set[str] = set()
+        authors: list[str] = []
+        unknown = 0
+        for info in reversed(grouped):  # authors in order of first change
+            if info.author not in authors:
+                authors.append(info.author)
+            listed = _hive_glyphs_trailer(_b(info.message))
+            if listed is None:
+                unknown += 1
+            else:
+                glyphs |= listed
+        count = len(grouped)
+        since = f"snapshot {previous.title!r}" if previous else "the beginning"
+        body = [
+            f"{count} change{'s' if count != 1 else ''} since {since}, "
+            f"by {', '.join(authors)}."
+        ]
+        if glyphs:
+            shown = sorted(glyphs)
+            more = f" (+{len(shown) - 40})" if len(shown) > 40 else ""
+            body.append(f"Glyphs: {' '.join(shown[:40])}{more}")
+        if unknown:
+            body.append(f"{unknown} commit(s) without a glyph list (import, external).")
+        message = (
+            f"Snapshot: {title}\n\n"
+            + "\n".join(body)
+            + "\n\n"
+            + f"Hive-Snapshot: {name}\n"
+            + f"Hive-Snapshot-Base: {previous.sha if previous else 'none'}\n"
+            + f"Hive-Snapshot-Changes: {count}\n"
+            + f"Hive-Snapshot-Glyphs: {' '.join(sorted(glyphs))}\n"
+            # An empty glyph list: the snapshot changes no glyph, and the
+            # per-glyph history skips it without reading any tree.
+            + "Hive-Glyphs:\n"
+        )
+
+        now = int(time.time()) if timestamp is None else timestamp
+        c = Commit()
+        c.tree = store[_b(head)].tree
+        c.parents = [_b(head)]
+        c.author = author.encode()
+        c.committer = SERVER_SIGNATURE.encode()
+        c.author_time = c.commit_time = now
+        c.author_timezone = c.commit_timezone = 0
+        c.encoding = b"UTF-8"
+        c.message = _b(message)
+        store.add_object(c)
+        if not self.repo.refs.set_if_equals(_branch_ref(branch), _b(head), c.id):
+            raise RefMovedError(branch, head, self.head(branch))
+        self.create_tag(
+            SNAPSHOT_TAG_PREFIX + name, _s(c.id), message=title, tagger=author
+        )
+        return self._snapshot_info(c)
+
+    def _snapshot_info(self, commit: Commit) -> SnapshotInfo:
+        info = self.commit_info(_s(commit.id))
+        title = info.message.splitlines()[0]
+        if title.startswith("Snapshot: "):
+            title = title[len("Snapshot: ") :]
+        base = _trailer(commit.message, HIVE_SNAPSHOT_BASE_TRAILER)
+        glyphs = _trailer(commit.message, HIVE_SNAPSHOT_GLYPHS_TRAILER) or ""
+        changes = _trailer(commit.message, HIVE_SNAPSHOT_CHANGES_TRAILER) or "0"
+        return SnapshotInfo(
+            name=_trailer(commit.message, HIVE_SNAPSHOT_TRAILER) or "",
+            title=title,
+            sha=info.sha,
+            author=info.author,
+            time=info.time,
+            base=None if base in (None, "none") else base,
+            changes=int(changes) if changes.isdigit() else 0,
+            glyphs=tuple(glyphs.split()),
+        )
 
     def diff(self, old_ref: str | None, new_ref: str) -> list[TreeChange]:
         """Paths that differ between two commits (``old_ref`` may be ``None``
@@ -421,6 +655,20 @@ class GitRepoStore:
 
 
 HIVE_GLYPHS_TRAILER = b"Hive-Glyphs:"
+HIVE_SNAPSHOT_TRAILER = b"Hive-Snapshot:"
+HIVE_SNAPSHOT_BASE_TRAILER = b"Hive-Snapshot-Base:"
+HIVE_SNAPSHOT_GLYPHS_TRAILER = b"Hive-Snapshot-Glyphs:"
+HIVE_SNAPSHOT_CHANGES_TRAILER = b"Hive-Snapshot-Changes:"
+
+
+def _trailer(message: bytes, key: bytes) -> str | None:
+    """The value of the last ``key`` line of a commit message, stripped, or
+    None when there is no such line."""
+    value = None
+    for line in message.splitlines():
+        if line.startswith(key):
+            value = _s(line[len(key) :]).strip()
+    return value
 
 
 def _hive_glyphs_trailer(message: bytes) -> set[str] | None:

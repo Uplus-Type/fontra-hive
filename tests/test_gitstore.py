@@ -123,3 +123,94 @@ def test_glyph_log_uses_trailers_and_falls_back_to_trees(tmp_path, fixture_fontr
     ]
     # A commit whose trailer lists a glyph but which did not change its file is trusted as is.
     assert len(store.log(path="glyphs/A^1.json", glyph="A", limit=2)) == 2
+
+
+def test_snapshot_slug():
+    from fontra_hive.gitstore import snapshot_slug
+
+    assert snapshot_slug("Relecture client n°1") == "relecture-client-n1"
+    assert snapshot_slug("  v0.2 — épreuves  ") == "v0.2-epreuves"
+    assert snapshot_slug("a..b.lock") == "a.b"
+    assert snapshot_slug("***") == ""
+
+
+def test_snapshots_group_commits_without_rewriting(tmp_path, fixture_fontra):
+    other = Signature("Fabio", "f@example.com")
+    store, imported = make_store(tmp_path, fixture_fontra)
+    edit_a = store.commit(
+        {"glyphs/A^1.json": b"{}\n"}, message="Edit A\n\nHive-Glyphs: A\n", author=ME
+    )
+    edit_b = store.commit(
+        {"glyphs/B^1.json": b"{}\n"},
+        message="Edit B\n\nHive-Glyphs: B\n",
+        author=other,
+    )
+    head = store.head()
+
+    first = store.create_snapshot("Relecture n°1", author=ME)
+    assert first.name == "relecture-n1" and first.title == "Relecture n°1"
+    assert first.base is None and first.changes == 3  # Import, Edit A, Edit B
+    assert first.glyphs == ("A", "B") and first.author == "Jérémie"
+    # An empty commit on top of the branch: same tree, nothing rewritten.
+    assert store.head() == first.sha
+    assert store.commit_info(first.sha).parents == (head,)
+    assert store.tree_sha(first.sha) == store.tree_sha(head)
+    assert store.diff(head, first.sha) == []
+    assert [c.sha for c in store.log()][1:] == [edit_b, edit_a, imported]
+    assert store.resolve("snapshot/relecture-n1") == first.sha
+    message = store.commit_info(first.sha).message
+    assert message.startswith(
+        "Snapshot: Relecture n°1\n\n3 changes since the beginning"
+    )
+    assert "by Jérémie, Fabio." in message and "Hive-Snapshot: relecture-n1" in message
+
+    # Nothing new: refused. Same name: refused.
+    with pytest.raises(ValueError, match="nothing changed"):
+        store.create_snapshot("again", author=ME)
+    edit_a2 = store.commit(
+        {"glyphs/A^1.json": b"[]\n"}, message="Edit A\n\nHive-Glyphs: A\n", author=ME
+    )
+    with pytest.raises(ValueError, match="already exists"):
+        store.create_snapshot("Relecture  n°1", author=ME)
+    with pytest.raises(ValueError, match="needs a name"):
+        store.create_snapshot(" -- ", author=ME)
+    with pytest.raises(RefMovedError):
+        store.create_snapshot("v2", author=ME, expected_head=edit_a)
+
+    second = store.create_snapshot("v2", author=other)
+    assert second.base == first.sha and second.changes == 1 and second.glyphs == ("A",)
+    assert [s.name for s in store.snapshots()] == ["v2", "relecture-n1"]
+    assert store.latest_snapshot().sha == second.sha
+    assert [c.sha for c in store.commits_between(first.sha, second.sha)] == [
+        second.sha,
+        edit_a2,
+    ]
+
+    # Per-glyph history, annotated with the snapshot each commit belongs to;
+    # the snapshot commits themselves are not in it (they change no glyph).
+    store.commit(
+        {"glyphs/A^1.json": b"[1]\n"}, message="Edit A\n\nHive-Glyphs: A\n", author=ME
+    )
+    met = []
+    log = store.log(path="glyphs/A^1.json", glyph="A", snapshots=met)
+    assert [(c.message.splitlines()[0], c.snapshot) for c in log] == [
+        ("Edit A", None),
+        ("Edit A", "v2"),
+        ("Edit A", "relecture-n1"),
+        ("Import", "relecture-n1"),
+    ]
+    assert [s.name for s in met] == ["v2", "relecture-n1"]
+    # The whole branch too, snapshot commits included.
+    met = []
+    full = store.log(snapshots=met)
+    assert [c.snapshot for c in full] == [
+        None,
+        "v2",
+        "v2",
+        "relecture-n1",
+        "relecture-n1",
+        "relecture-n1",
+        "relecture-n1",
+    ]
+    # Snapshots are ordinary tags and commits for git.
+    assert "snapshot/v2" in store.tags()

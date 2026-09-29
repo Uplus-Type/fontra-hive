@@ -6,6 +6,8 @@ Examples::
     fontra-hive export repos/MyFont.git main  out/MyFont.fontra
     fontra-hive log   repos/MyFont.git --path glyphs/A.json
     fontra-hive branch repos/MyFont.git bold-extension
+    fontra-hive snapshot repos/MyFont.git "Proofs sent to client"
+    fontra-hive log   repos/MyFont.git --snapshots
 """
 
 from __future__ import annotations
@@ -47,6 +49,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--ref", default=DEFAULT_BRANCH)
     p.add_argument("--path", help="only commits touching this path, e.g. glyphs/A.json")
     p.add_argument("--limit", type=int, default=20)
+    p.add_argument(
+        "--snapshots",
+        action="store_true",
+        help="group commits under the snapshot they belong to (first-parent line)",
+    )
+
+    p = sub.add_parser(
+        "snapshot",
+        help="name the current state of a branch, grouping the commits since "
+        "the previous snapshot (an empty commit + a snapshot/<name> tag)",
+    )
+    p.add_argument("repo", type=pathlib.Path)
+    p.add_argument("name")
+    p.add_argument("--branch", default=DEFAULT_BRANCH)
 
     p = sub.add_parser("branches", help="list branches and tags")
     p.add_argument("repo", type=pathlib.Path)
@@ -87,12 +103,35 @@ def main(argv: list[str] | None = None) -> int:
             store.export(args.ref, args.destination)
             print(f"exported {args.ref} to {args.destination}")
         elif args.command == "log":
-            for c in store.log(args.ref, path=args.path, limit=args.limit):
-                when = datetime.datetime.fromtimestamp(c.time).astimezone()
-                when = when.strftime("%Y-%m-%d %H:%M")
+            snapshots = [] if args.snapshots else None
+            commits = store.log(
+                args.ref, path=args.path, limit=args.limit, snapshots=snapshots
+            )
+            titles = {s.name: s for s in snapshots or []}
+            group: object = ...
+            for c in commits:
+                if snapshots is not None and c.snapshot != group:
+                    group = c.snapshot
+                    if group is None:
+                        print("── since the last snapshot")
+                    else:
+                        s = titles[group]
+                        print(
+                            f"── snapshot {s.title!r} ({s.name}, {s.sha[:10]}, "
+                            f"{_when(s.time)}, {_changes(s.changes)})"
+                        )
+                indent = "   " if snapshots is not None else ""
                 print(
-                    f"{c.sha[:10]}  {when}  {c.author:<20}  {c.message.splitlines()[0]}"
+                    f"{indent}{c.sha[:10]}  {_when(c.time)}  {c.author:<20}  "
+                    f"{c.message.splitlines()[0]}"
                 )
+        elif args.command == "snapshot":
+            try:
+                s = store.create_snapshot(args.name, branch=args.branch, author=author)
+            except ValueError as error:
+                print(f"fontra-hive: {error}", file=sys.stderr)
+                return 1
+            print(f"snapshot/{s.name} -> {s.sha}  ({_changes(s.changes)} grouped)")
         elif args.command == "branches":
             for b in store.branches():
                 print(f"branch {b:<24} {store.head(b)}")
@@ -109,6 +148,15 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         store.close()
     return 0
+
+
+def _changes(count: int) -> str:
+    return f"{count} change{'' if count == 1 else 's'}"
+
+
+def _when(unix_time: int) -> str:
+    when = datetime.datetime.fromtimestamp(unix_time).astimezone()
+    return when.strftime("%Y-%m-%d %H:%M")
 
 
 if __name__ == "__main__":
