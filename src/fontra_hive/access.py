@@ -20,8 +20,8 @@ local development,
 
     {
       "users": {
-        "jeremie": {"name": "Jérémie Hornus", "email": "jeremie@uplustype.com"},
-        "fabio": {"name": "Fabio Caccamo", "email": "fabio@example.com"}
+        "jeremie": {"name": "Jérémie Hornus", "email": "jeremie@example.com"},
+        "fabio": {"name": "Fabio Rossi", "email": "fabio@example.com"}
       },
       "organizations": {
         "uplustype": {"name": "U+Type", "members": {"jeremie": "owner", "fabio": "member"},

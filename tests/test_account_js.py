@@ -240,7 +240,7 @@ def share_answers():
         "GET /api/hive/me": [
             200,
             {
-                "user": {"username": "fabio", "name": "Fabio Caccamo", "email": ""},
+                "user": {"username": "fabio", "name": "Fabio Rossi", "email": ""},
                 "accounts": True,
                 "source": "hive-api",
             },
@@ -264,7 +264,7 @@ def share_answers():
                     },
                     {
                         "username": "fabio",
-                        "name": "Fabio Caccamo",
+                        "name": "Fabio Rossi",
                         "email": "f@x",
                         "role": "manager",
                         "via": "collaborator",
@@ -332,7 +332,7 @@ def test_share_dialog_with_hive_api(browser_and_url):
         rows[0].startswith("JH Jérémie Hornus")
         and "admin · organization U+Type" in rows[0]
     )
-    assert "Fabio Caccamo (you)" in rows[1]
+    assert "Fabio Rossi (you)" in rows[1]
     assert "zoe@example.com" in rows[3] and "pending" in rows[3]
     # Jérémie's role comes from the organization: no menu, no ×.
     assert (

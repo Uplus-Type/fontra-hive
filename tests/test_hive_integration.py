@@ -46,7 +46,7 @@ def free_port() -> int:
 SEED = """
 from hive.models import *
 users = {n: User.objects.create_user(n, n + "@example.com", %(pw)r, name=full)
-         for n, full in [("jeremie", "Jérémie Hornus"), ("fabio", "Fabio Caccamo"),
+         for n, full in [("jeremie", "Jérémie Hornus"), ("fabio", "Fabio Rossi"),
                          ("ana", "Ana López")]}
 org = Organization.objects.create(login="uplustype", name="U+Type", base_role="designer")
 Membership.objects.create(organization=org, user=users["jeremie"], role="owner")
@@ -185,7 +185,7 @@ def test_sign_in_roles_projects_and_invitations_through_the_relay(
             log = await (
                 await browser.get("/api/hive/projects/uplustype%2FMutator/log")
             ).json()
-            assert log["commits"][0]["author"] == "Fabio Caccamo"
+            assert log["commits"][0]["author"] == "Fabio Rossi"
             assert log["commits"][0]["message"].startswith(
                 "New project uplustype/Mutator"
             )

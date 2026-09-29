@@ -95,7 +95,7 @@ def fake(role="admin"):
         "others": [
             {
                 "username": "fabio",
-                "name": "Fabio Caccamo",
+                "name": "Fabio Rossi",
                 "role": "designer",
                 "view": "editor",
                 "branch": "main",
@@ -103,7 +103,7 @@ def fake(role="admin"):
             },
             {
                 "username": "fabio",
-                "name": "Fabio Caccamo",
+                "name": "Fabio Rossi",
                 "role": "designer",
                 "view": "fontoverview",
                 "branch": "main",
@@ -189,7 +189,7 @@ def test_top_bar_chip_presence_and_menu(browser_and_url):
         "[...document.querySelectorAll('.hive-stack .avatar')].map(a => [a.textContent, a.title])"
     )
     assert stack == [
-        ["FC", "Fabio Caccamo · editing “A”\nFabio Caccamo · in the font overview"]
+        ["FR", "Fabio Rossi · editing “A”\nFabio Rossi · in the font overview"]
     ]
     # The heartbeat says where we are.
     beat = page.evaluate("calls.find(c => c.path.endsWith('/presence'))")
@@ -200,7 +200,7 @@ def test_top_bar_chip_presence_and_menu(browser_and_url):
     page.click(".hive-chip")
     menu = page.evaluate("document.querySelector('.hive-menu').innerText")
     assert "Jérémie Hornus" in menu and "admin" in menu and "Also here" in menu
-    assert "Fabio Caccamo · editing “A”" in menu and "Sign out" in menu
+    assert "Fabio Rossi · editing “A”" in menu and "Sign out" in menu
     assert page.evaluate(
         "[...document.querySelectorAll('.hive-menu a')].map(a => a.getAttribute('href'))"
     ) == ["/", None, "/hive/logout"]

@@ -16,8 +16,8 @@ ME = Signature("Import", "import@example.com")
 
 USERS = {
     "users": {
-        "jeremie": {"name": "Jérémie Hornus", "email": "jeremie@uplustype.com"},
-        "fabio": {"name": "Fabio Caccamo", "email": "fabio@example.com"},
+        "jeremie": {"name": "Jérémie Hornus", "email": "jeremie@example.com"},
+        "fabio": {"name": "Fabio Rossi", "email": "fabio@example.com"},
         "ana": {"name": "Ana López", "email": "ana@example.com"},
         "zoe": {"name": "Zoé", "email": "zoe@example.com"},
     },
@@ -196,7 +196,7 @@ def test_hive_routes_check_the_role(manager):
                 )
             ).body
         )
-        assert created["snapshot"]["author"] == "Fabio Caccamo"
+        assert created["snapshot"]["author"] == "Fabio Rossi"
         store = GitRepoStore.open(manager.rootPath / "Mutator.git")
         try:
             assert store.commit_info(created["head"]).email == "fabio@hive"
@@ -253,7 +253,7 @@ def test_one_shared_handler_with_roles_and_authors_per_connection(manager):
         store = handler.backend.store
         head = store.head("main")
         info = store.commit_info(head)
-        assert (info.author, info.email) == ("Fabio Caccamo", "fabio@hive")
+        assert (info.author, info.email) == ("Fabio Rossi", "fabio@hive")
         assert "Hive-Glyphs: B" in info.message
         assert b'"xAdvance": 777' in store.read_file(head, "glyphs/B^1.json")
         await manager.aclose()

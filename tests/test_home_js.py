@@ -109,7 +109,7 @@ def answers():
                     },
                     {
                         "username": "fabio",
-                        "name": "Fabio Caccamo",
+                        "name": "Fabio Rossi",
                         "email": "f@x",
                         "role": "member",
                     },
@@ -229,7 +229,7 @@ def test_new_project_then_open_it(browser_and_url):  # noqa: F811
 def test_organization_page(browser_and_url):  # noqa: F811
     page = open_home(browser_and_url, "#org/uplustype")
     page.wait_for_selector("table.people tr[data-username=fabio]")
-    page.select_option("select[aria-label='Role of Fabio Caccamo']", "owner")
+    page.select_option("select[aria-label='Role of Fabio Rossi']", "owner")
     page.wait_for_function("calls.some(c => c.method === 'PATCH')")
     patch = page.evaluate("calls.find(c => c.method === 'PATCH')")
     assert patch["path"] == "/api/orgs/uplustype/members/fabio" and patch["body"] == {

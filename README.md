@@ -137,12 +137,11 @@ Routes: `GET /api/hive/me` (who is signed in), `GET
 ## With hive-api (real accounts)
 
 `fontra hive` is the project manager of the hosted service: people, roles
-and invitations come from [hive-api](https://github.com/Uplus-Type/hive-api)
-(private), the fonts from git as above.
+and invitations come from hive-api, a separate accounts service of Fontra
+Hive (proprietary, not part of this repository), the fonts from git as above.
 
 ```bash
-# terminal 1 — hive-api (see its README), told the address people use:
-cd ~/GitHub/hive-api
+# terminal 1 — hive-api, told the address people use:
 HIVE_DEBUG=1 HIVE_PUBLIC_URL=http://localhost:8000 python manage.py runserver 8001
 
 # terminal 2 — Fontra with Hive, relaying /api/* to hive-api:
