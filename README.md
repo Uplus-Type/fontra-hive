@@ -20,7 +20,7 @@ the open-source, browser-based font editor.
   authentication) serving every `<name>.git` repository of a folder, one
   project per branch (`Name`, `Name@branch`).
 - `fontra-hive` — a small CLI: `init`, `import`, `export`, `log`, `branches`,
-  `branch`, `tag`, `diff`.
+  `branch`, `tag`, `diff`, `snapshot`.
 
 Fontra itself is not modified: the plug-in registers through the
 `fontra.projectmanagers` entry point and uses public backend APIs only.
@@ -65,6 +65,8 @@ fontra-hive log repos/MyFont.git                 # commits, newest first
 fontra-hive log repos/MyFont.git --path glyphs/A.json
 fontra-hive branch repos/MyFont.git bold-extension
 fontra-hive tag repos/MyFont.git v0.1 --message "sent to client"
+fontra-hive snapshot repos/MyFont.git "Proofs sent to client"
+fontra-hive log repos/MyFont.git --snapshots      # commits grouped by snapshot
 fontra-hive export repos/MyFont.git v0.1 out/MyFont-v0.1.fontra
 git --git-dir repos/MyFont.git log --stat          # it is a normal git repo
 ```
@@ -80,20 +82,39 @@ sidebar listing every commit that touched the selected glyph (author, time,
 message), refreshed as you edit. It uses Fontra's editor plug-in mechanism
 and is served by the Fontra server itself under `/hive/plugin/`.
 
-- **Preview a version on the canvas.** Click a commit: that version of the
+- **Preview a version on the canvas.** Hover a commit: that version of the
   glyph is drawn in orange over the glyph itself, in glyph coordinates, so
-  the two outlines can be compared point by point. The layer shown is the
+  the two outlines can be compared point by point; moving off the row
+  removes it. Click to keep a version on the canvas ("pinned", drawn
+  stronger; hovering other rows still shows them, paler, and leaving them
+  comes back to the pinned one). A version not yet loaded is fetched after
+  120 ms of hover, so sweeping over the list costs nothing; loaded versions
+  (the eight most recent ones are fetched in the background when the list
+  is shown) appear at once. The layer shown is the
   one being edited when the old version has it, otherwise its default
   source layer (the status line says which); components are resolved
   against the same version. The overlay is a visualization layer added at
   runtime, below the editing nodes.
-- **Restore this version.** With a version previewed, "Restore this version"
+- **Restore this version.** With a version pinned, "Restore this version"
   (click twice: the button asks to confirm) makes the server commit that
   glyph file again on top of the branch. Nothing is rewritten or deleted:
   the restore is a new commit, marked `Hive-Restore: <sha>`, attributed to
   the user, and every editor connected to the project reloads the glyph
   through the same path as any external change. The restore is not part
   of the editor's undo stack; restoring the previous version undoes it.
+- **Snapshots.** "Snapshot…" names the current state of the branch
+  ("Proofs sent to client") and groups under that name every commit made
+  since the previous snapshot. The list then shows the changes since the
+  last snapshot, followed by one collapsible row per snapshot (how many
+  versions of the glyph it groups, how many changes in the project); a
+  snapshot row can be hovered, pinned and restored like a commit. Nothing
+  is rewritten or squashed: a snapshot is an empty commit (same tree as its
+  parent) whose message sums up the grouped commits — count, authors,
+  glyphs — with `Hive-Snapshot*` trailers, plus an annotated tag
+  `snapshot/<name>` on it. Clones, `git pull`, earlier `Hive-Restore`
+  references and per-commit authorship are unaffected, and the history of
+  every edit stays available. (Compacting old history into one commit per
+  snapshot, on a separate branch or by rewriting, is left for later.)
 
 To enable the panel (once per browser): open *Application settings →
 Plugins*, add the address `/hive/plugin`, then reload the editor. The panel
@@ -112,7 +133,18 @@ GET  /api/hive/projects/<name>/log?branch=main&glyph=A&limit=50
 GET  /api/hive/projects/<name>/glyph?glyph=A&ref=<sha|branch|tag>
 GET  /api/hive/projects/<name>/branches
 POST /api/hive/projects/<name>/restore?branch=main&glyph=A&ref=<sha|tag>
+GET  /api/hive/projects/<name>/snapshots?branch=main
+POST /api/hive/projects/<name>/snapshot?branch=main&name=Proofs%20sent
 ```
+
+`log` returns, for each commit, the snapshot it belongs to (`snapshot`: the
+name, or `null` for changes since the last snapshot) and the snapshots met
+while walking back (`snapshots`), so the panel groups without a second
+request. `snapshots` lists the branch's snapshots, newest first, with the
+number of commits a new snapshot would group (`pending`). `snapshot` answers
+409 when nothing changed since the last snapshot or the name is taken, 403
+on a read-only server; with the project open, pending edits are committed
+first.
 
 The panel polls `head` every 1.5 s (a few bytes) and reloads the list only
 when the branch moved. Per-glyph history is answered from the `Hive-Glyphs:`
@@ -136,9 +168,14 @@ The tests import a `.fontra` package into a bare repository, compare the git
 backend with Fontra's file-system backend, apply the same edits to both and
 check the exported files are identical byte for byte, then exercise scheduled
 commits, attribution, external changes, concurrent commits, read-only mode,
-the HTTP routes (history, glyph at a ref, restore, including restore into a
-project open in a running backend), and that the repository is readable by
-`git` itself.
+the HTTP routes (history, glyph at a ref, restore, snapshots, including
+restore and snapshot with the project open in a running backend), and that
+the repository is readable by `git` itself.
+
+`tests/test_plugin_js.py` runs the editor plug-in in a headless Chromium
+against a fake editor and a mocked server (hover, pin, restore, snapshot
+groups and form). It needs Playwright (`pip install playwright && playwright
+install chromium`) and is skipped otherwise.
 
 ## Design notes
 
