@@ -7,3 +7,6 @@ dist/
 .venv/
 venv/
 .DS_Store
+
+# local test projects created with `fontra-hive init repos/<name>.git ...`
+repos/
