@@ -186,6 +186,12 @@ const STYLES = `
   .commit .message {
     opacity: 0.65;
   }
+  /* The glyph's sources a version changed, after its message or title. */
+  .sources {
+    font-weight: normal;
+    font-style: normal;
+    font-size: 0.9em;
+  }
   .when, .count {
     flex: none;
     opacity: 0.65;
@@ -352,6 +358,20 @@ function el(tag, attrs = {}, children = []) {
     element.append(child);
   }
   return element;
+}
+
+// The names of the glyph's sources changed by some versions (the server
+// gives each version its "sources"), newest first, without repeats.
+export function changedSources(commits) {
+  return [...new Set(commits.flatMap((c) => c.sources || []))];
+}
+
+function sourcesSpan(sources) {
+  return sources.length ? el("span", { class: "sources" }, [` · ${sources.join(", ")}`]) : "";
+}
+
+function sourcesLine(sources) {
+  return sources.length ? `\nSources changed: ${sources.join(", ")}` : "";
 }
 
 // ---------------------------------------------------------------------------
@@ -796,7 +816,12 @@ class HiveHistoryPanel extends HTMLElement {
       items.map((item) =>
         item.commit
           ? this.commitRow(item.commit, glyphName, nested)
-          : this.landmarkRow(item.landmark, glyphName, nested)
+          : this.landmarkRow(
+              item.landmark,
+              glyphName,
+              nested,
+              changedSources(this.commits.filter((c) => c.snapshot === item.landmark.name))
+            )
       );
     if (groups.length && count(loose)) {
       this.listElement.append(
@@ -808,8 +833,9 @@ class HiveHistoryPanel extends HTMLElement {
     this.listElement.append(...rows(loose.items, false));
     for (const group of groups) {
       const key = `glyph:${group.snapshot.name}`;
+      const commits = group.items.filter((item) => item.commit).map((item) => item.commit);
       this.listElement.append(
-        this.snapshotRow(group.snapshot, new Array(count(group)), glyphName, key)
+        this.snapshotRow(group.snapshot, commits, glyphName, key, changedSources(commits))
       );
       if (this.expanded.has(key)) this.listElement.append(...rows(group.items, true));
     }
@@ -817,7 +843,7 @@ class HiveHistoryPanel extends HTMLElement {
 
   // One of the font's snapshots, in a glyph's history: a landmark (the glyph
   // as it was then can be previewed and restored like any version).
-  landmarkRow(snapshot, glyphName, nested) {
+  landmarkRow(snapshot, glyphName, nested, sources = []) {
     const isCurrent = snapshot.sha === this.head;
     const classes = ["snapshot", "landmark"];
     if (nested) classes.push("nested");
@@ -830,13 +856,14 @@ class HiveHistoryPanel extends HTMLElement {
         title:
           `Snapshot of the whole font “${snapshot.title}” (snapshot/${snapshot.name})\n` +
           `${snapshot.author} — ${formatFullDate(snapshot.time)}` +
+          sourcesLine(sources) +
           (isCurrent
             ? " (current)"
             : `\n\nHover to preview ${glyphName} at this snapshot, click to keep it`),
       },
       [
         el("span", { class: "mark" }, ["◆"]),
-        el("span", { class: "name" }, [snapshot.title]),
+        el("span", { class: "name" }, [snapshot.title, sourcesSpan(sources)]),
         ...(isCurrent ? [el("span", { class: "current-mark" }, ["current"])] : []),
         el("span", { class: "when" }, [formatDate(snapshot.time)]),
       ]
@@ -894,8 +921,11 @@ class HiveHistoryPanel extends HTMLElement {
     if (nested) classes.push("nested");
     if (isCurrent) classes.push("current");
     if (isPinned) classes.push("previewing");
+    const sources = commit.sources || [];
     const details =
-      `${commit.author || "?"} — ${formatFullDate(commit.time)}\n` +
+      `${commit.author || "?"} — ${formatFullDate(commit.time)}` +
+      sourcesLine(sources) +
+      "\n" +
       `${commit.sha.slice(0, 10)}${isCurrent ? " (current)" : ""}\n\n${commit.message || ""}`;
     const row = el(
       "div",
@@ -908,7 +938,7 @@ class HiveHistoryPanel extends HTMLElement {
       },
       [
         el("span", { class: "author" }, [commit.author || "?"]),
-        el("span", { class: "message" }, [title]),
+        el("span", { class: "message" }, [title, sourcesSpan(sources)]),
         ...(isCurrent ? [el("span", { class: "current-mark" }, ["current"])] : []),
         el("span", { class: "when" }, [formatDate(commit.time)]),
       ]
@@ -920,7 +950,7 @@ class HiveHistoryPanel extends HTMLElement {
   // One line: ▸ title … versions of the glyph · date.
   // ``key``: the group's key in this.expanded (a glyph snapshot's is
   // "glyph:<name>", a font snapshot's its name).
-  snapshotRow(snapshot, grouped, glyphName, key = snapshot.name) {
+  snapshotRow(snapshot, grouped, glyphName, key = snapshot.name, sources = []) {
     const isCurrent = snapshot.sha === this.head;
     const isPinned = this.pinned?.sha === snapshot.sha;
     const isOpen = this.expanded.has(key);
@@ -958,7 +988,8 @@ class HiveHistoryPanel extends HTMLElement {
           (ofGlyph
             ? `Snapshot of ${glyphName} “${snapshot.title}” (glyph-snapshot/${snapshot.name})\n` +
               `${snapshot.author} — ${formatFullDate(snapshot.time)}\n` +
-              `${count} version${count === 1 ? "" : "s"} of ${glyphName}`
+              `${count} version${count === 1 ? "" : "s"} of ${glyphName}` +
+              sourcesLine(sources)
             : `Snapshot “${snapshot.title}” (snapshot/${snapshot.name}), of the whole font\n` +
               `${snapshot.author} — ${formatFullDate(snapshot.time)}\n` +
               (glyphName ? `${count} version${count === 1 ? "" : "s"} of ${glyphName}, ` : "") +
@@ -971,7 +1002,7 @@ class HiveHistoryPanel extends HTMLElement {
       },
       [
         caret,
-        el("span", { class: "name" }, [snapshot.title]),
+        el("span", { class: "name" }, [snapshot.title, sourcesSpan(sources)]),
         ...(isCurrent ? [el("span", { class: "current-mark" }, ["current"])] : []),
         el("span", { class: "count" }, [`${count}`]),
         el("span", { class: "when" }, [formatDate(snapshot.time)]),

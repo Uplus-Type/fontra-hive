@@ -270,6 +270,15 @@ class GitRepoStore:
     def read_blob(self, blob_sha: str) -> bytes:
         return self.repo[_b(blob_sha)].data
 
+    def file_sha(self, commit_sha: str, path: str) -> str | None:
+        """The blob sha of ``path`` in a commit, or None when it is absent."""
+        tree = self.repo[self.repo[_b(commit_sha)].tree]
+        try:
+            _mode, sha = tree.lookup_path(self.repo.object_store.__getitem__, _b(path))
+        except KeyError:
+            return None
+        return _s(sha)
+
     def read_file(self, commit_sha: str, path: str) -> bytes:
         tree = self.repo[self.repo[_b(commit_sha)].tree]
         _mode, sha = tree.lookup_path(self.repo.object_store.__getitem__, _b(path))

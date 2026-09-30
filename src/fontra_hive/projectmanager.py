@@ -41,6 +41,7 @@ from fontra.core.protocols import ProjectManager
 from .access import ROLES, Access, DevDirectory, token_for, username_from_token
 from .backend_git import GitFontraBackend
 from .fonthandler import HiveFontHandler
+from .glyphdiff import changed_sources
 from .gitstore import (
     DEFAULT_BRANCH,
     SERVER_SIGNATURE,
@@ -750,6 +751,8 @@ class DevHiveProjectManager:
                     order=order,
                 )
             ]
+            if glyphName:
+                self._addChangedSources(store, commits, path)
         finally:
             store.close()
         return web.json_response(
@@ -765,6 +768,28 @@ class DevHiveProjectManager:
                 "order": [list(entry) for entry in order],
             }
         )
+
+    def _addChangedSources(self, store: GitRepoStore, commits: list[dict], path: str):
+        """Each version of a glyph gets ``sources``: the names of the glyph's
+        sources it changed (compared with the version before it). Cached by
+        pair of file versions: the list is reloaded at every change."""
+        cache = self.__dict__.setdefault("_changedSourcesCache", {})
+        if len(cache) > 20000:
+            cache.clear()
+        blobs = [store.file_sha(c["sha"], path) for c in commits]
+        if commits:
+            parents = commits[-1]["parents"]
+            blobs.append(store.file_sha(parents[0], path) if parents else None)
+        for i, commit in enumerate(commits):
+            new, old = blobs[i], blobs[i + 1]
+            if new is None or old is None or new == old:
+                commit["sources"] = []
+                continue
+            if (old, new) not in cache:
+                cache[(old, new)] = changed_sources(
+                    store.read_blob(old), store.read_blob(new)
+                )
+            commit["sources"] = cache[(old, new)]
 
     async def snapshotsHandler(self, request: web.Request) -> web.Response:
         """The snapshots of a branch, newest first, and how many commits were

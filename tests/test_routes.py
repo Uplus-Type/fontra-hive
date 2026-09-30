@@ -374,3 +374,29 @@ def test_glyph_snapshot_route_names_one_glyph(manager):
         assert font["glyphSnapshots"] == []
 
     run(go())
+
+
+def test_glyph_log_says_which_sources_changed(manager):
+    async def go():
+        store = GitRepoStore.open(manager.rootPath / "Mutator.git")
+        imported = store.log(path=glyphPath("A"))[-1].sha
+        data = json.loads(store.read_file(imported, glyphPath("A")))
+        source = data["sources"][0]
+        changed = json.loads(json.dumps(data))
+        changed["layers"][source["layerName"]] = {"glyph": {"xAdvance": 1234}}
+        for message, glyph in [("Back", data), ("Tweak", changed)]:
+            store.commit(
+                {glyphPath("A"): json.dumps(glyph).encode()}, message=message, author=ME
+            )
+        store.close()
+        log = json.loads(
+            (await manager.logHandler(fake_request("Mutator", glyph="A"))).body
+        )
+        assert [(c["message"], c["sources"]) for c in log["commits"]] == [
+            ("Tweak", [source["name"]]),
+            ("Back", []),  # "Edit A" wrote "{}": not a glyph, like a new one
+            ("Edit A", []),
+            ("Import", []),  # a new glyph
+        ]
+
+    run(go())

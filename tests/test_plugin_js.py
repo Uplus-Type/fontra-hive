@@ -89,8 +89,10 @@ async () => {
     if (route === "head") return json({ head: sha("3") });
     if (route === "log") return json(q.glyph ? {
       head: sha("3"),
-      commits: [commit("3", "Edit A", null), commit("2", "Edit A", null),
-                { ...commit("1", "Import", "f1"), glyph_snapshot: "v1" }],
+      commits: [{ ...commit("3", "Edit A", null), sources: ["Bold"] },
+                { ...commit("2", "Edit A", null), sources: ["Light", "Bold"] },
+                { ...commit("1", "Import", "f1"), glyph_snapshot: "v1",
+                  sources: ["Wide"] }],
       snapshots: [{ ...snapshot, name: "f1", title: "F1", sha: sha("4") }],
       glyphSnapshots: [{ name: "v1", title: "V1", sha: sha("5"), author: "J",
                          time: 1790000000, glyphs: ["A"] }],
@@ -206,6 +208,20 @@ def test_rows_are_grouped_under_snapshots(page):
     assert page.evaluate("rowFor('5').querySelector('.count').textContent") == "1"
     assert page.evaluate("rowFor('5').title").startswith("Snapshot of A “V1”")
     assert "Snapshot of the whole font “F1”" in page.evaluate("rowFor('4').title")
+    # Which of the glyph's sources each version, snapshot and landmark changed.
+    assert page.evaluate("rowFor('3').querySelector('.message').textContent") == (
+        "Edit A · Bold"
+    )
+    assert "Sources changed: Light, Bold" in page.evaluate("rowFor('2').title")
+    assert (
+        page.evaluate("rowFor('5').querySelector('.name').textContent") == "V1 · Wide"
+    )
+    assert (
+        page.evaluate("rowFor('4').querySelector('.name').textContent") == "F1 · Wide"
+    )
+    assert page.evaluate("panel.shadowRoot.querySelector('.sources').textContent") == (
+        " · Bold"
+    )
     assert page.evaluate(
         "panel.shadowRoot.querySelector('.group-label').textContent"
     ) == ("Since the last snapshot of A · 2")

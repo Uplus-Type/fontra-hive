@@ -230,6 +230,10 @@ and is served by the Fontra server itself under `/hive/plugin/`.
   the user, and every editor connected to the project reloads the glyph
   through the same path as any external change. The restore is not part
   of the editor's undo stack; restoring the previous version undoes it.
+- **Which sources changed.** In a glyph's history, each version, snapshot
+  and landmark says which of the glyph's sources it changed ("Edit H ·
+  LightWide"), found by comparing the glyph file with its previous version
+  (cached per pair of versions).
 - **Glyph snapshots.** In a glyph's history, "Snapshot…" names the current
   version of that glyph only ("Approved by the art director"): its versions
   made since its previous glyph snapshot are grouped under that name, and
