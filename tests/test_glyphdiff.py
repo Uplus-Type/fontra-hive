@@ -1,6 +1,6 @@
 import json
 
-from fontra_hive.glyphdiff import changed_sources
+from fontra_hive.glyphdiff import changed_sources, font_source_names
 
 
 def glyph(**layers):
@@ -33,3 +33,24 @@ def test_changed_sources():
     assert changed_sources(None, dump(old)) == []
     assert changed_sources(b"not json", dump(old)) == []
     assert changed_sources(b"{}", dump(old)) == []
+
+
+def test_sources_based_on_font_sources_take_their_names():
+    # As Fontra writes them: no name, the font source's id as base and layer.
+    fontData = dump(
+        {"sources": {"5bea": {"name": "LightCondensed"}, "f22d": {"name": "Bold"}}}
+    )
+    names = font_source_names(fontData)
+    assert names == {"5bea": "LightCondensed", "f22d": "Bold"}
+    sources = [
+        {"name": "", "layerName": "5bea", "locationBase": "5bea"},
+        {"name": "", "layerName": "f22d", "locationBase": "f22d"},
+    ]
+    old = {"sources": sources, "layers": {"5bea": {"glyph": {}}, "f22d": {"glyph": {}}}}
+    new = {
+        "sources": sources,
+        "layers": {"5bea": {"glyph": {"xAdvance": 1}}, "f22d": {"glyph": {}}},
+    }
+    assert changed_sources(dump(old), dump(new), names) == ["LightCondensed"]
+    assert changed_sources(dump(old), dump(new)) == ["5bea"]  # no font data: the layer
+    assert font_source_names(b"nonsense") == {}

@@ -41,7 +41,7 @@ from fontra.core.protocols import ProjectManager
 from .access import ROLES, Access, DevDirectory, token_for, username_from_token
 from .backend_git import GitFontraBackend
 from .fonthandler import HiveFontHandler
-from .glyphdiff import changed_sources
+from .glyphdiff import changed_sources, font_source_names
 from .gitstore import (
     DEFAULT_BRANCH,
     SERVER_SIGNATURE,
@@ -777,6 +777,15 @@ class DevHiveProjectManager:
         if len(cache) > 20000:
             cache.clear()
         blobs = [store.file_sha(c["sha"], path) for c in commits]
+        # The font's source names, as of the newest version listed.
+        fontData = (
+            store.file_sha(commits[0]["sha"], "font-data.json") if commits else None
+        )
+        if ("font", fontData) not in cache:
+            cache[("font", fontData)] = font_source_names(
+                store.read_blob(fontData) if fontData else None
+            )
+        fontSources = cache[("font", fontData)]
         if commits:
             parents = commits[-1]["parents"]
             blobs.append(store.file_sha(parents[0], path) if parents else None)
@@ -785,11 +794,12 @@ class DevHiveProjectManager:
             if new is None or old is None or new == old:
                 commit["sources"] = []
                 continue
-            if (old, new) not in cache:
-                cache[(old, new)] = changed_sources(
-                    store.read_blob(old), store.read_blob(new)
+            key = (old, new, fontData)
+            if key not in cache:
+                cache[key] = changed_sources(
+                    store.read_blob(old), store.read_blob(new), fontSources
                 )
-            commit["sources"] = cache[(old, new)]
+            commit["sources"] = cache[key]
 
     async def snapshotsHandler(self, request: web.Request) -> web.Response:
         """The snapshots of a branch, newest first, and how many commits were

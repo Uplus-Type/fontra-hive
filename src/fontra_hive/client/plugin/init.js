@@ -363,14 +363,16 @@ function el(tag, attrs = {}, children = []) {
 // The names of the glyph's sources changed by some versions (the server
 // gives each version its "sources"), newest first, without repeats.
 export function changedSources(commits) {
-  return [...new Set(commits.flatMap((c) => c.sources || []))];
+  return [...new Set(commits.flatMap((c) => c.sources || []))].filter(Boolean);
 }
 
 function sourcesSpan(sources) {
+  sources = sources.filter(Boolean);
   return sources.length ? el("span", { class: "sources" }, [` · ${sources.join(", ")}`]) : "";
 }
 
 function sourcesLine(sources) {
+  sources = sources.filter(Boolean);
   return sources.length ? `\nSources changed: ${sources.join(", ")}` : "";
 }
 

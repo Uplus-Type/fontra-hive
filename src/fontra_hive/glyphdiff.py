@@ -35,12 +35,41 @@ def _layers(glyph: dict[str, Any]) -> dict[str, Any]:
     return layers if isinstance(layers, dict) else {}
 
 
-def changed_sources(old: bytes | None, new: bytes | None) -> list[str]:
+def font_source_names(fontData: bytes | None) -> dict[str, str]:
+    """The font's sources, ``{id: name}``, from ``font-data.json``: a glyph
+    source based on a font source (``locationBase``) usually has no name of
+    its own and shows the font source's (as Fontra does)."""
+    try:
+        sources = json.loads(fontData or b"{}").get("sources")
+    except (ValueError, AttributeError):
+        return {}
+    if not isinstance(sources, dict):
+        return {}
+    return {
+        str(key): str(value.get("name"))
+        for key, value in sources.items()
+        if isinstance(value, dict) and value.get("name")
+    }
+
+
+def _sourceName(source: dict[str, Any], fontSources: dict[str, str]) -> str:
+    return str(
+        source.get("name")
+        or fontSources.get(str(source.get("locationBase")))
+        or source.get("layerName")
+        or "?"
+    )
+
+
+def changed_sources(
+    old: bytes | None, new: bytes | None, fontSources: dict[str, str] | None = None
+) -> list[str]:
     """The names of the sources whose outline, metrics or definition differ
     between two versions of a glyph file, in the order of the new version
     (removed ones last); a changed layer that no source uses (a background
     layer, say) is named by its layer name. Empty for a new or deleted glyph,
-    or unreadable files."""
+    or unreadable files. ``fontSources``: from :func:`font_source_names`."""
+    fontSources = fontSources or {}
     before, after = _load(old), _load(new)
     if before is None or after is None:
         return []
@@ -50,18 +79,22 @@ def changed_sources(old: bytes | None, new: bytes | None) -> list[str]:
         for name in set(oldLayers) | set(newLayers)
         if oldLayers.get(name) != newLayers.get(name)
     }
-    oldSources = {s.get("name"): s for s in _sources(before)}
+    oldSources = {_sourceName(s, fontSources): s for s in _sources(before)}
     result: list[str] = []
     used: set[str] = set()
     for source in _sources(after):
-        name, layer = source.get("name"), source.get("layerName")
+        name, layer = _sourceName(source, fontSources), source.get("layerName")
         used.add(layer)
         if layer in changedLayers or oldSources.get(name) != source:
-            result.append(str(name))
-    newNames = {s.get("name") for s in _sources(after)}
+            result.append(name)
+    newNames = {_sourceName(s, fontSources) for s in _sources(after)}
     for name, source in oldSources.items():
         used.add(source.get("layerName"))
         if name not in newNames:
-            result.append(str(name))
-    result += sorted(str(layer) for layer in changedLayers - used)
+            result.append(name)
+    # A layer no source uses (a background layer): its name, or the name of
+    # the font source it is named after.
+    result += sorted(
+        fontSources.get(str(layer), str(layer)) for layer in changedLayers - used
+    )
     return list(dict.fromkeys(result))
