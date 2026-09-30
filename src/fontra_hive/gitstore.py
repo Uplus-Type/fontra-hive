@@ -825,6 +825,12 @@ def _hive_glyphs_trailer(message: bytes) -> set[str] | None:
     return None
 
 
+def hive_glyphs(message: str) -> set[str] | None:
+    """The glyphs a commit message lists in its ``Hive-Glyphs:`` trailer, or
+    None when it has none."""
+    return _hive_glyphs_trailer(_b(message))
+
+
 def _normalize_path(path: str) -> str:
     path = path.replace(os.sep, "/").lstrip("/")
     if not path or ".." in path.split("/"):

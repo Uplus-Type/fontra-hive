@@ -398,5 +398,18 @@ def test_glyph_log_says_which_sources_changed(manager):
             ("Edit A", []),
             ("Import", []),  # a new glyph
         ]
+        # The font's history too, from the glyphs a commit lists.
+        store = GitRepoStore.open(manager.rootPath / "Mutator.git")
+        again = json.loads(json.dumps(data))
+        again["layers"][source["layerName"]] = {"glyph": {"xAdvance": 99}}
+        store.commit(
+            {glyphPath("A"): json.dumps(again).encode()},
+            message="Edit A\n\nHive-Glyphs: A\n",
+            author=ME,
+        )
+        store.close()
+        font = json.loads((await manager.logHandler(fake_request("Mutator"))).body)
+        assert font["commits"][0]["sources"] == [source["name"]]
+        assert font["commits"][1]["sources"] == []  # "Tweak": no glyph list
 
     run(go())

@@ -778,7 +778,9 @@ class HiveHistoryPanel extends HTMLElement {
       }
       for (const snapshot of snapshots) {
         const grouped = bySnapshot.get(snapshot.name) || [];
-        this.listElement.append(this.snapshotRow(snapshot, grouped, glyphName));
+        this.listElement.append(
+          this.snapshotRow(snapshot, grouped, glyphName, snapshot.name, changedSources(grouped))
+        );
         if (this.expanded.has(snapshot.name)) {
           for (const commit of grouped) {
             this.listElement.append(this.commitRow(commit, glyphName, true));

@@ -100,7 +100,8 @@ async () => {
               ["snapshot", "f1"], ["commit", sha("1")]],
     } : {
       head: sha("3"),
-      commits: [commit("3", "Edit A", null), commit("4", "Edit B", null),
+      commits: [{ ...commit("3", "Edit A", null), sources: ["Bold"] },
+                commit("4", "Edit B", null),
                 commit("2", "Edit A", null), commit("5", "Snapshot V1", "v1"),
                 commit("1", "Import", "v1")],
       snapshots: [snapshot],
@@ -370,6 +371,9 @@ def test_font_history_when_no_glyph_is_selected(page):
     assert page.evaluate(
         "panel.shadowRoot.querySelector('.summary-line').textContent"
     ) == ("The whole font — 4 changes")
+    assert page.evaluate("rowFor('3').querySelector('.message').textContent") == (
+        "Edit A · Bold"
+    )
     page.evaluate(
         "rowFor('4').dispatchEvent(new MouseEvent('mouseenter')); rowFor('4').click()"
     )

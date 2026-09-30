@@ -48,11 +48,16 @@ from .gitstore import (
     GitRepoStore,
     GlyphSnapshotInfo,
     RefMovedError,
+    hive_glyphs,
     Signature,
     SnapshotInfo,
 )
 
 logger = logging.getLogger(__name__)
+
+# The font's history names the sources changed in commits touching at most
+# this many glyphs (a larger change is read as "many").
+MAX_GLYPHS_FOR_SOURCES = 20
 
 
 class DevHiveProjectManagerFactory:
@@ -753,6 +758,8 @@ class DevHiveProjectManager:
             ]
             if glyphName:
                 self._addChangedSources(store, commits, path)
+            else:
+                self._addChangedSourcesOfFont(store, commits)
         finally:
             store.close()
         return web.json_response(
@@ -769,15 +776,16 @@ class DevHiveProjectManager:
             }
         )
 
-    def _addChangedSources(self, store: GitRepoStore, commits: list[dict], path: str):
-        """Each version of a glyph gets ``sources``: the names of the glyph's
-        sources it changed (compared with the version before it). Cached by
-        pair of file versions: the list is reloaded at every change."""
+    def _sourcesCache(self) -> dict:
         cache = self.__dict__.setdefault("_changedSourcesCache", {})
         if len(cache) > 20000:
             cache.clear()
-        blobs = [store.file_sha(c["sha"], path) for c in commits]
-        # The font's source names, as of the newest version listed.
+        return cache
+
+    def _fontSources(self, store: GitRepoStore, commits: list[dict]):
+        """The font's source names, as of the newest commit listed, and the
+        blob they come from (part of the cache keys)."""
+        cache = self._sourcesCache()
         fontData = (
             store.file_sha(commits[0]["sha"], "font-data.json") if commits else None
         )
@@ -785,21 +793,52 @@ class DevHiveProjectManager:
             cache[("font", fontData)] = font_source_names(
                 store.read_blob(fontData) if fontData else None
             )
-        fontSources = cache[("font", fontData)]
+        return fontData, cache[("font", fontData)]
+
+    def _sourcesBetween(self, store, old, new, fontData, fontSources) -> list[str]:
+        if new is None or old is None or new == old:
+            return []
+        cache = self._sourcesCache()
+        key = (old, new, fontData)
+        if key not in cache:
+            cache[key] = changed_sources(
+                store.read_blob(old), store.read_blob(new), fontSources
+            )
+        return cache[key]
+
+    def _addChangedSources(self, store: GitRepoStore, commits: list[dict], path: str):
+        """Each version of a glyph gets ``sources``: the names of the glyph's
+        sources it changed (compared with the version before it). Cached by
+        pair of file versions: the list is reloaded at every change."""
+        fontData, fontSources = self._fontSources(store, commits)
+        blobs = [store.file_sha(c["sha"], path) for c in commits]
         if commits:
             parents = commits[-1]["parents"]
             blobs.append(store.file_sha(parents[0], path) if parents else None)
         for i, commit in enumerate(commits):
-            new, old = blobs[i], blobs[i + 1]
-            if new is None or old is None or new == old:
-                commit["sources"] = []
-                continue
-            key = (old, new, fontData)
-            if key not in cache:
-                cache[key] = changed_sources(
-                    store.read_blob(old), store.read_blob(new), fontSources
-                )
-            commit["sources"] = cache[key]
+            commit["sources"] = self._sourcesBetween(
+                store, blobs[i + 1], blobs[i], fontData, fontSources
+            )
+
+    def _addChangedSourcesOfFont(self, store: GitRepoStore, commits: list[dict]):
+        """The same for the font's history: the sources changed in the glyphs a
+        commit lists (``Hive-Glyphs:``; not for imports or large changes)."""
+        fontData, fontSources = self._fontSources(store, commits)
+        for commit in commits:
+            glyphs = hive_glyphs(commit["message"]) or ()
+            parents = commit["parents"]
+            sources: list[str] = []
+            if parents and len(glyphs) <= MAX_GLYPHS_FOR_SOURCES:
+                for glyphName in sorted(glyphs):
+                    path = glyphPath(glyphName)
+                    sources += self._sourcesBetween(
+                        store,
+                        store.file_sha(parents[0], path),
+                        store.file_sha(commit["sha"], path),
+                        fontData,
+                        fontSources,
+                    )
+            commit["sources"] = list(dict.fromkeys(sources))
 
     async def snapshotsHandler(self, request: web.Request) -> web.Response:
         """The snapshots of a branch, newest first, and how many commits were
