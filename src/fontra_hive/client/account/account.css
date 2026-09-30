@@ -220,3 +220,86 @@ body:not([data-page="home"]) .legal h1 { font-size: 2rem; margin: 0 0 0.2em; }
 .site-footer { font-size: 0.85em; opacity: 0.65; margin: 0 0 2em; text-align: center; }
 .site-footer a { color: inherit; }
 body[data-page="home"] .site-footer { margin: 0 auto 2em; }
+
+/* Site header and footer of the public pages: the landing (sign-in page)
+   and U+ TYPE's pages served by the deployment (/pricing, /charter, /legal,
+   /terms). The markup is written into each page by
+   hive-api/deploy/site-chrome.py; the home page keeps its own bar. */
+.site-header, .site-foot {
+  --honey: #e9b02a;
+  --line: #ffffff17;
+  align-self: stretch;
+  box-sizing: border-box;
+  margin-left: -1.25em;
+  margin-right: -1.25em;
+}
+.site-header {
+  position: sticky; top: 0; z-index: 20;
+  margin-top: -1.25em;
+  display: flex; align-items: center; gap: 1rem 2rem;
+  padding: 0.75rem clamp(1rem, 4vw, 2.5rem);
+  background: #222222e6;
+  -webkit-backdrop-filter: saturate(1.4) blur(12px);
+  backdrop-filter: saturate(1.4) blur(12px);
+  border-bottom: 1px solid var(--line);
+}
+.site-header a, .site-foot a { color: inherit; text-decoration: none; }
+.brand { display: inline-flex; align-items: center; gap: 0.55rem; font-size: 1.1rem; white-space: nowrap; }
+.brand img { width: 30px; height: 30px; }
+.site-nav { display: flex; gap: 1.6rem; font-size: 0.95rem; }
+.site-nav a { opacity: 0.78; white-space: nowrap; padding: 0.3rem 0; border-bottom: 2px solid transparent; }
+.site-nav a[aria-current="page"] { opacity: 1; border-bottom-color: var(--honey); }
+.site-header .site-nav a:hover, .site-foot nav a:hover, .site-foot p a:hover { opacity: 1; color: var(--honey); }
+.site-actions { margin-left: auto; display: flex; align-items: center; gap: 1.2rem; font-size: 0.95rem; }
+.site-actions .signin { opacity: 0.85; white-space: nowrap; }
+.site-actions .signin:hover { color: var(--honey); opacity: 1; }
+.site-actions .cta {
+  background: var(--honey); color: #04232d; border-radius: 2rem;
+  padding: 0.45rem 1.05rem; white-space: nowrap;
+}
+.site-header .site-actions .cta:hover { color: #04232d; filter: brightness(1.1); }
+@media (max-width: 860px) {
+  .site-header { flex-wrap: wrap; padding-bottom: 0; }
+  .site-nav {
+    order: 3; width: 100%; overflow-x: auto; scrollbar-width: none;
+    gap: 1.3rem; padding-bottom: 0.35rem;
+  }
+  .site-nav::-webkit-scrollbar { display: none; }
+}
+@media (max-width: 440px) {
+  .site-actions .signin { display: none; }
+  .brand span { font-size: 1rem; }
+}
+
+.site-foot {
+  margin-top: auto; margin-bottom: -1.25em;
+  padding: 3.5rem clamp(1rem, 4vw, 2.5rem) 2rem;
+  background: #1b1b1b; border-top: 1px solid var(--line);
+  line-height: 1.5;
+}
+.foot-grid {
+  max-width: 64rem; margin: 0 auto;
+  display: grid; grid-template-columns: 1.5fr repeat(3, minmax(0, 1fr)); gap: 2rem 2.5rem;
+}
+.foot-brand p { opacity: 0.7; margin: 0.8rem 0 0; max-width: 22rem; font-size: 0.92rem; }
+.foot-brand p a { text-decoration: underline; }
+.foot-title {
+  color: var(--honey); text-transform: uppercase; letter-spacing: 0.12em;
+  font-size: 0.72rem; margin: 0.35rem 0 0.9rem;
+}
+.site-foot nav a { display: block; opacity: 0.75; margin: 0 0 0.55rem; font-size: 0.92rem; }
+.foot-base {
+  max-width: 64rem; margin: 2.8rem auto 0; padding-top: 1.2rem; border-top: 1px solid var(--line);
+  display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.5rem 2rem;
+  font-size: 0.82rem; opacity: 0.6;
+}
+@media (max-width: 760px) {
+  .foot-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .foot-brand { grid-column: 1 / -1; }
+}
+@media (max-width: 420px) {
+  .foot-grid { grid-template-columns: minmax(0, 1fr); }
+}
+/* With the header, the legal pages start closer to the top. */
+body[data-page="legal"] .lang { margin-top: 2rem; }
+html:has(.site-header) { scroll-padding-top: 5.5rem; }

@@ -23,6 +23,21 @@
 <script type="module" src="/hive/account/account.js"></script>
 </head>
 <body data-page="login">
+  <!-- site-header -->
+  <header class="site-header">
+    <a class="brand" href="/"><img src="/hive/icons/hive-icon.svg" alt="" width="30" height="30"><span>Fontra Hive</span></a>
+    <nav class="site-nav" aria-label="Site">
+      <a href="/#features">Features</a>
+      <a href="/pricing">Pricing</a>
+      <a href="/charter">Your fonts stay yours</a>
+      <a href="/try">Try Fontra</a>
+    </nav>
+    <div class="site-actions">
+      <a class="signin" href="#login">Sign in</a>
+      <a class="cta" href="/#request">Join the waiting list</a>
+    </div>
+  </header>
+  <!-- /site-header -->
   <img class="logo" src="/hive/icons/hive-icon.svg" alt="">
   <h1>Fontra Hive <span class="beta">Beta</span></h1>
   <p class="tagline">Fontra for Teams</p>
@@ -174,12 +189,44 @@
 
     <div class="foundation">
       <div><svg class="i"><use href="#i-git"/></svg><strong>Stored as git</strong><span>Every project is a complete .fontra package in its own git repository. The whole history, nothing locked in.</span></div>
-      <div><svg class="i"><use href="#i-europe"/></svg><strong>Hosted in Europe</strong><span>Servers in Paris, a backup every night in another region.</span></div>
+      <div><svg class="i"><use href="#i-europe"/></svg><strong>Hosted in Europe</strong><span>Servers in Paris, an encrypted backup every night in another EU country. <a href="/charter#en">Your fonts stay yours</a>.</span></div>
       <div><svg class="i"><use href="#i-hexagon"/></svg><strong>Built on Fontra</strong><span>The open-source, browser-based font editor, used as it is released.</span></div>
       <div><svg class="i"><use href="#i-open"/></svg><strong>Open plug-in</strong><span>The Fontra Hive plug-in is open source (GPLv3), <a href="https://github.com/Uplus-Type/fontra-hive">on GitHub</a>.</span></div>
     </div>
 
     <p class="coming"><strong>More features to come.</strong> This is the first beta: what you see here is only the start, and Hive grows with the teams who use it. Tell us what yours needs when you <a href="#request">join the waiting list</a>.</p>
   </section>
-  <footer class="site-footer">© U+ TYPE · <a href="/pricing">Pricing</a> · <a href="/legal">Mentions légales · Legal notice</a> · <a href="/terms">Conditions générales · Terms</a> · <a href="/legal#fr-donnees">Données personnelles · Privacy</a></footer>
+  <!-- site-footer -->
+  <footer class="site-foot">
+    <div class="foot-grid">
+      <div class="foot-brand">
+        <a class="brand" href="/"><img src="/hive/icons/hive-icon.svg" alt="" width="30" height="30"><span>Fontra Hive</span></a>
+        <p>Fontra for Teams. The open-source Fontra editor, hosted for type teams, with history, branches and roles.</p>
+        <p>A service by U+ TYPE, France. <a href="mailto:info@uplustype.com">info@uplustype.com</a></p>
+      </div>
+      <nav aria-label="Product">
+        <p class="foot-title">Product</p>
+        <a href="/#features">Features</a>
+        <a href="/pricing">Pricing</a>
+        <a href="/try">Try Fontra in your browser</a>
+        <a href="/#request">Join the waiting list</a>
+        <a href="/">Sign in</a>
+      </nav>
+      <nav aria-label="Your fonts and data">
+        <p class="foot-title">Your fonts</p>
+        <a href="/charter">Charte de confidentialité · Font charter</a>
+        <a href="/legal#fr-donnees">Données personnelles · Privacy</a>
+        <a href="/terms">Conditions générales · Terms</a>
+        <a href="/legal">Mentions légales · Legal notice</a>
+      </nav>
+      <nav aria-label="Open source">
+        <p class="foot-title">Open source</p>
+        <a href="https://fontra.xyz">Fontra</a>
+        <a href="https://github.com/Uplus-Type/fontra-hive">Fontra Hive plug-in on GitHub</a>
+        <a href="https://github.com/fontra/fontra">Fontra on GitHub</a>
+      </nav>
+    </div>
+    <p class="foot-base"><span>© 2026 U+ TYPE</span><span>Hosted in Paris · encrypted backups in the EU · no trackers, no ads</span></p>
+  </footer>
+  <!-- /site-footer -->
 </body></html>
