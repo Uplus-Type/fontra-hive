@@ -275,5 +275,9 @@ def test_fontc_is_served_here(manager, tmp_path, monkeypatch):  # noqa: F811
         assert page.index('name="hive-fontc" content="/hive/try/fontc.wasm"') < page.index(
             "try-engine.js"
         )
+        # The version of Try's code names the shared worker (a new one after an update).
+        from fontra_hive.projectmanager import tryVersion
+
+        assert f'name="hive-try-version" content="{tryVersion()}"' in page
 
     asyncio.run(go())

@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import dataclasses
+import functools
 import hashlib
 import json
 import logging
@@ -250,7 +251,9 @@ class DevHiveProjectManager(CommentRoutesMixin):
             text = self.fontraClientFile(f"{view}.html").read_text(encoding="utf-8")
         except FileNotFoundError:
             raise web.HTTPNotFound()
-        return _htmlResponse(injectTryScripts(text, pyodideURL(), fontcURL()))
+        return _htmlResponse(
+            injectTryScripts(text, pyodideURL(), fontcURL(), tryVersion())
+        )
 
     async def pythonBundleHandler(self, request: web.Request) -> web.Response:
         """/hive/try/python.zip: the Python "Try Fontra" runs in the browser
@@ -1734,6 +1737,20 @@ PYODIDE_CONTENT_TYPES = {
 }
 
 
+@functools.lru_cache(maxsize=1)
+def tryVersion() -> str:
+    """A digest of Try Fontra's code (client/try): the page names its shared
+    Python worker after it, so that tabs opened after an update do not talk
+    to a worker still running the old code in a tab left open."""
+    digest = hashlib.sha256()
+    root = pathlib.Path(__file__).parent / "client" / "try"
+    for path in sorted(root.rglob("*")):
+        if path.is_file() and path.suffix in (".js", ".py") and "__pycache__" not in path.parts:
+            digest.update(path.relative_to(root).as_posix().encode())
+            digest.update(path.read_bytes())
+    return digest.hexdigest()[:12]
+
+
 def fontcURL() -> str | None:
     """Where the page finds fontc for the browser: here ($HIVE_FONTC_WASM),
     elsewhere ($HIVE_FONTC_URL), or nowhere (no compiled exports)."""
@@ -1759,20 +1776,27 @@ def _isTryRequest(request, view: str) -> bool:
 
 
 def injectTryScripts(
-    html: str, pyodide: str | None = None, fontc: str | None = None
+    html: str,
+    pyodide: str | None = None,
+    fontc: str | None = None,
+    version: str | None = None,
 ) -> str:
     """Fontra's page for "Try Fontra": the demo engine first in <head> (it
     must replace the WebSocket before Fontra's modules run), Hive's icons,
     and the notice at the end of <body>. None of Hive's own scripts.
     ``pyodide``: where the page loads Pyodide from, if not its default;
     ``fontc``: fontc for the browser, if this server has it (compiled
-    exports)."""
+    exports); ``version``: of Try Fontra's code (tryVersion)."""
     lower = html.lower()
     head = lower.find("<head>")
     cut = head + len("<head>") if head != -1 else 0
     meta = "".join(
         f'<meta name="{name}" content="{html_escape(value, quote=True)}">'
-        for name, value in (("hive-pyodide", pyodide), ("hive-fontc", fontc))
+        for name, value in (
+            ("hive-pyodide", pyodide),
+            ("hive-fontc", fontc),
+            ("hive-try-version", version),
+        )
         if value
     )
     html = html[:cut] + meta + TRY_HEAD_SCRIPT + HIVE_ICON_LINKS + html[cut:]

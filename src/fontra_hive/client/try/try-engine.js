@@ -110,7 +110,14 @@
   // SharedWorker: two windows on the same font are then served by the same
   // server, and see each other's edits as they happen (as online). Else a
   // worker for this page alone.
-  var WORKER_URL = "/hive/try/try-python-worker.js";
+  // Named after the version of Try Fontra's code (<meta name="hive-try-version">):
+  // after an update, new tabs start a new worker instead of joining one
+  // still running the old code in a tab left open.
+  var TRY_VERSION = (function () {
+    var meta = document.querySelector('meta[name="hive-try-version"]');
+    return (meta && meta.content) || "dev";
+  })();
+  var WORKER_URL = "/hive/try/try-python-worker.js?v=" + encodeURIComponent(TRY_VERSION);
   var tabId = Array.from(crypto.getRandomValues(new Uint8Array(8)), function (b) {
     return b.toString(16).padStart(2, "0");
   }).join("");
@@ -118,7 +125,7 @@
   function startWorker() {
     if (typeof SharedWorker === "function") {
       try {
-        var shared = new SharedWorker(WORKER_URL, { type: "module", name: "fontra-hive-try" });
+        var shared = new SharedWorker(WORKER_URL, { type: "module", name: "fontra-hive-try-" + TRY_VERSION });
         shared.port.start();
         // While this page lives it holds a lock; the worker waits for it to
         // know when the page is gone.
@@ -310,7 +317,9 @@
   // compiles may use them.
   function fontc(stem, main, entries, onProgress) {
     if (!fontcWorker) {
-      fontcWorker = new Worker("/hive/try/try-fontc-worker.js", { type: "module" });
+      fontcWorker = new Worker("/hive/try/try-fontc-worker.js?v=" + encodeURIComponent(TRY_VERSION), {
+        type: "module",
+      });
       fontcWorker.onmessage = function (event) {
         var reply = event.data;
         var call = fontcCalls[reply.id];
