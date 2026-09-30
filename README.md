@@ -230,8 +230,14 @@ and is served by the Fontra server itself under `/hive/plugin/`.
   the user, and every editor connected to the project reloads the glyph
   through the same path as any external change. The restore is not part
   of the editor's undo stack; restoring the previous version undoes it.
-- **Snapshots.** "Snapshot…", in the font history (a snapshot concerns the
-  whole font, not one glyph), names the current state of the branch
+- **Glyph snapshots.** In a glyph's history, "Snapshot…" names the current
+  version of that glyph only ("Approved by the art director"): its versions
+  made since its previous glyph snapshot are grouped under that name, and
+  the font's snapshots show as landmarks (◆) between them. It is an
+  annotated tag `glyph-snapshot/<name>` on the branch head, whose message
+  lists the glyph: no commit is added, the font's history is untouched.
+- **Snapshots.** "Snapshot…", in the font history (with no glyph selected),
+  names the current state of the whole font
   ("Proofs sent to client") and groups under that name every commit made
   since the previous snapshot. The list then shows the changes since the
   last snapshot, followed by one collapsible row per snapshot (how many

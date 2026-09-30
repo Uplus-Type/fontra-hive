@@ -17,8 +17,10 @@
 //   - "Restore" (in the preview bar under the list) asks the server to commit that glyph file again
 //     on top of the branch: history is never rewritten, and the editor picks
 //     the change up like any external change;
-//   - "Snapshot…" (in the font history only, as it concerns the whole font)
-//     names the current state of the branch: the commits made
+//   - "Snapshot…" names a version of the selected glyph (a glyph snapshot: a
+//     tag, grouping that glyph's versions since its previous one; the font's
+//     snapshots then show as landmarks between them), or, in the font
+//     history, the current state of the whole font: the commits made
 //     since the previous snapshot are grouped under it in the list (an empty
 //     commit plus a snapshot/<name> tag on the server; nothing is rewritten).
 //
@@ -92,9 +94,6 @@ const STYLES = `
     display: flex;
     gap: 0.3em;
     margin-left: auto;
-  }
-  .snapshot-button[hidden] {
-    display: none;
   }
   .snapshot-button.active {
     background: rgba(128, 128, 128, 0.25);
@@ -212,6 +211,21 @@ const STYLES = `
   }
   .snapshot .name {
     font-weight: bold;
+  }
+  /* In a glyph's history, the font's snapshots are landmarks, not groups. */
+  .snapshot.landmark {
+    background: none;
+    border-left-style: dotted;
+  }
+  .snapshot.landmark .name {
+    font-weight: normal;
+    font-style: italic;
+  }
+  .landmark .mark {
+    flex: none;
+    width: 1.3em;
+    text-align: center;
+    opacity: 0.6;
   }
   button.caret {
     flex: none;
@@ -504,7 +518,9 @@ class HiveHistoryPanel extends HTMLElement {
     this.loading = false;
     this.timer = null;
     this.commits = [];
-    this.snapshots = []; // snapshots met in the glyph's history, newest first
+    this.snapshots = []; // the font's snapshots met in the list, newest first
+    this.glyphSnapshots = []; // the glyph's own snapshots met, newest first
+    this.order = null; // the walk, newest first: [kind, sha or name] (glyph history)
     this.expanded = new Set(); // names of the snapshot groups shown open
     // Two previews: the pinned one (click; offers "Restore") and the hovered
     // one (mouse over a row). The canvas shows the hovered one if any.
@@ -644,12 +660,15 @@ class HiveHistoryPanel extends HTMLElement {
     }
   }
 
-  // The header follows the selection: a glyph's history, or the font's (where
-  // snapshots are made, since a snapshot names the state of the whole font).
+  // The header follows the selection: a glyph's history, where "Snapshot…"
+  // names a version of that glyph, or the font's, where it names the state
+  // of the whole font.
   updateHeader(glyphName) {
     this.titleElement.textContent = glyphName ? "Glyph history" : "Font history";
-    this.snapshotButton.hidden = !!glyphName;
-    if (glyphName && this.snapshotForm) this.toggleSnapshotForm();
+    this.snapshotButton.title = glyphName
+      ? `Name this version of ${glyphName}: groups its versions made since its last snapshot`
+      : "Name the current state of the whole font: groups the changes made since the last snapshot";
+    if (this.snapshotForm && this.snapshotForm.glyph !== glyphName) this.toggleSnapshotForm();
   }
 
   async refresh(force = false) {
@@ -668,6 +687,8 @@ class HiveHistoryPanel extends HTMLElement {
       this.lastGlyph = undefined;
       this.commits = [];
       this.snapshots = [];
+      this.glyphSnapshots = [];
+      this.order = null;
       this.render(glyphName, `Could not load history (${error.message}).`, true);
       return;
     } finally {
@@ -678,10 +699,15 @@ class HiveHistoryPanel extends HTMLElement {
     this.lastGlyph = glyphName;
     this.head = data.head;
     this.snapshots = data.snapshots || [];
+    this.glyphSnapshots = glyphName ? data.glyphSnapshots || [] : [];
+    this.order = glyphName
+      ? data.order || data.commits.map((c) => ["commit", c.sha]) // an older server
+      : null;
     // The font's history walks the snapshot commits too: they are the
     // snapshot rows, not versions.
     const snapshotShas = new Set(this.snapshots.map((s) => s.sha));
     this.commits = data.commits.filter((c) => !snapshotShas.has(c.sha));
+    if (this.snapshotForm?.glyph && !this.snapshotForm.busy) this.loadSnapshotInfo();
     const empty = glyphName ? `No history yet for ${glyphName}.` : "No history yet.";
     this.render(glyphName, this.commits.length || this.snapshots.length ? null : empty);
     if (glyphName) this.preload(glyphName);
@@ -715,7 +741,9 @@ class HiveHistoryPanel extends HTMLElement {
     if (note) {
       this.listElement.append(el("div", { class: isError ? "empty error" : "empty" }, [note]));
     }
-    if (!isError) {
+    if (!isError && glyphName) {
+      this.renderGlyphList(glyphName);
+    } else if (!isError) {
       const snapshots = this.snapshots;
       const { loose, bySnapshot } = this.groupCommits();
       if (snapshots.length && loose.length) {
@@ -739,6 +767,82 @@ class HiveHistoryPanel extends HTMLElement {
     this.dropHiddenPreviews();
     this.updateRowHighlights();
     this.renderStatus();
+  }
+
+  // A glyph's history: its versions grouped under its own snapshots (newest
+  // first), with the font's snapshots as landmarks where they were made.
+  glyphGroups() {
+    const commits = new Map(this.commits.map((c) => [c.sha, c]));
+    const fontSnapshots = new Map(this.snapshots.map((s) => [s.name, s]));
+    const glyphSnapshots = new Map(this.glyphSnapshots.map((s) => [s.name, s]));
+    const groups = [{ snapshot: null, items: [] }];
+    for (const [kind, key] of this.order || []) {
+      if (kind === "glyph-snapshot") {
+        const snapshot = glyphSnapshots.get(key);
+        if (snapshot) groups.push({ snapshot, items: [] });
+      } else if (kind === "commit" && commits.has(key)) {
+        groups.at(-1).items.push({ commit: commits.get(key) });
+      } else if (kind === "snapshot" && fontSnapshots.has(key)) {
+        groups.at(-1).items.push({ landmark: fontSnapshots.get(key) });
+      }
+    }
+    return groups;
+  }
+
+  renderGlyphList(glyphName) {
+    const [loose, ...groups] = this.glyphGroups();
+    const count = (group) => group.items.filter((item) => item.commit).length;
+    const rows = (items, nested) =>
+      items.map((item) =>
+        item.commit
+          ? this.commitRow(item.commit, glyphName, nested)
+          : this.landmarkRow(item.landmark, glyphName, nested)
+      );
+    if (groups.length && count(loose)) {
+      this.listElement.append(
+        el("div", { class: "group-label" }, [
+          `Since the last snapshot of ${glyphName} · ${count(loose)}`,
+        ])
+      );
+    }
+    this.listElement.append(...rows(loose.items, false));
+    for (const group of groups) {
+      const key = `glyph:${group.snapshot.name}`;
+      this.listElement.append(
+        this.snapshotRow(group.snapshot, new Array(count(group)), glyphName, key)
+      );
+      if (this.expanded.has(key)) this.listElement.append(...rows(group.items, true));
+    }
+  }
+
+  // One of the font's snapshots, in a glyph's history: a landmark (the glyph
+  // as it was then can be previewed and restored like any version).
+  landmarkRow(snapshot, glyphName, nested) {
+    const isCurrent = snapshot.sha === this.head;
+    const classes = ["snapshot", "landmark"];
+    if (nested) classes.push("nested");
+    if (isCurrent) classes.push("current");
+    if (this.pinned?.sha === snapshot.sha) classes.push("previewing");
+    const row = el(
+      "div",
+      {
+        class: classes.join(" "),
+        title:
+          `Snapshot of the whole font “${snapshot.title}” (snapshot/${snapshot.name})\n` +
+          `${snapshot.author} — ${formatFullDate(snapshot.time)}` +
+          (isCurrent
+            ? " (current)"
+            : `\n\nHover to preview ${glyphName} at this snapshot, click to keep it`),
+      },
+      [
+        el("span", { class: "mark" }, ["◆"]),
+        el("span", { class: "name" }, [snapshot.title]),
+        ...(isCurrent ? [el("span", { class: "current-mark" }, ["current"])] : []),
+        el("span", { class: "when" }, [formatDate(snapshot.time)]),
+      ]
+    );
+    this.attachPreviewHandlers(row, snapshot.sha, glyphName, isCurrent);
+    return row;
   }
 
   // A pinned or hovered version whose row is no longer in the list (its
@@ -814,10 +918,13 @@ class HiveHistoryPanel extends HTMLElement {
   }
 
   // One line: ▸ title … versions of the glyph · date.
-  snapshotRow(snapshot, grouped, glyphName) {
+  // ``key``: the group's key in this.expanded (a glyph snapshot's is
+  // "glyph:<name>", a font snapshot's its name).
+  snapshotRow(snapshot, grouped, glyphName, key = snapshot.name) {
     const isCurrent = snapshot.sha === this.head;
     const isPinned = this.pinned?.sha === snapshot.sha;
-    const isOpen = this.expanded.has(snapshot.name);
+    const isOpen = this.expanded.has(key);
+    const ofGlyph = key !== snapshot.name;
     const classes = ["snapshot"];
     if (isCurrent) classes.push("current");
     if (isPinned) classes.push("previewing");
@@ -835,8 +942,8 @@ class HiveHistoryPanel extends HTMLElement {
             : "No change",
         onclick: (event) => {
           event.stopPropagation();
-          if (this.expanded.has(snapshot.name)) this.expanded.delete(snapshot.name);
-          else this.expanded.add(snapshot.name);
+          if (this.expanded.has(key)) this.expanded.delete(key);
+          else this.expanded.add(key);
           this.render(this.lastGlyph, null);
         },
       },
@@ -848,10 +955,14 @@ class HiveHistoryPanel extends HTMLElement {
       {
         class: classes.join(" "),
         title:
-          `Snapshot “${snapshot.title}” (snapshot/${snapshot.name}), of the whole font\n` +
-          `${snapshot.author} — ${formatFullDate(snapshot.time)}\n` +
-          (glyphName ? `${count} version${count === 1 ? "" : "s"} of ${glyphName}, ` : "") +
-          `${snapshot.changes} change${snapshot.changes === 1 ? "" : "s"} in the font` +
+          (ofGlyph
+            ? `Snapshot of ${glyphName} “${snapshot.title}” (glyph-snapshot/${snapshot.name})\n` +
+              `${snapshot.author} — ${formatFullDate(snapshot.time)}\n` +
+              `${count} version${count === 1 ? "" : "s"} of ${glyphName}`
+            : `Snapshot “${snapshot.title}” (snapshot/${snapshot.name}), of the whole font\n` +
+              `${snapshot.author} — ${formatFullDate(snapshot.time)}\n` +
+              (glyphName ? `${count} version${count === 1 ? "" : "s"} of ${glyphName}, ` : "") +
+              `${snapshot.changes} change${snapshot.changes === 1 ? "" : "s"} in the font`) +
           (isCurrent
             ? " (current)"
             : glyphName
@@ -920,8 +1031,10 @@ class HiveHistoryPanel extends HTMLElement {
   }
 
   describeRef(sha) {
+    const glyphSnapshot = this.glyphSnapshots.find((s) => s.sha === sha);
+    if (glyphSnapshot) return `snapshot “${glyphSnapshot.title}”`;
     const snapshot = this.snapshots.find((s) => s.sha === sha);
-    return snapshot ? `snapshot “${snapshot.title}”` : sha.slice(0, 10);
+    return snapshot ? `font snapshot “${snapshot.title}”` : sha.slice(0, 10);
   }
 
   // --- snapshots -----------------------------------------------------------
@@ -932,7 +1045,8 @@ class HiveHistoryPanel extends HTMLElement {
       this.renderSnapshotForm();
       return;
     }
-    this.snapshotForm = { info: null, error: null, busy: false };
+    // glyph: the glyph whose version is named; null: the whole font.
+    this.snapshotForm = { glyph: this.selectedGlyphName, info: null, error: null, busy: false };
     this.renderSnapshotForm();
     this.loadSnapshotInfo();
   }
@@ -940,6 +1054,19 @@ class HiveHistoryPanel extends HTMLElement {
   async loadSnapshotInfo() {
     const form = this.snapshotForm;
     if (!form) return;
+    if (form.glyph) {
+      // From the list shown: the glyph's versions since its last snapshot.
+      const [loose] = this.glyphGroups();
+      form.info = {
+        pending: loose.items.filter((item) => item.commit).length,
+        pendingAuthors: [
+          ...new Set(loose.items.filter((i) => i.commit).map((i) => i.commit.author)),
+        ].sort(),
+        snapshots: this.glyphSnapshots,
+      };
+      this.renderSnapshotForm();
+      return;
+    }
     try {
       const response = await fetch(this.apiURL("snapshots", {}));
       if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
@@ -960,17 +1087,32 @@ class HiveHistoryPanel extends HTMLElement {
     const info = form.info;
     const last = info?.snapshots?.[0];
     let summary;
+    const n = info?.pending;
     if (!info) summary = "Loading…";
+    else if (form.glyph && !n)
+      summary = last
+        ? `${form.glyph} did not change since its snapshot “${last.title}”.`
+        : `${form.glyph} has no version to name yet.`;
+    else if (form.glyph)
+      summary =
+        `Names this version of ${form.glyph} (only this glyph): groups its ${n} ` +
+        `version${n === 1 ? "" : "s"} ` +
+        (last ? `since its snapshot “${last.title}”` : "so far") +
+        (info.pendingAuthors?.length ? ` (by ${info.pendingAuthors.join(", ")})` : "") +
+        ". Nothing is deleted, and the font's history is not changed.";
     else if (!info.pending) summary = `Nothing changed since snapshot “${last.title}”.`;
     else
       summary =
-        `Groups the ${info.pending} change${info.pending === 1 ? "" : "s"} made to the project ` +
+        `Names the state of the whole font: groups the ${info.pending} ` +
+        `change${info.pending === 1 ? "" : "s"} made to the project ` +
         (last ? `since snapshot “${last.title}”` : "so far") +
         (info.pendingAuthors?.length ? ` (by ${info.pendingAuthors.join(", ")})` : "") +
         ". Nothing is deleted: the versions stay in the history, grouped under this name.";
     const input = el("input", {
       type: "text",
-      placeholder: "Snapshot name, e.g. Proofs sent to client",
+      placeholder: form.glyph
+        ? "Snapshot name, e.g. Approved by the art director"
+        : "Snapshot name, e.g. Proofs sent to client",
       maxlength: "120",
     });
     input.value = typed;
@@ -1010,7 +1152,10 @@ class HiveHistoryPanel extends HTMLElement {
     form.error = null;
     this.renderSnapshotForm();
     try {
-      const response = await fetch(this.apiURL("snapshot", { name: title }), { method: "POST" });
+      const url = form.glyph
+        ? this.apiURL("glyph-snapshot", { glyph: form.glyph, name: title })
+        : this.apiURL("snapshot", { name: title });
+      const response = await fetch(url, { method: "POST" });
       if (!response.ok) {
         const text = (await response.text()) || response.statusText;
         throw new Error(`${response.status} ${text}`);
@@ -1291,6 +1436,7 @@ class HiveHistoryPanel extends HTMLElement {
     const generation = ++this.preloadGeneration;
     const shas = [
       ...this.commits.filter((c) => c.sha !== this.head).map((c) => c.sha),
+      ...this.glyphSnapshots.filter((s) => s.sha !== this.head).map((s) => s.sha),
       ...this.snapshots.filter((s) => s.sha !== this.head).map((s) => s.sha),
     ].slice(0, PRELOAD_COUNT);
     for (const sha of shas) {

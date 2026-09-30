@@ -49,7 +49,9 @@ def page():
 
 
 # Fake editor + fake server. Three commits touch glyph A: c3 (the branch
-# head) and c2 since the last snapshot, c1 grouped under snapshot "V1" (s1).
+# head) and c2 since A's last snapshot, c1 grouped under A's snapshot "V1"
+# (s5), with the font's snapshot "F1" (s4) as a landmark before it. In the
+# font's history (no glyph), "V1" (s5) is a snapshot of the whole font.
 SETUP = """
 async () => {
   const sha = (c) => c.repeat(40);
@@ -63,7 +65,7 @@ async () => {
   const state = {
     requests: [], posts: [], updates: 0, windowKeys: 0, listeners: [],
     glyphs: { [sha("1")]: glyph(100), [sha("2")]: glyph(200), [sha("3")]: glyph(300),
-              [sha("5")]: glyph(100) },
+              [sha("5")]: glyph(100), [sha("4")]: glyph(150) },
   };
   window.state = state;
   window.sha = sha;
@@ -85,14 +87,20 @@ async () => {
       return json({ head: sha("6"), snapshot: { ...snapshot, name: "x", sha: sha("6") } });
     }
     if (route === "head") return json({ head: sha("3") });
-    if (route === "log") return json({
+    if (route === "log") return json(q.glyph ? {
       head: sha("3"),
-      commits: q.glyph
-        ? [commit("3", "Edit A", null), commit("2", "Edit A", null),
-           commit("1", "Import", "v1")]
-        : [commit("3", "Edit A", null), commit("4", "Edit B", null),
-           commit("2", "Edit A", null), commit("5", "Snapshot V1", "v1"),
-           commit("1", "Import", "v1")],
+      commits: [commit("3", "Edit A", null), commit("2", "Edit A", null),
+                { ...commit("1", "Import", "f1"), glyph_snapshot: "v1" }],
+      snapshots: [{ ...snapshot, name: "f1", title: "F1", sha: sha("4") }],
+      glyphSnapshots: [{ name: "v1", title: "V1", sha: sha("5"), author: "J",
+                         time: 1790000000, glyphs: ["A"] }],
+      order: [["commit", sha("3")], ["commit", sha("2")], ["glyph-snapshot", "v1"],
+              ["snapshot", "f1"], ["commit", sha("1")]],
+    } : {
+      head: sha("3"),
+      commits: [commit("3", "Edit A", null), commit("4", "Edit B", null),
+                commit("2", "Edit A", null), commit("5", "Snapshot V1", "v1"),
+                commit("1", "Import", "v1")],
       snapshots: [snapshot],
     });
     if (route === "snapshots") return json({
@@ -189,9 +197,18 @@ def test_rows_are_grouped_under_snapshots(page):
         "snapshot:5",
     ]
     page.evaluate("panel.shadowRoot.querySelector('.snapshot .caret').click()")
-    assert page.evaluate("rows()")[-2:] == ["snapshot:5", "commit nested:1"]
+    # Inside A's snapshot: the font's snapshot, as a landmark, then c1.
+    assert page.evaluate("rows()")[-3:] == [
+        "snapshot:5",
+        "snapshot landmark nested:4",
+        "commit nested:1",
+    ]
     assert page.evaluate("rowFor('5').querySelector('.count').textContent") == "1"
-    assert "1 version of A, 4 changes in the font" in page.evaluate("rowFor('5').title")
+    assert page.evaluate("rowFor('5').title").startswith("Snapshot of A “V1”")
+    assert "Snapshot of the whole font “F1”" in page.evaluate("rowFor('4').title")
+    assert page.evaluate(
+        "panel.shadowRoot.querySelector('.group-label').textContent"
+    ) == ("Since the last snapshot of A · 2")
 
 
 def test_hover_previews_and_leaving_clears(page):
@@ -313,12 +330,14 @@ def test_font_history_when_no_glyph_is_selected(page):
     page.evaluate(SETUP)
     title = "panel.shadowRoot.querySelector('.title').textContent"
     assert page.evaluate(title) == "Glyph history"
-    assert page.evaluate(
-        "panel.snapshotButton.hidden"
-    )  # a snapshot is the whole font's
+    assert page.evaluate("panel.snapshotButton.title").startswith(
+        "Name this version of A"
+    )
     select(page, None)
     assert page.evaluate(title) == "Font history"
-    assert not page.evaluate("panel.snapshotButton.hidden")
+    assert page.evaluate("panel.snapshotButton.title").startswith(
+        "Name the current state of the whole font"
+    )
     assert (
         page.evaluate("state.requests.filter(r => r.route === 'log').at(-1).glyph")
         is None
@@ -358,7 +377,8 @@ def test_snapshot_form(page):
     form = "panel.shadowRoot.querySelector('.snapshot-form')"
     summary = page.evaluate(f"{form}.querySelector('.summary').textContent")
     assert summary.startswith(
-        "Groups the 2 changes made to the project since snapshot “V1” (by J, K)."
+        "Names the state of the whole font: groups the 2 changes made to the project "
+        "since snapshot “V1” (by J, K)."
     )
     assert page.evaluate(f"{form}.querySelector('button.create').disabled")
     page.evaluate(f"""() => {{
@@ -443,7 +463,7 @@ def test_no_preview_is_left_without_its_row(page):
           await panel.createSnapshot("Proofs");
           await wait(50);
         }""")
-    assert page.evaluate("state.posts.at(-1).route") == "snapshot"
+    assert page.evaluate("state.posts.at(-1).route") == "glyph-snapshot"
     assert page.evaluate("[panel.pinned, panel.hovered]") == [None, None]
     assert page.evaluate("drawCall()") is None
     assert "Hover a version" in page.evaluate("statusText()")
@@ -544,3 +564,28 @@ def test_draw_accepts_both_of_fontras_signatures(page):
     page.evaluate("panel.pinned.loaded")
     assert page.evaluate("drawCall()") == {"alpha": None, "fills": 1}
     assert page.evaluate("drawCall(true)") == {"alpha": None, "fills": 1}
+
+
+def test_glyph_snapshot_form(page):
+    page.evaluate(SETUP)
+    page.evaluate("panel.snapshotButton.click()")
+    page.evaluate("wait(50)")
+    form = "panel.shadowRoot.querySelector('.snapshot-form')"
+    assert page.evaluate(f"{form}.querySelector('.summary').textContent").startswith(
+        "Names this version of A (only this glyph): groups its 2 versions "
+        "since its snapshot “V1” (by J)."
+    )
+    # No request: the numbers come from the list.
+    assert page.evaluate("state.requests.some(r => r.route === 'snapshots')") is False
+    page.evaluate(f"""async () => {{
+          const input = {form}.querySelector('input');
+          input.value = "Approved";
+          input.dispatchEvent(new Event('input'));
+          {form}.querySelector('button.create').click();
+          await wait(100);
+        }}""")
+    assert page.evaluate("state.posts") == [
+        {"route": "glyph-snapshot", "branch": "main", "glyph": "A", "name": "Approved"}
+    ]
+    assert page.evaluate("panel.snapshotForm") is None
+    assert page.errors == []

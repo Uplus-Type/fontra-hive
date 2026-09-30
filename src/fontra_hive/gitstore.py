@@ -81,6 +81,9 @@ class CommitInfo:
     # after it on the branch), or None for changes since the last snapshot.
     # Only filled in by ``log(..., snapshots=...)``.
     snapshot: str | None = None
+    # The same for the glyph snapshots of the glyph asked for (the first one
+    # made after it), with ``log(..., glyph_snapshots=...)``.
+    glyph_snapshot: str | None = None
 
 
 @dataclass(frozen=True)
@@ -99,6 +102,22 @@ class SnapshotInfo:
     base: str | None  # sha of the previous snapshot on the branch, if any
     changes: int  # commits grouped by this snapshot (since ``base``)
     glyphs: tuple[str, ...]  # glyphs changed by those commits, sorted
+
+
+@dataclass(frozen=True)
+class GlyphSnapshotInfo:
+    """A named version of one or more glyphs (not of the whole font): an
+    annotated tag ``glyph-snapshot/<name>`` on the commit that was the
+    branch head, whose message lists the glyphs. No commit is added. In a
+    glyph's history, it groups that glyph's versions made since its previous
+    glyph snapshot."""
+
+    name: str  # tag-safe slug, unique in the repository
+    title: str
+    sha: str  # the commit it names
+    author: str
+    time: int
+    glyphs: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -124,6 +143,7 @@ def _tag_ref(tag: str) -> bytes:
 
 
 SNAPSHOT_TAG_PREFIX = "snapshot/"
+GLYPH_SNAPSHOT_TAG_PREFIX = "glyph-snapshot/"
 
 
 def snapshot_slug(title: str) -> str:
@@ -368,6 +388,8 @@ class GitRepoStore:
         glyph: str | None = None,
         limit: int | None = None,
         snapshots: list[SnapshotInfo] | None = None,
+        glyph_snapshots: list[GlyphSnapshotInfo] | None = None,
+        order: list[tuple[str, str]] | None = None,
     ) -> list[CommitInfo]:
         """Commits reachable from ``ref``, newest first, optionally only those
         that changed ``path`` (a file, or a directory: its subtree).
@@ -381,9 +403,16 @@ class GitRepoStore:
         (``CommitInfo.snapshot``) and the snapshots met on the way are
         appended to the list, newest first. Snapshot commits themselves are
         not returned in path mode (they change nothing).
+
+        ``glyph_snapshots``: the glyph snapshots of ``glyph`` (from
+        :meth:`glyph_snapshots`); those met on the way are kept in the list
+        (the others removed), newest first, and each commit gets the one it
+        belongs to (``CommitInfo.glyph_snapshot``). ``order``, when a list,
+        receives the walk as ``(kind, key)`` pairs, newest first: ``("commit",
+        sha)``, ``("snapshot", name)``, ``("glyph-snapshot", name)``.
         """
         sha = self.resolve(ref)
-        if path is None and snapshots is None:
+        if path is None and snapshots is None and glyph_snapshots is None:
             walker = self.repo.get_walker(include=[_b(sha)], max_entries=limit)
             return [self.commit_info(_s(entry.commit.id)) for entry in walker]
         return self._log_first_parent(
@@ -392,6 +421,8 @@ class GitRepoStore:
             glyph,
             limit,
             snapshots,
+            glyph_snapshots,
+            order,
         )
 
     def _log_first_parent(
@@ -401,6 +432,8 @@ class GitRepoStore:
         glyph: str | None,
         limit: int | None,
         snapshots: list[SnapshotInfo] | None,
+        glyph_snapshots: list[GlyphSnapshotInfo] | None = None,
+        order: list[tuple[str, str]] | None = None,
     ) -> list[CommitInfo]:
         """History along the first-parent line, of one path (or of everything
         when ``path`` is None), optionally annotated with snapshots.
@@ -427,15 +460,29 @@ class GitRepoStore:
 
         result: list[CommitInfo] = []
         current_snapshot: str | None = None
+        current_glyph_snapshot: str | None = None
+        by_target: dict[bytes, list[GlyphSnapshotInfo]] = {}
+        for gs in glyph_snapshots or ():
+            by_target.setdefault(_b(gs.sha), []).append(gs)
+        met: list[GlyphSnapshotInfo] = []
         commit_id: bytes | None = _b(sha)
         while commit_id is not None and (limit is None or len(result) < limit):
             commit = store[commit_id]
             parent = commit.parents[0] if commit.parents else None
+            # A glyph snapshot names the state at this commit: it comes
+            # before it (newest first), and groups it.
+            for gs in sorted(by_target.get(commit_id, ()), key=lambda g: -g.time):
+                met.append(gs)
+                current_glyph_snapshot = gs.name
+                if order is not None:
+                    order.append(("glyph-snapshot", gs.name))
             if snapshots is not None:
                 snapshot_name = _trailer(commit.message, HIVE_SNAPSHOT_TRAILER)
                 if snapshot_name is not None:
                     snapshots.append(self._snapshot_info(commit))
                     current_snapshot = snapshot_name
+                    if order is not None:
+                        order.append(("snapshot", snapshot_name))
                     if path is not None:
                         commit_id = parent
                         continue
@@ -455,8 +502,14 @@ class GitRepoStore:
                 info = self.commit_info(_s(commit_id))
                 if snapshots is not None:
                     info = replace(info, snapshot=current_snapshot)
+                if glyph_snapshots is not None:
+                    info = replace(info, glyph_snapshot=current_glyph_snapshot)
                 result.append(info)
+                if order is not None:
+                    order.append(("commit", info.sha))
             commit_id = parent
+        if glyph_snapshots is not None:
+            glyph_snapshots[:] = met
         return result
 
     # --- snapshots ---------------------------------------------------------
@@ -599,6 +652,88 @@ class GitRepoStore:
         )
         return self._snapshot_info(c)
 
+    # --- glyph snapshots ---------------------------------------------------
+
+    def glyph_snapshots(self, glyph: str | None = None) -> list[GlyphSnapshotInfo]:
+        """All glyph snapshots (of ``glyph`` only, if given), newest first.
+        Reads the ``glyph-snapshot/*`` tags only (small objects)."""
+        prefix = _b("refs/tags/" + GLYPH_SNAPSHOT_TAG_PREFIX)
+        result = []
+        for ref in self.repo.refs.keys():
+            if not ref.startswith(prefix):
+                continue
+            tag = self.repo[self.repo.refs[ref]]
+            if not isinstance(tag, Tag):
+                continue
+            glyphs = tuple(
+                (
+                    _trailer(tag.message, HIVE_GLYPH_SNAPSHOT_GLYPHS_TRAILER) or ""
+                ).split()
+            )
+            if glyph is not None and glyph not in glyphs:
+                continue
+            tagger = _s(tag.tagger)
+            result.append(
+                GlyphSnapshotInfo(
+                    name=_s(ref[len(prefix) :]),
+                    title=_s(tag.message).split("\n", 1)[0],
+                    sha=_s(tag.object[1]),
+                    author=tagger.split(" <", 1)[0],
+                    time=tag.tag_time,
+                    glyphs=glyphs,
+                )
+            )
+        result.sort(key=lambda g: (-g.time, g.name))
+        return result
+
+    def create_glyph_snapshot(
+        self,
+        title: str,
+        glyphs: Iterable[str],
+        *,
+        ref: str = DEFAULT_BRANCH,
+        author: Signature,
+        timestamp: int | None = None,
+    ) -> GlyphSnapshotInfo:
+        """Name the current version of ``glyphs``: an annotated tag
+        ``glyph-snapshot/<name>`` on ``ref`` (the branch head), no commit.
+        The name is made unique (``-2``, ``-3``…): the same title can name
+        versions of different glyphs. Whether the glyphs changed since their
+        previous glyph snapshot is for the caller to check (it knows their
+        paths)."""
+        title = " ".join(title.split())
+        glyphs = sorted(set(glyphs))
+        base = snapshot_slug(title)
+        if not base:
+            raise ValueError("a snapshot needs a name")
+        if not glyphs or any(not g or any(c.isspace() for c in g) for g in glyphs):
+            raise ValueError("unexpected glyph names")
+        sha = self.resolve(ref)
+        name, n = base, 1
+        while self.repo.refs.read_ref(_tag_ref(GLYPH_SNAPSHOT_TAG_PREFIX + name)):
+            n += 1
+            name = f"{base}-{n}"
+        tag = Tag()
+        tag.name = _b(GLYPH_SNAPSHOT_TAG_PREFIX + name)
+        tag.object = (Commit, _b(sha))
+        tag.tagger = author.encode()
+        tag.tag_time = int(time.time()) if timestamp is None else timestamp
+        tag.tag_timezone = 0
+        tag.message = _b(f"{title}\n\nHive-Glyph-Snapshot-Glyphs: {' '.join(glyphs)}\n")
+        self.repo.object_store.add_object(tag)
+        if not self.repo.refs.add_if_new(
+            _tag_ref(GLYPH_SNAPSHOT_TAG_PREFIX + name), tag.id
+        ):
+            raise ValueError(f"glyph snapshot {name!r} already exists")
+        return GlyphSnapshotInfo(
+            name=name,
+            title=title,
+            sha=sha,
+            author=author.name,
+            time=tag.tag_time,
+            glyphs=tuple(glyphs),
+        )
+
     def _snapshot_info(self, commit: Commit) -> SnapshotInfo:
         info = self.commit_info(_s(commit.id))
         title = info.message.splitlines()[0]
@@ -659,6 +794,7 @@ HIVE_SNAPSHOT_TRAILER = b"Hive-Snapshot:"
 HIVE_SNAPSHOT_BASE_TRAILER = b"Hive-Snapshot-Base:"
 HIVE_SNAPSHOT_GLYPHS_TRAILER = b"Hive-Snapshot-Glyphs:"
 HIVE_SNAPSHOT_CHANGES_TRAILER = b"Hive-Snapshot-Changes:"
+HIVE_GLYPH_SNAPSHOT_GLYPHS_TRAILER = b"Hive-Glyph-Snapshot-Glyphs:"
 
 
 def _trailer(message: bytes, key: bytes) -> str | None:

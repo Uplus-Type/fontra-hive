@@ -335,3 +335,42 @@ def test_plugin_files_are_served_with_revalidation(manager):
                 await manager.clientFileHandler(request(bad))
 
     run(go())
+
+
+def test_glyph_snapshot_route_names_one_glyph(manager):
+    async def go():
+        response = await manager.glyphSnapshotHandler(
+            fake_request("Mutator", glyph="A", name="Validé DA")
+        )
+        created = json.loads(response.body)
+        snap = created["glyphSnapshot"]
+        assert snap["name"] == "valide-da" and snap["glyphs"] == ["A"]
+        assert snap["sha"] == created["head"]  # the branch did not move
+
+        # A has not changed since: 409; B has its own; missing fields: 400.
+        with pytest.raises(web.HTTPConflict):
+            await manager.glyphSnapshotHandler(
+                fake_request("Mutator", glyph="A", name="again")
+            )
+        response = await manager.glyphSnapshotHandler(
+            fake_request("Mutator", glyph="B", name="Validé DA")
+        )
+        assert json.loads(response.body)["glyphSnapshot"]["name"] == "valide-da-2"
+        with pytest.raises(web.HTTPBadRequest):
+            await manager.glyphSnapshotHandler(fake_request("Mutator", glyph="A"))
+
+        log = json.loads(
+            (await manager.logHandler(fake_request("Mutator", glyph="A"))).body
+        )
+        assert [g["name"] for g in log["glyphSnapshots"]] == ["valide-da"]
+        assert [c["glyph_snapshot"] for c in log["commits"]] == ["valide-da"] * 2
+        assert [kind for kind, _ in log["order"]] == [
+            "glyph-snapshot",
+            "commit",
+            "commit",
+        ]
+        # The font's history does not show glyph snapshots.
+        font = json.loads((await manager.logHandler(fake_request("Mutator"))).body)
+        assert font["glyphSnapshots"] == []
+
+    run(go())

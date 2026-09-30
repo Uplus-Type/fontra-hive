@@ -214,3 +214,58 @@ def test_snapshots_group_commits_without_rewriting(tmp_path, fixture_fontra):
     ]
     # Snapshots are ordinary tags and commits for git.
     assert "snapshot/v2" in store.tags()
+
+
+def test_glyph_snapshots_group_one_glyphs_versions(tmp_path, fixture_fontra):
+    store, imported = make_store(tmp_path, fixture_fontra)
+
+    def edit(glyph, content):
+        return store.commit(
+            {f"glyphs/{glyph}^1.json": content},
+            message=f"Edit {glyph}\n\nHive-Glyphs: {glyph}\n",
+            author=ME,
+        )
+
+    a1 = edit("A", b"[1]\n")
+    b1 = edit("B", b"[1]\n")
+    ok = store.create_glyph_snapshot("Validé DA", ["A"], author=ME, timestamp=100)
+    assert (ok.name, ok.title, ok.sha, ok.glyphs) == (
+        "valide-da",
+        "Validé DA",
+        b1,
+        ("A",),
+    )
+    assert store.head() == b1  # a tag only: the branch did not move
+    assert store.resolve("glyph-snapshot/valide-da") == b1
+    font = store.create_snapshot("Proofs", author=ME)
+    a2 = edit("A", b"[2]\n")
+    # Same title for another glyph: a unique name.
+    other = store.create_glyph_snapshot("Validé DA", ["B"], author=ME, timestamp=200)
+    assert other.name == "valide-da-2"
+    assert [g.name for g in store.glyph_snapshots()] == ["valide-da-2", "valide-da"]
+    assert [g.name for g in store.glyph_snapshots("A")] == ["valide-da"]
+    with pytest.raises(ValueError, match="needs a name"):
+        store.create_glyph_snapshot(" !! ", ["A"], author=ME)
+
+    met, order = store.glyph_snapshots("A"), []
+    log = store.log(
+        path="glyphs/A^1.json",
+        glyph="A",
+        snapshots=[],
+        glyph_snapshots=met,
+        order=order,
+    )
+    assert [(c.sha, c.glyph_snapshot) for c in log] == [
+        (a2, None),
+        (a1, "valide-da"),
+        (imported, "valide-da"),
+    ]
+    assert [g.name for g in met] == ["valide-da"]
+    # The font's snapshot sits between A's versions.
+    assert order == [
+        ("commit", a2),
+        ("snapshot", font.name),
+        ("glyph-snapshot", "valide-da"),
+        ("commit", a1),
+        ("commit", imported),
+    ]

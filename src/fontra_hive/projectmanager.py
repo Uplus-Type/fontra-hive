@@ -45,6 +45,7 @@ from .gitstore import (
     DEFAULT_BRANCH,
     SERVER_SIGNATURE,
     GitRepoStore,
+    GlyphSnapshotInfo,
     RefMovedError,
     Signature,
     SnapshotInfo,
@@ -494,6 +495,9 @@ class DevHiveProjectManager:
             web.post("/api/hive/projects/{name}/restore", self.restoreHandler),
             web.get("/api/hive/projects/{name}/snapshots", self.snapshotsHandler),
             web.post("/api/hive/projects/{name}/snapshot", self.snapshotHandler),
+            web.post(
+                "/api/hive/projects/{name}/glyph-snapshot", self.glyphSnapshotHandler
+            ),
             web.get("/api/hive/projects/{name}/export", self.exportHandler),
             web.get("/api/hive/export-formats", self.exportFormatsHandler),
         ]
@@ -730,10 +734,20 @@ class DevHiveProjectManager:
             if head is None:
                 raise web.HTTPNotFound()
             snapshots: list[SnapshotInfo] = []
+            # A glyph's own snapshots group its versions; the font's
+            # snapshots are then landmarks between them ("order").
+            glyphSnapshots = store.glyph_snapshots(glyphName) if glyphName else None
+            order: list[tuple[str, str]] = []
             commits = [
                 dataclasses.asdict(c)
                 for c in store.log(
-                    branch, path=path, glyph=glyphName, limit=limit, snapshots=snapshots
+                    branch,
+                    path=path,
+                    glyph=glyphName,
+                    limit=limit,
+                    snapshots=snapshots,
+                    glyph_snapshots=glyphSnapshots,
+                    order=order,
                 )
             ]
         finally:
@@ -747,6 +761,8 @@ class DevHiveProjectManager:
                 # The snapshots met while walking back to the oldest commit
                 # returned, newest first; each commit names its snapshot.
                 "snapshots": [_snapshotJSON(s) for s in snapshots],
+                "glyphSnapshots": [_snapshotJSON(s) for s in glyphSnapshots or ()],
+                "order": [list(entry) for entry in order],
             }
         )
 
@@ -820,6 +836,57 @@ class DevHiveProjectManager:
             }
         )
 
+    async def glyphSnapshotHandler(self, request: web.Request) -> web.Response:
+        """Name the current version of one glyph (``glyph``): groups its
+        versions made since its previous glyph snapshot. A tag only: the
+        branch does not move, and the font's history is not touched."""
+        name = request.match_info["name"]
+        title = (request.query.get("name") or "").strip()
+        glyphName = request.query.get("glyph")
+        branch = request.query.get("branch", DEFAULT_BRANCH)
+        repoPath, access = await self._project(request, name, "read")
+        if not title or not glyphName:
+            raise web.HTTPBadRequest(text="glyph and name are required")
+        if self.readOnly:
+            raise web.HTTPForbidden(text="read-only server")
+        access = await self._require(request, name, "snapshot")
+
+        fontHandler = self.fontHandlers.get(self._handlerKey(repoPath, branch))
+        backend = fontHandler.backend if fontHandler is not None else None
+        store = backend.store if backend is not None else GitRepoStore.open(repoPath)
+        try:
+            if store.head(branch) is None:
+                raise web.HTTPNotFound(text=f"no branch {branch}")
+            if backend is not None:
+                backend.flush()  # the snapshot names the glyph as it is now
+            head = store.head(branch)
+            # Something to name: its newest version is not in a glyph snapshot yet.
+            newest = store.log(
+                head,
+                path=glyphPath(glyphName),
+                glyph=glyphName,
+                limit=1,
+                glyph_snapshots=store.glyph_snapshots(glyphName),
+            )
+            if not newest:
+                raise web.HTTPConflict(text=f"{glyphName} has no history")
+            if newest[0].glyph_snapshot is not None:
+                raise web.HTTPConflict(
+                    text=f"{glyphName} did not change since its last snapshot"
+                )
+            try:
+                snapshot = store.create_glyph_snapshot(
+                    title, [glyphName], ref=head, author=_author(access, self.author)
+                )
+            except ValueError as error:
+                raise web.HTTPConflict(text=str(error))
+        finally:
+            if backend is None:
+                store.close()
+        return web.json_response(
+            {"branch": branch, "head": head, "glyphSnapshot": _snapshotJSON(snapshot)}
+        )
+
     async def glyphHandler(self, request: web.Request) -> web.Response:
         """The JSON of one glyph at a given ref (commit sha, branch or tag)."""
         glyphName = request.query.get("glyph")
@@ -866,7 +933,7 @@ CLIENT_CONTENT_TYPES = {
 }
 
 
-def _snapshotJSON(snapshot: SnapshotInfo) -> dict[str, Any]:
+def _snapshotJSON(snapshot: SnapshotInfo | GlyphSnapshotInfo) -> dict[str, Any]:
     data = dataclasses.asdict(snapshot)
     data["glyphs"] = list(snapshot.glyphs)
     return data
