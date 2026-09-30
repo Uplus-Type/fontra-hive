@@ -6,7 +6,7 @@
 
 Git-backed storage and team collaboration plug-in for [Fontra](https://fontra.xyz),
 the open-source, browser-based font editor. It is the open part of
-[**Fontra Hive**](https://fontrahive.com), the collaborative font editor
+[**Fontra Hive**](https://fontrahive.com), Fontra for Teams
 (beta, by invitation).
 
 **Status: phase 0, work in progress.** What exists today:
