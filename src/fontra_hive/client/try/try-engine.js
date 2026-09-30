@@ -708,11 +708,23 @@
   window.WebSocket.CLOSING = 2;
   window.WebSocket.CLOSED = 3;
 
+  // What the editor asks Fontra's server over HTTP: path operations
+  // (Remove overlap, Union, Subtract…) and pasting from other apps. Answered
+  // by Python here, on the demo too.
+  var SERVER_API = /^\/api\/(unionPath|subtractPath|intersectPath|excludePath|parseClipboard)$/;
   // The Hive plug-in's requests, for a font kept here: served by Python.
-  if (localId) {
-    var nativeFetch = window.fetch.bind(window);
-    window.fetch = function (input, init) {
-      var url = new URL(typeof input === "string" || input instanceof URL ? input : input.url, location.href);
+  var nativeFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    var url = new URL(typeof input === "string" || input instanceof URL ? input : input.url, location.href);
+    var api = url.origin === location.origin && SERVER_API.exec(url.pathname);
+    if (api) {
+      var args = init && init.body !== undefined ? String(init.body) : "{}";
+      return python("api", { name: api[1], args: args }, [], progress).then(function (reply) {
+        progress("");
+        return new Response(reply.body, { status: 200, headers: { "Content-Type": "application/json" } });
+      });
+    }
+    if (localId) {
       if (url.origin !== location.origin || !url.pathname.startsWith("/api/hive/")) {
         return nativeFetch(input, init);
       }
@@ -726,8 +738,9 @@
           return new Response(noBody ? null : r.body, { status: r.status, headers: headers });
         }
       );
-    };
-  }
+    }
+    return nativeFetch(input, init);
+  };
 
   // Leaving: the demo's edits would be lost; a local font's last edits are
   // written to the browser's storage now.

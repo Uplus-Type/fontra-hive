@@ -1711,6 +1711,7 @@ PYODIDE_CONTENT_TYPES = {
     ".wasm": "application/wasm",
     ".zip": "application/zip",
     ".json": "application/json",
+    ".whl": "application/zip",  # pyclipper, for path operations
 }
 
 

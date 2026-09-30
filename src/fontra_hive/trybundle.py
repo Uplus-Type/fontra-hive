@@ -146,6 +146,13 @@ async def runInThread(func, *args):
 def shutdownThreadPool():
     pass
 ''',
+    # skia-pathops is compiled: booleanOperations and pyclipper instead.
+    "fontra/core/pathops.py": '''"""In the browser (Pyodide): see hive_try_pathops."""
+
+from hive_try_pathops import excludePath, intersectPath, subtractPath, unionPath
+
+__all__ = ["unionPath", "subtractPath", "intersectPath", "excludePath"]
+''',
     "fontra/core/subprocess.py": '''"""In the browser (Pyodide): no processes, the work is done right away."""
 
 
@@ -224,8 +231,12 @@ def buildBundle() -> bytes:
             z.writestr(arcname, text)
         _writeDistInfo(z, DIST_INFO, "hive-try-backends", BACKENDS)
         py = _tryPy()
-        for name in ("hive_try_convert.py", "hive_try_server.py"):
+        for name in ("hive_try_convert.py", "hive_try_server.py", "hive_try_pathops.py"):
             z.writestr(name, (py / name).read_text())
+        # Path operations (hive_try_pathops): booleanOperations, pure Python.
+        for entry in sorted((py / "booleanOperations").iterdir(), key=lambda e: e.name):
+            if entry.name.endswith(".py") or entry.name == "LICENSE":
+                z.writestr(f"booleanOperations/{entry.name}", entry.read_text())
     return buffer.getvalue()
 
 

@@ -205,11 +205,14 @@ def test_pyodide_is_served_here(manager, tmp_path, monkeypatch):  # noqa: F811
         assert "hive-pyodide" not in page  # the page's default: the CDN
 
         (tmp_path / "pyodide.asm.wasm").write_bytes(b"\0asm")
+        (tmp_path / "pyclipper-1.4.0-cp314-cp314-pyemscripten_2026_0_wasm32.whl").write_bytes(b"PK")
         (tmp_path / "secret.txt").write_text("x")
         monkeypatch.setenv("HIVE_PYODIDE_DIR", str(tmp_path))
         assert pyodideURL() == "/hive/pyodide/"
         response = await get("pyodide.asm.wasm")
         assert response.headers["Content-Type"] == "application/wasm"
+        wheel = "pyclipper-1.4.0-cp314-cp314-pyemscripten_2026_0_wasm32.whl"
+        assert (await get(wheel)).headers["Content-Type"] == "application/zip"
         for name in ("secret.txt", "../x.wasm", ".hidden.js", "missing.mjs"):
             with pytest.raises(web.HTTPNotFound):
                 await get(name)

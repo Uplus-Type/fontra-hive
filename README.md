@@ -491,7 +491,7 @@ Fontra's own.
   UFOs, Glyphs (`.glyphs`, `.glyphspackage`), TrueType/OpenType/WOFF/TTX
   in; `.fontra` or designspace + UFOs out.
 - `try-banner.js`: the bar at the bottom (name, save state, "Your fonts",
-  "Keep a copy" on the demo, "Collaborate online" to Hive's home page) and
+  "Keep a copy" on the demo, "Fontra Hive for teams" to fontrahive.com) and
   the "Your fonts" panel (open a file or a folder, open, delete). Fontra's
   own File › Export as downloads the font (`.fontra` or designspace + UFOs,
   zipped): the engine answers `exportAs` itself instead of the server.
@@ -521,13 +521,22 @@ Content-Security-Policy), unpack a `pyodide-core` release (314.0.7, from
 <https://github.com/pyodide/pyodide/releases>) and set
 `HIVE_PYODIDE_DIR=/path/to/pyodide`: the server then serves it at
 `/hive/pyodide/` and tells the page so (hive-api's `install.sh` does this).
-`HIVE_PYODIDE_URL` points the page elsewhere. Only the core is needed.
+`HIVE_PYODIDE_URL` points the page elsewhere. Only the core is needed, and
+pyclipper's wheel for the path operations (below).
+
+What the editor asks Fontra's server over HTTP (`/api/unionPath` and the
+other path operations, `/api/parseClipboard`) is answered in the browser
+too, by Fontra's own functions: the path operations (Remove overlap,
+Union, Subtract, Intersect, Exclude) are done by booleanOperations (pure
+Python, vendored in `py/booleanOperations`, MIT) over pyclipper, Pyodide's
+own build, loaded the first time one is used (`py/hive_try_pathops.py`
+stands in for `fontra.core.pathops`, which uses skia-pathops). With a
+self-hosted Pyodide, put `pyclipper-1.4.0-cp314-cp314-pyemscripten_2026_0_wasm32.whl`
+(from the same release on the jsDelivr CDN) next to it (hive-api's
+`install.sh` does this).
 
 Limits for now: no branches in the browser (the branch menu belongs to
-Hive's page script, which needs accounts); what
-Fontra asks its server over HTTP (`/api/unionPath` and the other path
-operations, `parseClipboard`) is not answered, so Remove overlap and
-pasting from other apps fail; no compiled font download (fontc in
+Hive's page script, which needs accounts); no compiled font download (fontc in
 WebAssembly, later). Opening a font kept in the browser loads about 15 MB
 the first time (Pyodide and `python.zip`), cached by the browser after.
 

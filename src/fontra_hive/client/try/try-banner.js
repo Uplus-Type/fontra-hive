@@ -272,12 +272,12 @@ function openPanel() {
         { class: "actions" },
         el(
           "button",
-          { type: "button", title: ".zip (of a .fontra, a UFO or a designspace with its UFOs), .ttf, .otf, .woff2", onclick: () => fileInput.click() },
+          { type: "button", title: "A .glyphs, .ttf, .otf, .woff or .woff2 file, or a .zip of any font", onclick: () => fileInput.click() },
           "Open a file…"
         ),
         el(
           "button",
-          { type: "button", class: "plain", title: "a .fontra, a .ufo, a .glyphspackage, or the folder of a designspace and its UFOs", onclick: () => folderInput.click() },
+          { type: "button", class: "plain", title: "A .fontra, .ufo or .glyphspackage (these are folders), or the folder of a designspace and its UFOs", onclick: () => folderInput.click() },
           "Open a folder…"
         ),
         el("button", { type: "button", class: "plain", onclick: () => go(DEMO_URL) }, "Demo font")
@@ -287,8 +287,13 @@ function openPanel() {
       el(
         "p",
         { class: "note" },
-        "Opens .fontra, Glyphs (.glyphs, .glyphspackage), UFO, designspace + UFOs, TrueType and OpenType. " +
-          "Fonts are kept by this browser only: clearing this site's data deletes them. File › Export as saves a copy on your computer."
+        el("strong", {}, "Open a file…"),
+        " for a .glyphs, .ttf, .otf, .woff2, or a .zip of any font. ",
+        el("strong", {}, "Open a folder…"),
+        " for a .fontra, .ufo or .glyphspackage: they look like files on a Mac but are folders. " +
+          "For a designspace, choose the folder that holds it with its UFOs.",
+        el("br"),
+        "Fonts are kept by this browser only: clearing this site's data deletes them. File › Export as saves a copy on your computer."
       ),
       fileInput,
       folderInput
@@ -342,11 +347,13 @@ function start() {
     el(
       "a",
       {
-        href: "/",
+        // Hive's home page, where accounts are made (on a development
+        // server, "/" is only its list of projects).
+        href: "https://fontrahive.com/",
         class: "extra",
         title: "With a Fontra Hive account, your fonts are online: share them, work on them together, with branches and reviews.",
       },
-      "Collaborate online"
+      "Fontra Hive for teams"
     ),
     el(
       "button",

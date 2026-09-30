@@ -690,6 +690,47 @@ def test_the_demo_is_exported_from_fontras_menu(server, browser):
     context.close()
 
 
+UNION = """async () => {
+  // Two overlapping squares, as Fontra's editor sends them to its server.
+  const path = {
+    coordinates: [0, 0, 0, 100, 100, 100, 100, 0, 50, 50, 50, 150, 150, 150, 150, 50],
+    pointTypes: [0, 0, 0, 0, 0, 0, 0, 0],
+    contourInfo: [{ endPoint: 3, isClosed: true }, { endPoint: 7, isClosed: true }],
+  };
+  const r = await fetch("/api/unionPath", { method: "POST", body: JSON.stringify({ path }) });
+  return await r.json();
+}"""
+
+
+def test_remove_overlap_is_done_in_the_browser(server, browser):
+    """Fontra's path operations (its server uses skia-pathops): answered in
+    the browser by booleanOperations over Pyodide's pyclipper."""
+    _needsHiveInTheBrowser()
+    if not (pathlib.Path(PYODIDE_DIR) / "pyodide-lock.json").read_text().count(
+        "pyclipper"
+    ) or not list(pathlib.Path(PYODIDE_DIR).glob("pyclipper-*.whl")):
+        pytest.skip("pyclipper's wheel is not next to Pyodide")
+    context = browser.new_context(viewport={"width": 1400, "height": 850})
+    page = context.new_page()
+    page.goto(f"{server}/editor.html?{TRY_PAGE_QUERY}")
+    page.wait_for_function("window.editorController?.fontController?.glyphMap?.A")
+    reply = page.evaluate(UNION)
+    assert "error" not in reply, reply
+    path = reply["returnValue"]
+    assert len(path["contourInfo"]) == 1
+    points = set(zip(path["coordinates"][::2], path["coordinates"][1::2]))
+    assert points == {
+        (0, 0), (100, 0), (100, 50), (150, 50), (150, 150), (50, 150), (50, 100), (0, 100)
+    }
+    reply = page.evaluate(
+        """fetch("/api/parseClipboard", {method: "POST", body: JSON.stringify({data:
+        '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0 L10 0 L10 10 Z"/></svg>'})})
+        .then(r => r.json())"""
+    )
+    assert reply["returnValue"]["path"]["pointTypes"] == [0, 0, 0]
+    context.close()
+
+
 def test_the_demo_is_kept_with_its_edits(server, browser):
     _needsHiveInTheBrowser()
     context = browser.new_context(viewport={"width": 1400, "height": 850})

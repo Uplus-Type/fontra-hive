@@ -29,6 +29,7 @@ const SITE = "/home/pyodide/hive";
 const REPOS = "/repos";
 const PERSIST_DELAY = 2500; // ms after an edit: the git backend commits after 1 s
 let pyodidePromise = null;
+let pyclipperPromise = null;
 let hivePromise = null;
 let counter = 0;
 const mounts = new Map(); // mount point → promise (loaded from IndexedDB)
@@ -391,6 +392,39 @@ const OPS = {
     });
     const data = await designspace(py, pkg, request.stem, work);
     return [{ data }, [data]];
+  },
+
+  // What the editor asks Fontra's server over HTTP (POST /api/<name>):
+  // path operations (Remove overlap, Union…) and pasting from other apps.
+  // The same functions (fontra.core.serverutils), path operations done by
+  // booleanOperations over Pyodide's pyclipper (hive_try_pathops).
+  async api(request, say) {
+    const py = await ready(request.base, say);
+    if (request.name !== "parseClipboard") {
+      if (!pyclipperPromise) {
+        pyclipperPromise = py.loadPackage("pyclipper", { messageCallback: () => {} });
+        pyclipperPromise.catch(() => (pyclipperPromise = null));
+      }
+      await pyclipperPromise;
+    }
+    const result = await call(
+      py,
+      `
+import json
+from fontra.core.serverutils import apiFunctions
+_f = apiFunctions.get(hive_args["name"])
+if _f is None:
+    _r = {"error": "unknown function " + hive_args["name"]}
+else:
+    try:
+        _r = {"returnValue": _f(**json.loads(hive_args["args"]))}
+    except Exception as error:
+        _r = {"error": repr(error)}
+json.dumps(_r)
+`,
+      { name: request.name, args: request.args }
+    );
+    return [{ body: result }];
   },
 
   async flush(request, say) {
