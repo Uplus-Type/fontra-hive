@@ -732,4 +732,74 @@ export async function start() {
   return hive;
 }
 
-if (!window.__hiveViewsNoAutoStart) start();
+// --- labels Fontra translated too early ---------------------------------------
+
+// Some of Fontra's labels are translated when its modules load (the font
+// overview's "Group by" choices, in glyph-organizer.js), while the language
+// strings are still on their way: over the network they arrive later than on
+// a local Fontra Pak, and the keys show ("glyph-organizing.group-by.script").
+// We load the same strings and replace any text that is exactly a known key,
+// in the page and in the components' shadow roots, now and as they render.
+// To be proposed upstream (translate when rendering); harmless once fixed.
+
+const KEY_PATTERN = /^[a-z][a-z0-9-]*(\.[a-z0-9-]+)+$/;
+
+export function translateLeftoverKeys(root, strings, onShadowRoot) {
+  let count = 0;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+  for (let node = walker.currentNode; node; node = walker.nextNode()) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node.nodeValue.trim();
+      if (KEY_PATTERN.test(text) && typeof strings[text] === "string") {
+        node.nodeValue = node.nodeValue.replace(text, strings[text]);
+        count++;
+      }
+    } else if (node.shadowRoot) {
+      onShadowRoot?.(node.shadowRoot);
+      count += translateLeftoverKeys(node.shadowRoot, strings, onShadowRoot);
+    }
+  }
+  return count;
+}
+
+async function languageStrings() {
+  let language = "en";
+  try {
+    language = JSON.parse(localStorage.getItem("fontra-language-language")) || "en";
+  } catch (error) {
+    // no setting: English
+  }
+  if (!/^[A-Za-z]{2,3}(-[A-Za-z]{2,4})?$/.test(language)) language = "en";
+  for (const locale of new Set([language, "en"])) {
+    try {
+      return (await import(`/lang/${locale}.js`)).strings;
+    } catch (error) {
+      // try English
+    }
+  }
+  return null;
+}
+
+export async function fixEarlyTranslations() {
+  const strings = await languageStrings();
+  if (!strings || !document.body) return null;
+  const observed = new WeakSet();
+  const observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      for (const node of mutation.addedNodes) translateLeftoverKeys(node, strings, observe);
+    }
+  });
+  const observe = (root) => {
+    if (observed.has(root)) return;
+    observed.add(root);
+    observer.observe(root, { childList: true, subtree: true });
+  };
+  observe(document.body);
+  translateLeftoverKeys(document.body, strings, observe);
+  return observer;
+}
+
+if (!window.__hiveViewsNoAutoStart) {
+  start();
+  fixEarlyTranslations();
+}

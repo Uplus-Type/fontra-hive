@@ -273,3 +273,56 @@ def test_helpers(browser_and_url):
         }""")
     assert result == ["JH", "AN", "JR", True, "A · in font info · bold"]
     page.close()
+
+
+def test_labels_translated_too_early_are_fixed(browser_and_url):
+    browser, base = browser_and_url
+    page = browser.new_page()
+    page.route(
+        "**/lang/fr.js*",
+        lambda route: route.fulfill(
+            content_type="text/javascript",
+            body='export const strings = {"glyph-organizing.group-by.script": "Système d’écriture"};',
+        ),
+    )
+    page.route(
+        "**/overview.html*",
+        lambda route: route.fulfill(
+            content_type="text/html",
+            body="""<!doctype html><html><head><script>
+              window.__hiveViewsNoAutoStart = true;
+              localStorage.setItem("fontra-language-language", JSON.stringify("fr"));
+            </script></head><body><div id=host></div>
+            <label> glyph-organizing.group-by.script </label>
+            <p>glyph-organizing.unknown</p><p>Some text.</p></body></html>""",
+        ),
+    )
+    page.goto(f"{base}/overview.html")
+    page.evaluate("""async () => {
+          const m = await import('/views/hive-views.js');
+          await m.fixEarlyTranslations();
+          // A component rendering later, in its shadow root.
+          const host = document.createElement('div');
+          host.id = 'host2';
+          const shadow = host.attachShadow({ mode: 'open' });
+          const box = document.createElement('div');
+          shadow.append(box);
+          document.getElementById('host').append(host);
+          document.body.append(document.createElement('span'));  // noise
+          await new Promise((r) => setTimeout(r, 50));
+          box.append(document.createTextNode('glyph-organizing.group-by.script'));
+          await new Promise((r) => setTimeout(r, 50));
+        }""")
+    assert (
+        page.evaluate("document.querySelector('label').textContent")
+        == " Système d’écriture "
+    )
+    assert (
+        page.evaluate("document.querySelector('p').textContent")
+        == "glyph-organizing.unknown"
+    )
+    assert (
+        page.evaluate("document.getElementById('host2').shadowRoot.textContent")
+        == "Système d’écriture"
+    )
+    page.close()
