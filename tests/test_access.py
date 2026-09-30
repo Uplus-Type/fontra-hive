@@ -49,7 +49,8 @@ def test_capabilities_grow_with_the_role():
     )
     assert {"edit", "branch", "snapshot"} <= CAPABILITIES["designer"]
     assert "merge" not in CAPABILITIES["designer"]
-    assert {"merge", "tag", "export", "invite"} <= CAPABILITIES["manager"]
+    assert {"merge", "tag", "export", "invite", "moderate"} <= CAPABILITIES["manager"]
+    assert "moderate" not in CAPABILITIES["designer"]
     assert (
         "administer" in CAPABILITIES["admin"]
         and "administer" not in CAPABILITIES["manager"]

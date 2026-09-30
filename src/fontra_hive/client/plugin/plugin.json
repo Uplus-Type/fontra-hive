@@ -1,6 +1,6 @@
 {
   "name": "Fontra Hive",
-  "description": "Glyph and font history from the project's git repository",
+  "description": "Glyph and font history from the project's git repository, and comments on glyphs",
   "init": "init.js",
   "function": "init"
 }

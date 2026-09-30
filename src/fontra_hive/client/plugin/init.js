@@ -24,7 +24,11 @@
 //     since the previous snapshot are grouped under it in the list (an empty
 //     commit plus a snapshot/<name> tag on the server; nothing is rewritten).
 //
+//   - comments on glyphs, in comments.js.
+//
 // Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
+
+import { initComments } from "./comments.js";
 
 const POLL_INTERVAL_MS = 1500; // how often the branch head is checked (a tiny request)
 const CONFIRM_TIMEOUT_MS = 5000; // how long "Confirm restore?" stays armed
@@ -1583,4 +1587,11 @@ export function init(editor, pluginPath) {
   const panel = new HiveHistoryPanel(editor);
   panel.iconPath = `${pluginPath}/history.svg`;
   editor.addSidebarPanel(panel, "right");
+  // Comments on glyphs: the Comment tool, pins on the canvas, post-its and
+  // the "Comments" panel (comments.js).
+  try {
+    initComments(editor, pluginPath);
+  } catch (error) {
+    console.error("Fontra Hive: comments could not start", error);
+  }
 }

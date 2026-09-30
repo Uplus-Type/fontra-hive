@@ -123,7 +123,10 @@ async () => {
     },
     visualizationLayers: { definitions: [], toggle: () => {} },
     canvasController: { requestUpdate: () => state.updates++ },
-    addSidebarPanel: (panel) => { document.body.append(panel); window.panel = panel; },
+    addSidebarPanel: (panel) => {
+      document.body.append(panel);
+      if (panel.identifier === "hive-history") window.panel = panel;
+    },
   };
   window.editor = editor;
   const plugin = await import("/init.js");

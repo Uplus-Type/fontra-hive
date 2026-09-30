@@ -25,6 +25,8 @@ the open-source, browser-based font editor. It is the open part of
 - `fontra hive-dev <folder>` — a development project manager (no
   authentication) serving every `<name>.git` repository of a folder, one
   project per branch (`Name`, `Name@branch`).
+- Comments on glyphs: numbered topics pinned to a point of a glyph's source,
+  kept on `refs/hive/comments` (see below).
 - `fontra-hive` — a small CLI: `init`, `import`, `export`, `log`, `branches`,
   `branch`, `tag`, `diff`, `snapshot`.
 
@@ -371,6 +373,50 @@ a commit on a 30,000-glyph tree takes about 0.3 s and a full tree diff about
 the same; fine for batched commits, and where pygit2/libgit2 would be used
 in production for a 10× margin.
 
+## Comments on glyphs
+
+Reviewers leave notes where they belong: on a point of a glyph, on one of
+its sources. Each comment is a numbered topic (#12) of the project with a
+thread of replies, open or resolved.
+
+- **The Comment tool** (a speech bubble in the toolbar): click in the glyph
+  being edited to pin a comment there, on the source being edited (at an
+  interpolated position there is no source: go to one first). Clicking over
+  another glyph of the line selects it, like the pointer tool.
+- **Pins on the canvas**, whatever the tool: a numbered pin at each open
+  topic of the glyphs shown, solid on the source it was written on, pale on
+  the glyph's other sources. A click opens the post-it (the thread, a reply
+  box — Enter sends, Shift+Enter makes a new line —, Resolve or Reopen,
+  edit and delete); dragging a pin moves it. The pins are a visualization
+  layer, "Hive: comments", that the View menu can switch off.
+- **The "Comments" panel** (right sidebar): the selected glyph's topics,
+  open then resolved, or the whole project's when no glyph is selected; a
+  click goes to the glyph and its source and opens the post-it. "Resolved"
+  shows resolved topics on the canvas too.
+- **Who may do what.** Reviewers and up (`comment`): open topics, reply,
+  edit their own messages, resolve, reopen and move their own topics.
+  Designers and up (`edit`): resolve, reopen and move any topic. Managers and
+  up (`moderate`): delete any topic or reply. Anyone may delete their own
+  reply, and their own topic while nobody else has written in it.
+- **Storage.** In the project's repository, outside the font's history: a
+  commit chain on `refs/hive/comments` (one JSON file per topic,
+  `issues/0012.json`, and a counter so numbers are never reused), one commit
+  per change authored by the person who made it, compare-and-swap on the
+  reference. Backups (bundles of all references) keep it; a plain
+  `git clone` does not fetch it (`git fetch origin refs/hive/comments` does).
+  A topic records the branch and the commit it was written on, and the
+  commit it was resolved on.
+
+```
+GET    /api/hive/projects/<name>/comments[?glyph=H]      topics, who you are, what you may do
+GET    /api/hive/projects/<name>/comments/head           changes with every comment (polled every 3 s)
+POST   /api/hive/projects/<name>/comments                {glyph, source: {layer, name, location}, point: {x, y}, text[, branch]}
+POST   /api/hive/projects/<name>/comments/<n>/messages   {text}
+PATCH  /api/hive/projects/<name>/comments/<n>            {state: "open"|"resolved"} or {point: {x, y}}
+PATCH  /api/hive/projects/<name>/comments/<n>/messages/<id>   {text}
+DELETE /api/hive/projects/<name>/comments/<n>[/messages/<id>]
+```
+
 ## Tests
 
 ```bash
@@ -396,7 +442,8 @@ hive-api Share dialog in a headless Chromium, like the next one.
 
 `tests/test_plugin_js.py` runs the editor plug-in in a headless Chromium
 against a fake editor and a mocked server (hover, pin, restore, snapshot
-groups and form). It needs Playwright (`pip install playwright && playwright
+groups and form); `tests/test_comments_js.py` does the same for comments
+(the tool, pins, post-its, the panel). It needs Playwright (`pip install playwright && playwright
 install chromium`) and is skipped otherwise.
 
 ## Design notes

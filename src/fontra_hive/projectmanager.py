@@ -42,6 +42,7 @@ from fontra.core.protocols import ProjectManager
 from . import merge as merging
 from .access import ROLES, Access, DevDirectory, token_for, username_from_token
 from .backend_git import GitFontraBackend
+from .commentroutes import CommentRoutesMixin
 from .fonthandler import HiveFontHandler
 from .glyphdiff import changed_sources, font_source_names
 from .gitstore import (
@@ -138,7 +139,7 @@ def splitProjectIdentifier(identifier: str) -> tuple[str, str]:
     return name, branch or DEFAULT_BRANCH
 
 
-class DevHiveProjectManager:
+class DevHiveProjectManager(CommentRoutesMixin):
     def __init__(
         self,
         rootPath: pathlib.Path,
@@ -517,6 +518,7 @@ class DevHiveProjectManager:
             ),
             web.get("/api/hive/projects/{name}/export", self.exportHandler),
             web.get("/api/hive/export-formats", self.exportFormatsHandler),
+            *self.commentRoutes(),
         ]
 
     async def exportFormatsHandler(self, request: web.Request) -> web.Response:

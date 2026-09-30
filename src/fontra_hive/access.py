@@ -61,6 +61,7 @@ _MINIMUM_ROLE = {
     "tag": "manager",
     "export": "manager",
     "invite": "manager",  # invite, change roles
+    "moderate": "manager",  # delete others' comments
     "administer": "admin",  # rename, trash, delete, transfer
 }
 

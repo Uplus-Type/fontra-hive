@@ -150,12 +150,34 @@ def _s(b: bytes) -> str:
     return b.decode("utf-8")
 
 
+def _is_safe_ref_name(name: str) -> bool:
+    """A name that stays inside ``refs/heads/`` or ``refs/tags/``: dulwich
+    reads loose references as files, so ``../../x`` would read any file."""
+    if not isinstance(name, str) or not name or len(name) > 255:
+        return False
+    if any(c in name for c in "\\\x00\n\r") or name.startswith("/"):
+        return False
+    return all(part not in ("", ".", "..") for part in name.split("/"))
+
+
 def _branch_ref(branch: str) -> bytes:
+    if not _is_safe_ref_name(branch):
+        raise KeyError(f"invalid branch name {branch!r}")
     return _b(f"refs/heads/{branch}")
 
 
 def _tag_ref(tag: str) -> bytes:
+    if not _is_safe_ref_name(tag):
+        raise KeyError(f"invalid tag name {tag!r}")
     return _b(f"refs/tags/{tag}")
+
+
+def swap_ref(refs, ref: bytes, old: bytes | None, new: bytes) -> bool:
+    """Compare-and-swap a reference. ``old`` None means the reference must not
+    exist yet (dulwich's ``set_if_equals`` would then set it unconditionally)."""
+    if old is None:
+        return refs.add_if_new(ref, new)
+    return refs.set_if_equals(ref, old, new)
 
 
 SNAPSHOT_TAG_PREFIX = "snapshot/"
@@ -240,7 +262,11 @@ class GitRepoStore:
     # --- references --------------------------------------------------------
 
     def head(self, branch: str = DEFAULT_BRANCH) -> str | None:
-        sha = self.repo.refs.read_ref(_branch_ref(branch))
+        try:
+            ref = _branch_ref(branch)
+        except KeyError:  # not a name a branch can have: no such branch
+            return None
+        sha = self.repo.refs.read_ref(ref)
         return _s(sha) if sha else None
 
     def branches(self) -> list[str]:
@@ -343,7 +369,7 @@ class GitRepoStore:
                 f"{'Forget' if info is None else 'Describe'} branch {name}\n"
             )
             store.add_object(c)
-            if self.repo.refs.set_if_equals(HIVE_META_REF, old, c.id):
+            if swap_ref(self.repo.refs, HIVE_META_REF, old, c.id):
                 return
         raise RefMovedError("refs/hive/meta", None, None)
 
@@ -565,7 +591,7 @@ class GitRepoStore:
         store.add_object(c)
 
         old = _b(current) if current else None
-        if not self.repo.refs.set_if_equals(ref, old, c.id):
+        if not swap_ref(self.repo.refs, ref, old, c.id):
             raise RefMovedError(branch, current, self.head(branch))
         return _s(c.id)
 
