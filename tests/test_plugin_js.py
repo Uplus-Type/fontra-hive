@@ -87,8 +87,12 @@ async () => {
     if (route === "head") return json({ head: sha("3") });
     if (route === "log") return json({
       head: sha("3"),
-      commits: [commit("3", "Edit A", null), commit("2", "Edit A", null),
-                commit("1", "Import", "v1")],
+      commits: q.glyph
+        ? [commit("3", "Edit A", null), commit("2", "Edit A", null),
+           commit("1", "Import", "v1")]
+        : [commit("3", "Edit A", null), commit("4", "Edit B", null),
+           commit("2", "Edit A", null), commit("5", "Snapshot V1", "v1"),
+           commit("1", "Import", "v1")],
       snapshots: [snapshot],
     });
     if (route === "snapshots") return json({
@@ -187,9 +191,7 @@ def test_rows_are_grouped_under_snapshots(page):
     page.evaluate("panel.shadowRoot.querySelector('.snapshot .caret').click()")
     assert page.evaluate("rows()")[-2:] == ["snapshot:5", "commit nested:1"]
     assert page.evaluate("rowFor('5').querySelector('.count').textContent") == "1"
-    assert "1 version of A, 4 changes in the project" in page.evaluate(
-        "rowFor('5').title"
-    )
+    assert "1 version of A, 4 changes in the font" in page.evaluate("rowFor('5').title")
 
 
 def test_hover_previews_and_leaving_clears(page):
@@ -299,8 +301,58 @@ def test_selecting_another_glyph_clears_everything(page):
     assert page.evaluate("drawCall()") is None
 
 
+def select(page, glyph):
+    page.evaluate(f"""async () => {{
+          editor.sceneController.sceneSettings.selectedGlyphName = {glyph!r};
+          state.listeners.forEach((f) => f());
+          await wait(50);
+        }}""".replace("None", "null"))
+
+
+def test_font_history_when_no_glyph_is_selected(page):
+    page.evaluate(SETUP)
+    title = "panel.shadowRoot.querySelector('.title').textContent"
+    assert page.evaluate(title) == "Glyph history"
+    assert page.evaluate(
+        "panel.snapshotButton.hidden"
+    )  # a snapshot is the whole font's
+    select(page, None)
+    assert page.evaluate(title) == "Font history"
+    assert not page.evaluate("panel.snapshotButton.hidden")
+    assert (
+        page.evaluate("state.requests.filter(r => r.route === 'log').at(-1).glyph")
+        is None
+    )
+    # Every change, the snapshot commit only as its row; nothing to preview.
+    assert page.evaluate("rows()") == [
+        "summary-line",
+        "group-label",
+        "commit current:3",
+        "commit:4",
+        "commit:2",
+        "snapshot:5",
+    ]
+    assert page.evaluate(
+        "panel.shadowRoot.querySelector('.summary-line').textContent"
+    ) == ("The whole font — 4 changes")
+    page.evaluate(
+        "rowFor('4').dispatchEvent(new MouseEvent('mouseenter')); rowFor('4').click()"
+    )
+    page.evaluate("wait(200)")
+    assert page.evaluate("[panel.pinned, panel.hovered]") == [None, None]
+    assert "Select a glyph" in page.evaluate("statusText()")
+    # Selecting a glyph again: its history, and an open snapshot form closes.
+    page.evaluate("panel.snapshotButton.click()")
+    select(page, "A")
+    assert page.evaluate(title) == "Glyph history"
+    assert page.evaluate("panel.snapshotForm") is None
+    assert page.evaluate("rows()")[0] == "summary-line"
+    assert page.errors == []
+
+
 def test_snapshot_form(page):
     page.evaluate(SETUP)
+    select(page, None)
     page.evaluate("panel.snapshotButton.click()")
     page.evaluate("wait(50)")
     form = "panel.shadowRoot.querySelector('.snapshot-form')"

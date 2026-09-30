@@ -201,7 +201,8 @@ manage.py invite someone@example.com --project owner/name --role designer`
 ## Glyph history in the editor (plug-in)
 
 The package also ships an editor plug-in: a "Glyph history" panel in the right
-sidebar listing every commit that touched the selected glyph, one compact
+sidebar listing every commit that touched the selected glyph (with no glyph
+selected, it becomes "Font history": the changes of the whole font), one compact
 line each (author, message, date; the full message, sha and time in the
 tooltip), refreshed as you edit. It uses Fontra's editor plug-in mechanism
 and is served by the Fontra server itself under `/hive/plugin/`.
@@ -229,7 +230,8 @@ and is served by the Fontra server itself under `/hive/plugin/`.
   the user, and every editor connected to the project reloads the glyph
   through the same path as any external change. The restore is not part
   of the editor's undo stack; restoring the previous version undoes it.
-- **Snapshots.** "Snapshot…" names the current state of the branch
+- **Snapshots.** "Snapshot…", in the font history (a snapshot concerns the
+  whole font, not one glyph), names the current state of the branch
   ("Proofs sent to client") and groups under that name every commit made
   since the previous snapshot. The list then shows the changes since the
   last snapshot, followed by one collapsible row per snapshot (how many

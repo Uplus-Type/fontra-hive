@@ -1,4 +1,5 @@
-// Fontra Hive editor plug-in: "Glyph history" sidebar panel.
+// Fontra Hive editor plug-in: the history sidebar panel ("Glyph history" when
+// a glyph is selected, "Font history" when none is).
 //
 // Loaded by Fontra's editor plug-in mechanism (Application settings → Plugins,
 // address "/hive/plugin"): the editor fetches plugin.json, imports this module
@@ -9,13 +10,15 @@
 //
 // What it does:
 //   - lists the commits that touched the selected glyph (author, time, message);
+//     with no glyph selected, the changes of the whole font;
 //   - hover a version to see it as an overlay on the glyph canvas itself (a
 //     visualization layer added at runtime, drawn in glyph coordinates); click
 //     to keep it there ("pinned", drawn stronger than a hovered one);
 //   - "Restore" (in the preview bar under the list) asks the server to commit that glyph file again
 //     on top of the branch: history is never rewritten, and the editor picks
 //     the change up like any external change;
-//   - "Snapshot…" names the current state of the branch: the commits made
+//   - "Snapshot…" (in the font history only, as it concerns the whole font)
+//     names the current state of the branch: the commits made
 //     since the previous snapshot are grouped under it in the list (an empty
 //     commit plus a snapshot/<name> tag on the server; nothing is rewritten).
 //
@@ -89,6 +92,9 @@ const STYLES = `
     display: flex;
     gap: 0.3em;
     margin-left: auto;
+  }
+  .snapshot-button[hidden] {
+    display: none;
   }
   .snapshot-button.active {
     background: rgba(128, 128, 128, 0.25);
@@ -493,7 +499,7 @@ class HiveHistoryPanel extends HTMLElement {
     super();
     this.editor = editor;
     this.visible = false;
-    this.lastGlyph = null;
+    this.lastGlyph = undefined; // glyph of the list shown; null: the font history
     this.head = null;
     this.loading = false;
     this.timer = null;
@@ -526,11 +532,12 @@ class HiveHistoryPanel extends HTMLElement {
       // in which case their own mouseleave never fires.
       onmouseleave: () => this.unhover(null),
     });
+    this.titleElement = el("span", { class: "title" }, ["Font history"]);
     this.snapshotButton = el(
       "button",
       {
         class: "snapshot-button",
-        title: "Group the changes made since the last snapshot under a name",
+        title: "Name the current state of the whole font: groups the changes made since the last snapshot",
         onclick: () => this.toggleSnapshotForm(),
       },
       ["Snapshot…"]
@@ -546,7 +553,7 @@ class HiveHistoryPanel extends HTMLElement {
         },
       }, [
         el("div", { class: "header" }, [
-          el("span", { class: "title" }, ["Glyph history"]),
+          this.titleElement,
           this.branchElement,
           el("span", { class: "tools" }, [
             this.snapshotButton,
@@ -637,25 +644,31 @@ class HiveHistoryPanel extends HTMLElement {
     }
   }
 
+  // The header follows the selection: a glyph's history, or the font's (where
+  // snapshots are made, since a snapshot names the state of the whole font).
+  updateHeader(glyphName) {
+    this.titleElement.textContent = glyphName ? "Glyph history" : "Font history";
+    this.snapshotButton.hidden = !!glyphName;
+    if (glyphName && this.snapshotForm) this.toggleSnapshotForm();
+  }
+
   async refresh(force = false) {
     if (!this.visible && !force) return;
     const glyphName = this.selectedGlyphName;
-    if (!glyphName) {
-      this.lastGlyph = null;
-      this.commits = [];
-      this.snapshots = [];
-      this.render(null, "Select a glyph to see its history.");
-      return;
-    }
+    this.updateHeader(glyphName);
     if (glyphName === this.lastGlyph && !force) return;
     this.loading = true;
     let data;
     try {
-      const response = await fetch(this.apiURL("log", { glyph: glyphName, limit: 100 }));
+      const params = glyphName ? { glyph: glyphName, limit: 100 } : { limit: 100 };
+      const response = await fetch(this.apiURL("log", params));
       if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
       data = await response.json();
     } catch (error) {
-      this.render(null, `Could not load history (${error.message}).`, true);
+      this.lastGlyph = undefined;
+      this.commits = [];
+      this.snapshots = [];
+      this.render(glyphName, `Could not load history (${error.message}).`, true);
       return;
     } finally {
       this.loading = false;
@@ -664,10 +677,14 @@ class HiveHistoryPanel extends HTMLElement {
     if (glyphName !== this.lastGlyph) this.expanded.clear();
     this.lastGlyph = glyphName;
     this.head = data.head;
-    this.commits = data.commits;
     this.snapshots = data.snapshots || [];
-    this.render(glyphName, data.commits.length ? null : `No history yet for ${glyphName}.`);
-    this.preload(glyphName);
+    // The font's history walks the snapshot commits too: they are the
+    // snapshot rows, not versions.
+    const snapshotShas = new Set(this.snapshots.map((s) => s.sha));
+    this.commits = data.commits.filter((c) => !snapshotShas.has(c.sha));
+    const empty = glyphName ? `No history yet for ${glyphName}.` : "No history yet.";
+    this.render(glyphName, this.commits.length || this.snapshots.length ? null : empty);
+    if (glyphName) this.preload(glyphName);
   }
 
   // Rows in display order: changes since the last snapshot, then one
@@ -683,19 +700,22 @@ class HiveHistoryPanel extends HTMLElement {
   }
 
   render(glyphName, note, isError = false) {
-    const commits = glyphName ? this.commits : [];
+    const commits = this.commits;
     this.listElement.replaceChildren();
-    if (glyphName) {
+    if (!isError) {
+      const n = commits.length;
       this.listElement.append(
         el("div", { class: "summary-line" }, [
-          `${glyphName} — ${commits.length} version${commits.length === 1 ? "" : "s"}`,
+          glyphName
+            ? `${glyphName} — ${n} version${n === 1 ? "" : "s"}`
+            : `The whole font — ${n >= 100 ? "the last " : ""}${n} change${n === 1 ? "" : "s"}`,
         ])
       );
     }
     if (note) {
       this.listElement.append(el("div", { class: isError ? "empty error" : "empty" }, [note]));
     }
-    if (glyphName) {
+    if (!isError) {
       const snapshots = this.snapshots;
       const { loose, bySnapshot } = this.groupCommits();
       if (snapshots.length && loose.length) {
@@ -744,9 +764,9 @@ class HiveHistoryPanel extends HTMLElement {
   // Hover and click behaviour shared by commit and snapshot rows.
   attachPreviewHandlers(row, sha, glyphName, isCurrent) {
     row.dataset.sha = sha;
-    if (isCurrent) {
-      // The current version is what the canvas shows already: clicking it
-      // deselects whatever was pinned.
+    if (isCurrent || !glyphName) {
+      // The current version is what the canvas shows already, and a version
+      // of the whole font has no glyph to preview: clicking deselects.
       row.addEventListener("click", (event) => {
         if (!event.target.closest("button")) this.clearPreview();
       });
@@ -777,9 +797,10 @@ class HiveHistoryPanel extends HTMLElement {
       "div",
       {
         class: classes.join(" "),
-        title: isCurrent
-          ? details
-          : `${details}\n\nHover to preview this version on the canvas, click to keep it`,
+        title:
+          isCurrent || !glyphName
+            ? details
+            : `${details}\n\nHover to preview this version on the canvas, click to keep it`,
       },
       [
         el("span", { class: "author" }, [commit.author || "?"]),
@@ -805,7 +826,13 @@ class HiveHistoryPanel extends HTMLElement {
       "button",
       {
         class: "caret",
-        title: count ? (isOpen ? "Hide the versions" : "Show the versions") : "No change to this glyph",
+        title: count
+          ? isOpen
+            ? "Hide the versions"
+            : "Show the versions"
+          : glyphName
+            ? "No change to this glyph"
+            : "No change",
         onclick: (event) => {
           event.stopPropagation();
           if (this.expanded.has(snapshot.name)) this.expanded.delete(snapshot.name);
@@ -821,11 +848,15 @@ class HiveHistoryPanel extends HTMLElement {
       {
         class: classes.join(" "),
         title:
-          `Snapshot “${snapshot.title}” (snapshot/${snapshot.name})\n` +
+          `Snapshot “${snapshot.title}” (snapshot/${snapshot.name}), of the whole font\n` +
           `${snapshot.author} — ${formatFullDate(snapshot.time)}\n` +
-          `${count} version${count === 1 ? "" : "s"} of ${glyphName}, ` +
-          `${snapshot.changes} change${snapshot.changes === 1 ? "" : "s"} in the project` +
-          (isCurrent ? " (current)" : "\n\nHover to preview the glyph at this snapshot, click to keep it"),
+          (glyphName ? `${count} version${count === 1 ? "" : "s"} of ${glyphName}, ` : "") +
+          `${snapshot.changes} change${snapshot.changes === 1 ? "" : "s"} in the font` +
+          (isCurrent
+            ? " (current)"
+            : glyphName
+              ? "\n\nHover to preview the glyph at this snapshot, click to keep it"
+              : ""),
       },
       [
         caret,
@@ -861,7 +892,9 @@ class HiveHistoryPanel extends HTMLElement {
     if (!p) {
       this.statusElement.append(
         el("span", { class: "text hint" }, [
-          this.lastGlyph ? "Hover a version to preview it, click to keep it" : "",
+          this.lastGlyph
+            ? "Hover a version to preview it, click to keep it"
+            : "Select a glyph to preview and restore its versions",
         ])
       );
       return;
