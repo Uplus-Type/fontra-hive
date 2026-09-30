@@ -227,6 +227,8 @@ class DevHiveProjectManager(CommentRoutesMixin):
         """Fontra's own view page, with the Hive script added. With accounts,
         a visitor who is not signed in goes to the sign-in page first and
         comes back here afterwards."""
+        if _isTryRequest(request, view):
+            return await self.tryViewHandler(request, view=view)
         if self.directory is not None and await self.authorize(request) is None:
             ref = quote(str(getattr(request, "path_qs", f"/{view}.html")), safe="")
             raise web.HTTPFound(f"/?ref={ref}")
@@ -235,6 +237,22 @@ class DevHiveProjectManager(CommentRoutesMixin):
         except FileNotFoundError:
             raise web.HTTPNotFound()
         return _htmlResponse(injectHiveScripts(text))
+
+    async def tryViewHandler(self, request: web.Request, *, view: str) -> web.Response:
+        """"Try Fontra": Fontra's own page with the demo engine, open to all.
+
+        The font never reaches this server: ``client/try/try-engine.js``
+        answers the editor's WebSocket calls in the browser, from the demo
+        font. So there is nothing to sign in to, and nothing is saved."""
+        try:
+            text = self.fontraClientFile(f"{view}.html").read_text(encoding="utf-8")
+        except FileNotFoundError:
+            raise web.HTTPNotFound()
+        return _htmlResponse(injectTryScripts(text))
+
+    async def tryHandler(self, request: web.Request) -> web.Response:
+        """/try: the demo editor, with a line of text to start from."""
+        raise web.HTTPFound(TRY_START)
 
     async def devLoginHandler(self, request: web.Request) -> web.Response:
         form = await request.post()
@@ -500,6 +518,7 @@ class DevHiveProjectManager(CommentRoutesMixin):
                 web.get(f"/{view}.html", partial(self.viewHandler, view=view))
                 for view in FONTRA_VIEWS
             ),
+            web.get("/try", self.tryHandler),
             web.get("/hive/{path:.*}", self.clientFileHandler),
             web.get("/favicon.ico", self.faviconHandler),
             web.get("/api/hive/me", self.meHandler),
@@ -1495,6 +1514,7 @@ CLIENT_CONTENT_TYPES = {
     "png": "image/png",
     "jpg": "image/jpeg",
     "webp": "image/webp",
+    "txt": "text/plain",
     "ico": "image/x-icon",
     "webmanifest": "application/manifest+json",
 }
@@ -1614,6 +1634,38 @@ def injectHiveScripts(html: str) -> str:
     else:
         html = html + HIVE_BODY_SCRIPT
     return html
+
+
+# "Try Fontra" (client/try): the demo project's identifier, never a Hive
+# project (those are "owner/name") nor a project of the dev server.
+TRY_PROJECT = "demo:MutatorSans"
+TRY_VIEWS = ("editor", "fontoverview", "fontinfo")
+TRY_START = (
+    "/editor.html?project="
+    + quote(TRY_PROJECT, safe="")
+    + "&text=%22HAMBURGEFONSTIV%22"
+)
+TRY_HEAD_SCRIPT = '<script src="/hive/try/try-engine.js"></script>'
+TRY_BODY_SCRIPT = '<script type="module" src="/hive/try/try-banner.js"></script>'
+
+
+def _isTryRequest(request, view: str) -> bool:
+    query = getattr(request, "query", None) or {}
+    return view in TRY_VIEWS and query.get("project") == TRY_PROJECT
+
+
+def injectTryScripts(html: str) -> str:
+    """Fontra's page for "Try Fontra": the demo engine first in <head> (it
+    must replace the WebSocket before Fontra's modules run), Hive's icons,
+    and the notice at the end of <body>. None of Hive's own scripts."""
+    lower = html.lower()
+    head = lower.find("<head>")
+    cut = head + len("<head>") if head != -1 else 0
+    html = html[:cut] + TRY_HEAD_SCRIPT + HIVE_ICON_LINKS + html[cut:]
+    body = html.lower().rfind("</body>")
+    if body == -1:
+        return html + TRY_BODY_SCRIPT
+    return html[:body] + TRY_BODY_SCRIPT + html[body:]
 
 
 def _htmlResponse(text: str) -> web.Response:

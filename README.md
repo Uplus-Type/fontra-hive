@@ -458,6 +458,34 @@ POST   /api/hive/projects/<name>/comments/<n>/restore    bring one back (manager
 GET    /api/hive/projects/<name>/comments/summary        {open, resolved}; never creates the repository
 ```
 
+## "Try Fontra" without a server
+
+`/try` opens Fontra's editor on a demo font, for anyone, with no account:
+the font never reaches the server. `client/try/try-engine.js`, loaded first
+on Fontra's pages for the project `demo:MutatorSans` (editor, font overview,
+font info), replaces the editor's WebSocket by an object that answers the
+same calls (`getGlyph`, `getAxes`, `editFinal`…) in the browser, from
+`client/try/demo-font.json` (MutatorSans, BSD licence, see
+`MUTATORSANS-LICENSE.txt`). Edits stay in the tab; a reload starts over.
+After an edit, the engine reads the edited data back from the page's
+`FontController`, so it needs no copy of Fontra's path operations. The Hive
+plug-in is hidden there (it needs a Hive project), and a notice at the
+bottom (`try-banner.js`) says what the page is and links to Hive. Nothing in
+Fontra is changed or rebuilt: the page is Fontra's own `editor.html`.
+
+Limits: each window has its own copy of the font (an edit in the editor does
+not show in a font overview opened next to it); what Fontra asks its server
+over HTTP (`/api/unionPath` and the other path operations, `parseClipboard`)
+is not answered, so Remove overlap and pasting from other apps fail; no
+export.
+
+To change the demo font: convert a font to `.fontra` with Fontra
+(`fontra-copy`), then write the JSON with the same calls as the engine
+(`getGlyphMap`, `getGlyph` for each glyph, `getAxes`, `getSources`,
+`getUnitsPerEm`, `getFontInfo`, `getKerning`, `getFeatures`,
+`getCustomData`, `getConditionalSubstitutions`), unstructured with
+`fontra.core.classes.unstructure`.
+
 ## Tests
 
 ```bash

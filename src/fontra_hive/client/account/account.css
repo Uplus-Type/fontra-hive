@@ -46,6 +46,8 @@ button {
 button:disabled { opacity: 0.5; cursor: default; }
 button.secondary { background: #8883; color: inherit; }
 .links { margin-top: 1em; font-size: 0.9em; opacity: 0.8; display: flex; gap: 1.5em; }
+.try { margin: 1.4em 0 0; font-size: 0.95em; }
+.try a { color: #f3c744; }
 a { color: inherit; }
 .error { color: var(--fontra-red-color, #f11759); font-size: 0.9em; min-height: 1.2em; }
 .note { font-size: 0.9em; opacity: 0.75; line-height: 1.4; }
