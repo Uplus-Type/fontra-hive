@@ -252,12 +252,14 @@ def test_a_reviewer_opens_and_answers_a_topic(team, root):
             "resolveAny": False,
             "organize": False,
             "moderate": False,
+            "administer": False,
         }
         assert (await answer(await team.commentsHandler(request("ria"))))["can"] == {
             "comment": True,
             "resolveAny": False,
             "organize": False,
             "moderate": False,
+            "administer": False,
         }
         head = await answer(await team.commentsHeadHandler(request("otto")))
         assert head == {"head": created["head"]}
@@ -434,6 +436,7 @@ def test_without_accounts_everyone_may_do_everything(root):
             "resolveAny": True,
             "organize": True,
             "moderate": True,
+            "administer": True,
         }
         await manager.deleteCommentHandler(request(number=1))
 
@@ -580,9 +583,14 @@ def test_a_topic_may_be_given_a_title(team):
             )
         )
         assert done["issue"]["title"] == "Terminal too heavy"
-        done = await answer(
+        for other in ["dan", "mona"]:  # a designer, a manager
+            with pytest.raises(web.HTTPForbidden):
+                await team.updateCommentHandler(
+                    request(other, body={"title": "x"}, number=1)
+                )
+        done = await answer(  # the project's owner (admin)
             await team.updateCommentHandler(
-                request("dan", body={"title": ""}, number=1)
+                request("owner", body={"title": ""}, number=1)
             )
         )
         assert done["issue"]["title"] is None

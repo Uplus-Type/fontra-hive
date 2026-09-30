@@ -232,7 +232,13 @@ async ({ you, can, issues }) => {
 
 ANA = {"username": "ana", "name": "Ana Reviewer"}
 BOB = {"username": "bob", "name": "Bob Designer"}
-ALL = {"comment": True, "resolveAny": True, "organize": True, "moderate": True}
+ALL = {
+    "comment": True,
+    "resolveAny": True,
+    "organize": True,
+    "moderate": True,
+    "administer": True,
+}
 REVIEWER = {"comment": True, "resolveAny": False, "organize": False, "moderate": False}
 
 
@@ -761,6 +767,16 @@ def test_a_click_outside_closes_the_post_it(page):
 
 
 def test_an_optional_title(page):
+    # A designer who is not the author cannot title it either.
+    p = page(you=ANA, can={**ALL, "administer": False}, issues=[topic(2, author=BOB)])
+    p.evaluate("comments.open(2)")
+    p.evaluate("frame()")
+    assert p.evaluate("card().querySelector('.title-row')") is None
+    # An admin can.
+    p = page(you=ANA, can=ALL, issues=[topic(2, author=BOB)])
+    p.evaluate("comments.open(2)")
+    p.evaluate("frame()")
+    assert p.evaluate("card().querySelector('.add-title')") is not None
     p = page(you=ANA, can=REVIEWER, issues=[topic(1, author=ANA), topic(2, author=BOB)])
     p.evaluate("comments.open(2)")  # not hers: no way to name it
     p.evaluate("frame()")

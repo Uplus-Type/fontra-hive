@@ -11,6 +11,8 @@ Who may do what:
   it to a member of the project, label it;
 - ``moderate`` (managers and up): delete any topic or message.
 
+A topic's title: its author, or the project's admins (``administer``).
+
 A person may also delete their own reply, and their own topic as long as
 nobody else has written in it. Without accounts (development), everyone may
 do everything.
@@ -110,6 +112,7 @@ class CommentRoutesMixin:
             "resolveAny": _can(access, "edit") and not self.readOnly,
             "organize": _can(access, "edit") and not self.readOnly,  # assign, label
             "moderate": _can(access, "moderate") and not self.readOnly,
+            "administer": _can(access, "administer") and not self.readOnly,  # titles
         }
 
     async def _commentChange(self, request, capability: str, change):
@@ -209,9 +212,10 @@ class CommentRoutesMixin:
         return await self._commentChange(request, "comment", change)
 
     async def updateCommentHandler(self, request) -> web.Response:
-        """Resolve or reopen (``state``), move the pin (``point``), rename
-        (``title``; null or empty: the first message is the title again) —
-        its author or designers and up —, or organize: ``assignee`` (a
+        """Resolve or reopen (``state``), move the pin (``point``) — its
+        author or designers and up —, give it a title (``title``; null or
+        empty: the first message is the title again) — its author or the
+        project's admins —, or organize: ``assignee`` (a
         member's username, or null) and/or ``labels`` (designers and up)."""
         number = _number(request)
         body = await _jsonBody(request)
@@ -235,10 +239,16 @@ class CommentRoutesMixin:
                         "only its author or a designer can change this topic"
                     )
 
+            def checkTitle(issue):
+                if not (_can(access, "administer") or _isAuthor(issue, who)):
+                    raise CommentForbidden(
+                        "only its author or the project's admins can title this topic"
+                    )
+
             signature = _signature(access, self.author)
             if titling:
                 return comments.set_title(
-                    number, body["title"], check=check, author=signature
+                    number, body["title"], check=checkTitle, author=signature
                 )
             if point is not None:
                 return comments.move(number, point, check=check, author=signature)

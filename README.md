@@ -394,7 +394,7 @@ thread of replies, open or resolved.
   click goes to the glyph and its source and opens the post-it. "Resolved"
   shows resolved topics on the canvas too.
 - **Title.** A topic's first message stands for its title; its author and
-  designers and up may give it one ("Add a title" in the post-it), and
+  the project's admins may give it one ("Add a title" in the post-it), and
   empty it to go back to the first message.
 - **Organize.** Designers and up assign a topic to a member of the project
   and give it labels (free, with the project's labels as suggestions), from

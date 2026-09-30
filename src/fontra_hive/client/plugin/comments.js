@@ -639,7 +639,7 @@ export class HiveComments {
     this.issues = [];
     this.head = undefined;
     this.you = null;
-    this.can = { comment: false, resolveAny: false, moderate: false };
+    this.can = { comment: false, resolveAny: false, organize: false, moderate: false, administer: false };
     this.loaded = false;
     this.showResolved = false;
     this.openNumber = null; // the topic whose post-it is open
@@ -931,6 +931,11 @@ export class HiveComments {
 
   mayChangeState(issue) {
     return this.can.comment && (this.can.resolveAny || this.isMine(issue));
+  }
+
+  // A topic's title: its author, or the project's admins.
+  mayRename(issue) {
+    return this.can.comment && (this.can.administer || this.isMine(issue));
   }
 
   mayMove(issue) {
@@ -1400,9 +1405,9 @@ export class HiveComments {
   }
 
   // The title, when the topic has one (else its first message stands for
-  // it); its author and designers and up may give or change it.
+  // it); its author and the project's admins may give or change it.
   titleRow(issue) {
-    const editable = this.mayChangeState(issue);
+    const editable = this.mayRename(issue);
     if (this.renaming === issue.number && editable) {
       const input = el("input", {
         class: "title-input",
