@@ -38,3 +38,5 @@ def test_landing_and_home_link_the_legal_pages():
     for page in ("login.html", "home.html", "invitation.html"):
         html = (ACCOUNT / page).read_text(encoding="utf-8")
         assert 'href="/terms' in html and 'href="/legal' in html, page
+    for page in ("login.html", "home.html"):
+        assert 'href="/pricing"' in (ACCOUNT / page).read_text(encoding="utf-8"), page
