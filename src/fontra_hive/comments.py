@@ -305,6 +305,94 @@ class CommentStore:
                 time.sleep(0.01)
         raise RefMovedError("refs/hive/comments", None, None)
 
+    # --- reading the past ---------------------------------------------------
+
+    def _walk(self):
+        """The commits of the comments, newest first: (commit, number)."""
+        head = self.repo.refs.read_ref(COMMENTS_REF)
+        sha = head
+        while sha:
+            commit = self.repo[sha]
+            yield commit, _comment_number(commit.message.decode("utf-8", "replace"))
+            sha = commit.parents[0] if commit.parents else None
+
+    def _file_at(self, commit, path: str) -> dict | None:
+        blob_id = self._files(commit.id).get(path)
+        return None if blob_id is None else self._read(blob_id)
+
+    def history(self, number: int) -> list[dict]:
+        """Every change of a topic, newest first: who, when, what (the first
+        line of the commit message) and the topic as it was after it (None
+        once deleted). Messages edited or deleted can be read here."""
+        path = issue_path(number)
+        result = []
+        for commit, n in self._walk():
+            if n != number:
+                continue
+            author = commit.author.decode("utf-8", "replace")
+            result.append(
+                {
+                    "sha": commit.id.decode("ascii"),
+                    "author": author.split(" <")[0],
+                    "time": commit.author_time,
+                    "summary": commit.message.decode("utf-8", "replace").split("\n")[0],
+                    "issue": self._file_at(commit, path),
+                }
+            )
+        if not result:
+            raise CommentNotFound(f"no comment #{number}")
+        return result
+
+    def deleted(self) -> list[dict]:
+        """Topics deleted and not restored, newest deletion first: the topic
+        as it was, and who deleted it when."""
+        current = {
+            path
+            for path in self._files(self.repo.refs.read_ref(COMMENTS_REF))
+            if path.startswith(ISSUES_DIR)
+        }
+        seen: set[int] = set()
+        result = []
+        for commit, n in self._walk():
+            if n is None or n in seen or issue_path(n) in current:
+                continue
+            seen.add(n)
+            if not commit.parents:
+                continue
+            if self._file_at(commit, issue_path(n)) is not None:
+                continue  # its last change was not the deletion
+            before = self._file_at(self.repo[commit.parents[0]], issue_path(n))
+            if before is None:
+                continue
+            result.append(
+                {
+                    "number": n,
+                    "deletedBy": commit.author.decode("utf-8", "replace").split(" <")[
+                        0
+                    ],
+                    "deletedAt": commit.author_time,
+                    "issue": before,
+                }
+            )
+        return result
+
+    def restore(self, number: int, author: Signature = SERVER_SIGNATURE) -> dict:
+        """Bring a deleted topic back, as it was when it was deleted."""
+        found = next((d for d in self.deleted() if d["number"] == number), None)
+        if found is None:
+            raise CommentNotFound(f"#{number} is not a deleted comment")
+        issue = found["issue"]
+
+        def apply(files, read):
+            if read(issue_path(number)) is not None:
+                raise CommentError(f"#{number} exists")
+            message = (
+                f"Restore #{number} on {issue.get('glyph')}\n\nHive-Comment: {number}\n"
+            )
+            return {issue_path(number): issue}, message, issue
+
+        return self._change(apply, author)
+
     # --- operations ---------------------------------------------------------
 
     def create(
@@ -577,6 +665,16 @@ class CommentStore:
             return {issue_path(number): None}, message, None
 
         self._change(apply, author)
+
+
+def _comment_number(message: str) -> int | None:
+    for line in reversed(message.splitlines()):
+        if line.startswith("Hive-Comment:"):
+            try:
+                return int(line.split(":", 1)[1])
+            except ValueError:
+                return None
+    return None
 
 
 def _message(issue: dict, message_id: int) -> dict:

@@ -88,6 +88,10 @@ class CommentRoutesMixin:
             web.get(base, self.commentsHandler),
             web.post(base, self.createCommentHandler),
             web.get(base + "/head", self.commentsHeadHandler),
+            web.get(base + "/summary", self.commentsSummaryHandler),
+            web.get(base + "/deleted", self.deletedCommentsHandler),
+            web.get(base + "/{number}/history", self.commentHistoryHandler),
+            web.post(base + "/{number}/restore", self.restoreCommentHandler),
             web.patch(base + "/{number}", self.updateCommentHandler),
             web.delete(base + "/{number}", self.deleteCommentHandler),
             web.post(base + "/{number}/messages", self.replyCommentHandler),
@@ -98,6 +102,12 @@ class CommentRoutesMixin:
         ]
 
     # --- helpers --------------------------------------------------------------
+
+    async def _projectIfExists(self, request, name: str):
+        """The project's repository (None if it has none yet) and the
+        requester's access. The Hive manager overrides it: its ``_project``
+        creates a missing repository."""
+        return await self._project(request, name, "read")
 
     async def _commentContext(self, request, capability: str):
         name = request.match_info["name"]
@@ -173,6 +183,53 @@ class CommentRoutesMixin:
             return web.json_response({"head": CommentStore(store).head()})
         finally:
             store.close()
+
+    async def commentsSummaryHandler(self, request) -> web.Response:
+        """How many topics are open and resolved (for the project cards).
+        Never creates the project's repository: none yet, no comments."""
+        repoPath, _ = await self._projectIfExists(request, request.match_info["name"])
+        if repoPath is None:
+            return web.json_response({"open": 0, "resolved": 0})
+        store = GitRepoStore.open(repoPath)
+        try:
+            issues = CommentStore(store).issues()
+        finally:
+            store.close()
+        open_ = sum(1 for issue in issues if issue.get("state") == "open")
+        return web.json_response({"open": open_, "resolved": len(issues) - open_})
+
+    async def commentHistoryHandler(self, request) -> web.Response:
+        """Every change of a topic (edited messages included), newest first."""
+        number = _number(request)
+        _, repoPath, _ = await self._commentContext(request, "read")
+        store = GitRepoStore.open(repoPath)
+        try:
+            try:
+                history = CommentStore(store).history(number)
+            except CommentNotFound as error:
+                raise web.HTTPNotFound(text=str(error))
+        finally:
+            store.close()
+        return web.json_response({"number": number, "history": history})
+
+    async def deletedCommentsHandler(self, request) -> web.Response:
+        """Topics deleted and not restored (managers and up)."""
+        _, repoPath, _ = await self._commentContext(request, "moderate")
+        store = GitRepoStore.open(repoPath)
+        try:
+            deleted = CommentStore(store).deleted()
+        finally:
+            store.close()
+        return web.json_response({"deleted": deleted})
+
+    async def restoreCommentHandler(self, request) -> web.Response:
+        """Bring a deleted topic back (managers and up)."""
+        number = _number(request)
+
+        def change(comments, access, who, store):
+            return comments.restore(number, author=_signature(access, self.author))
+
+        return await self._commentChange(request, "moderate", change)
 
     # --- writing --------------------------------------------------------------
 

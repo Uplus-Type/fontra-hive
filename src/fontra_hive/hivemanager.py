@@ -323,6 +323,11 @@ class HiveProjectManager(DevHiveProjectManager):
         exists = self._repoPathFor(projectAccess).is_dir()
         return web.json_response({"exists": exists})
 
+    async def _projectIfExists(self, request: web.Request, name: str):
+        projectAccess = await self._projectAccess(request, name)
+        path = self._repoPathFor(projectAccess)
+        return (path if path.is_dir() else None), projectAccess.access
+
     async def importHandler(self, request: web.Request) -> web.Response:
         """Replace a project's font with an uploaded one (multipart field
         ``file``), converted from any format Fontra reads. A new commit:

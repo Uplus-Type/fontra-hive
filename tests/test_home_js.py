@@ -620,6 +620,7 @@ def test_project_comments(browser_and_url):  # noqa: F811
         "table.comments tr", "rows => rows.map(r => r.dataset.number)"
     )
     assert numbers() == ["3", "1"]  # open ones, newest first
+    assert page.text_content("tr[data-number='1'] a button") == "Open glyph"
     href = page.get_attribute("tr[data-number='1'] a", "href")
     assert "editor.html?project=uplustype%2FMutator" in href and "hive-issue=1" in href
     page.select_option("[data-filter=label]", "curve")
@@ -634,4 +635,14 @@ def test_project_comments(browser_and_url):  # noqa: F811
     page.fill("[data-filter=q]", "tight")
     assert numbers() == ["3"]
     assert "1 of 3 comments" in page.text_content("main")
+    page.close()
+
+
+def test_project_cards_count_open_comments(browser_and_url):  # noqa: F811
+    summary = "GET /api/hive/projects/jeremie%2FSketches/comments/summary"
+    page = open_home(browser_and_url, "", {summary: [200, {"open": 3, "resolved": 1}]})
+    page.wait_for_selector("[data-comments='jeremie/Sketches']:not(:empty)")
+    assert page.text_content("[data-comments='jeremie/Sketches']") == "3 open comments"
+    page.click("[data-comments='jeremie/Sketches']")
+    page.wait_for_function("location.hash === '#project/jeremie/Sketches/comments'")
     page.close()

@@ -603,3 +603,113 @@ def test_a_topic_may_be_given_a_title(team):
                 await team.updateCommentHandler(request("ria", body=bad, number=1))
 
     run(go())
+
+
+# --- the past of a topic, deleted topics ------------------------------------------
+
+
+def test_history_of_a_topic_and_restoring_a_deleted_one(comments):
+    new(comments, author=Signature("Ana", "ana@hive"))
+    comments.reply(1, "first try", by=BOB, author=Signature("Bob", "bob@hive"))
+    comments.edit_message(1, 2, "second try")
+    new(comments, glyph="O")
+    history = comments.history(1)
+    assert [h["summary"] for h in history] == [
+        "Edit a message of #1",
+        "Reply to #1",
+        "Comment #1 on H",
+    ]
+    assert history[-1]["author"] == "Ana"
+    assert history[1]["issue"]["messages"][1]["text"] == "first try"
+    assert comments.deleted() == []
+
+    comments.delete(1)
+    deleted = comments.deleted()
+    assert [d["number"] for d in deleted] == [1]
+    assert deleted[0]["issue"]["messages"][1]["text"] == "second try"
+    assert comments.history(1)[0]["issue"] is None
+    restored = comments.restore(1)
+    assert restored["messages"][1]["text"] == "second try"
+    assert comments.deleted() == []
+    assert [i["number"] for i in comments.issues()] == [1, 2]
+    with pytest.raises(CommentNotFound):
+        comments.restore(1)
+    with pytest.raises(CommentNotFound):
+        comments.history(9)
+
+
+def test_routes_for_the_past(team):
+    async def go():
+        await team.createCommentHandler(request("ria", body=NEW))
+        await team.createCommentHandler(request("ria", body=NEW))
+        await team.updateCommentHandler(
+            request("ria", body={"state": "resolved"}, number=2)
+        )
+        summary = await answer(await team.commentsSummaryHandler(request("otto")))
+        assert summary == {"open": 1, "resolved": 1}
+        history = await answer(
+            await team.commentHistoryHandler(request("otto", number=1))
+        )
+        assert history["history"][0]["summary"] == "Comment #1 on H"
+        await team.deleteCommentHandler(request("mona", number=1))
+        with pytest.raises(web.HTTPForbidden):
+            await team.deletedCommentsHandler(request("dan"))
+        deleted = await answer(await team.deletedCommentsHandler(request("mona")))
+        assert [d["number"] for d in deleted["deleted"]] == [1]
+        assert deleted["deleted"][0]["deletedBy"] == "Mona Manager"
+        with pytest.raises(web.HTTPForbidden):
+            await team.restoreCommentHandler(request("ria", number=1))
+        back = await answer(await team.restoreCommentHandler(request("mona", number=1)))
+        assert back["issue"]["number"] == 1
+
+    run(go())
+
+
+def test_the_summary_never_creates_a_repository(tmp_path, fixture_fontra):
+    from test_branches import FakeHiveApi
+
+    from fontra_hive.hiveapi import ACCESS_COOKIE
+    from fontra_hive.hivemanager import HiveProjectManager
+
+    root = tmp_path / "repos"
+    root.mkdir()
+    api = FakeHiveApi()
+
+    async def members(project):
+        return [{"username": "dan", "name": "Dan Designer", "uid": "u-dan"}]
+
+    api.members = members
+    manager = HiveProjectManager(root, api=api, proxy=False)
+
+    def hive(body=None, **match):
+        r = request(body=body, **match)
+        r.match_info["name"] = "uplustype/Mutator"
+        r.cookies = {ACCESS_COOKIE: "cookie"}
+        return r
+
+    async def go():
+        summary = await answer(await manager.commentsSummaryHandler(hive()))
+        assert summary == {"open": 0, "resolved": 0}
+        assert not (root / "p-1.git").exists()
+        store = GitRepoStore.create(root / "p-1.git")
+        store.import_directory(
+            fixture_fontra, branch="trunk", message="Import", author=ME
+        )
+        store.close()
+        created = await answer(await manager.createCommentHandler(hive(body=NEW)))
+        # hive-api's stable id is kept with the author; the default branch is the project's.
+        assert created["issue"]["author"] == {
+            "username": "dan",
+            "name": "Dan Designer",
+            "uid": "u-dan",
+        }
+        assert created["issue"]["branch"] == "trunk"
+        done = await answer(
+            await manager.updateCommentHandler(hive(body={"assignee": "dan"}, number=1))
+        )
+        assert done["issue"]["assignee"]["uid"] == "u-dan"
+        summary = await answer(await manager.commentsSummaryHandler(hive()))
+        assert summary == {"open": 1, "resolved": 0}
+        await manager.aclose()
+
+    run(go())

@@ -90,6 +90,17 @@ async ({ you, can, issues }) => {
       server.issues.push(issue);
       return json({ head: bump(), issue });
     }
+    if (method === "GET" && path === "/deleted") return json({ deleted: server.deleted || [] });
+    if (method === "GET" && path.endsWith("/history")) {
+      return json({ history: server.history || [] });
+    }
+    if (method === "POST" && path.endsWith("/restore")) {
+      const number = +path.split("/")[1];
+      const found = (server.deleted || []).find((d) => d.number === number);
+      server.deleted = (server.deleted || []).filter((d) => d !== found);
+      server.issues.push(found.issue);
+      return json({ head: bump(), issue: found.issue });
+    }
     const m = path.match(/^\\/(\\d+)(\\/messages(?:\\/(\\d+))?)?$/);
     const issue = m && server.issues.find((i) => i.number === +m[1]);
     if (!issue) return new Response("no such comment", { status: 404 });
@@ -858,3 +869,62 @@ def test_a_glyph_not_on_the_canvas_can_be_added_from_the_message(page):
         "glyphIndex": 2,
         "isEditing": True,
     }
+
+
+# --- the past: edited messages, deleted topics ----------------------------------------
+
+
+def test_earlier_versions_of_a_message(page):
+    p = page()
+    history = [
+        {"time": 300, "issue": {"messages": [{"id": 2, "text": "v3"}]}},
+        {"time": 200, "issue": {"messages": [{"id": 2, "text": "v2"}]}},
+        {"time": 150, "issue": {"messages": [{"id": 2, "text": "v2"}]}},
+        {"time": 100, "issue": {"messages": [{"id": 2, "text": "v1"}]}},
+        {"time": 50, "issue": {"messages": [{"id": 1, "text": "first"}]}},
+    ]
+    versions = p.evaluate("(h) => module.earlierVersions(h, 2)", history)
+    # v2 replaced at 300 (by v3), v1 replaced at 150 (by v2).
+    assert versions == [{"text": "v2", "time": 300}, {"text": "v1", "time": 150}]
+
+
+def test_an_edited_message_shows_what_it_said(page):
+    edited = topic(1, replies=[(ANA, "second")])
+    edited["messages"][1]["edited"] = "2026-09-30T09:40:00Z"
+    p = page(issues=[edited])
+    p.evaluate("""server.history = [
+      { time: 1790000300, issue: { messages: [{ id: 2, text: 'second' }] } },
+      { time: 1790000200, issue: { messages: [{ id: 2, text: 'first' }] } },
+    ]""")
+    p.evaluate("comments.open(1)")
+    p.evaluate("frame()")
+    p.evaluate("card().querySelector('.edited').click()")
+    p.wait_for_function("card().querySelector('.earlier-version')")
+    assert p.evaluate("card().querySelector('.earlier .text').textContent") == "first"
+    assert requests(p, "GET")[-1]["path"] == "/1/history"
+    p.evaluate("card().querySelector('.edited').click()")
+    p.evaluate("frame()")
+    assert p.evaluate("card().querySelector('.earlier')") is None
+
+
+def test_managers_see_and_restore_deleted_topics(page):
+    gone = {
+        "number": 5,
+        "deletedBy": "Mona",
+        "deletedAt": 1790000000,
+        "issue": {**topic(5), "title": "Gone"},
+    }
+    p = page(you=BOB, can=ALL, issues=[topic(1)])
+    p.evaluate(
+        "(d) => { server.deleted = [d]; comments.dataVersion++; panel.render(); }", gone
+    )
+    p.wait_for_function("panel.shadowRoot.querySelector('details.deleted')")
+    text = p.evaluate("panel.shadowRoot.querySelector('details.deleted').textContent")
+    assert "Deleted (1)" in text and "Gone" in text and "deleted by Mona" in text
+    p.evaluate("panel.shadowRoot.querySelector('.restore-deleted').click()")
+    p.wait_for_function("comments.issue(5) !== null")
+    p.wait_for_function("!panel.shadowRoot.querySelector('details.deleted')")
+    # Reviewers do not see deleted topics (nor ask for them).
+    p = page(you=ANA, can=REVIEWER, issues=[topic(1)])
+    p.evaluate("panel.render()")
+    assert not any(r["path"] == "/deleted" for r in requests(p, "GET"))

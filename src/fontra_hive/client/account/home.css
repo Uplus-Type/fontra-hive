@@ -89,3 +89,6 @@ table.comments td.number { opacity: 0.6; white-space: nowrap; width: 3em; }
 table.comments td.text span { display: block; }
 table.comments tr.resolved td { opacity: 0.65; }
 .label-chip { display: inline-block; padding: 0 0.6em; margin: 0.1em; border-radius: 0.8em; background: #e9b02a33; font-size: 0.85em; }
+.comment-count { font-size: 0.85em; opacity: 0.75; cursor: pointer; }
+.comment-count:empty { display: none; }
+.comment-count:hover { text-decoration: underline; }

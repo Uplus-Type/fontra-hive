@@ -159,6 +159,7 @@ function projectCard(p) {
     el("div", { class: "description" }, [p.description || ""]),
     el("div", { class: "foot" }, [
       el("span", { class: `badge ${p.role}` }, [p.role]),
+      el("span", { class: "comment-count", "data-comments": p.id }),
       el("button", {
         class: "link-button",
         type: "button",
@@ -229,6 +230,30 @@ async function projectsSection() {
     content.push(el("h3", {}, [""]), details);
   }
   main().replaceChildren(...content);
+  showCommentCounts(projects);
+}
+
+// "3 open comments" on each card, filled in once the cards are shown (one
+// small request per project; a project without a font yet has none).
+async function showCommentCounts(projects) {
+  await Promise.all(
+    projects.map(async (p) => {
+      try {
+        const { open } = await hiveCall(`/api/hive/projects/${encodeURIComponent(p.id)}/comments/summary`);
+        const slot = document.querySelector(`[data-comments="${CSS.escape(p.id)}"]`);
+        if (slot && open) {
+          slot.textContent = `${open} open comment${open === 1 ? "" : "s"}`;
+          slot.title = "See them";
+          slot.onclick = (event) => {
+            event.preventDefault();
+            location.hash = projectHash(p.id) + "/comments";
+          };
+        }
+      } catch (error) {
+        // no count: nothing shown
+      }
+    })
+  );
 }
 
 // Deleting for good, from the trash only: hive-api forgets the projects, then
@@ -548,7 +573,9 @@ async function commentsSection(projectId) {
           ]),
           el("td", { class: "labels" }, (issue.labels || []).map((l) => el("span", { class: "label-chip" }, [l]))),
           el("td", {}, [
-            el("a", { href: issueLink(projectId, issue) }, [el("button", { class: "secondary" }, ["Open"])]),
+            el("a", { href: issueLink(projectId, issue), title: `Open ${issue.glyph} in the editor, with this comment` }, [
+              el("button", { class: "secondary" }, ["Open glyph"]),
+            ]),
           ]),
         ]);
       })

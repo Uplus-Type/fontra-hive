@@ -150,6 +150,23 @@ const CARD_STYLES = `
     font-size: 15px;
     line-height: 1;
   }
+  .edited {
+    font-size: 11px;
+  }
+  .earlier {
+    margin-top: 4px;
+    padding: 4px 8px;
+    border-left: 2px solid var(--card-line);
+    color: var(--card-muted);
+    font-size: 12px;
+  }
+  .earlier-version + .earlier-version {
+    margin-top: 4px;
+  }
+  .earlier .text {
+    text-decoration: line-through;
+    text-decoration-color: rgba(128, 128, 128, 0.5);
+  }
   .title-row {
     display: flex;
     align-items: center;
@@ -478,6 +495,23 @@ const PANEL_STYLES = `
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  details.deleted summary {
+    cursor: pointer;
+  }
+  .deleted-issue {
+    cursor: default;
+    opacity: 0.8;
+  }
+  .deleted-issue .badge {
+    background: #8a8a8a;
+    color: #fff;
+  }
+  .restore-deleted {
+    font: inherit;
+    font-size: 0.95em;
+    padding: 0 0.5em;
+    cursor: pointer;
+  }
   .issue .meta {
     font-size: 0.8em;
     opacity: 0.6;
@@ -607,6 +641,26 @@ export function issueLink(projectName, issue, origin = window.location.origin) {
 }
 
 const PENDING_ISSUE_KEY = "hive.openIssue";
+
+// The earlier texts of a message, newest first, from a topic's history
+// (newest change first): each text it had before its current one, with the
+// time it was replaced.
+export function earlierVersions(history, id) {
+  const texts = [];
+  for (const change of history) {
+    const message = change.issue?.messages?.find((m) => m.id === id);
+    if (!message) continue;
+    const last = texts.at(-1);
+    if (!last || last.text !== message.text) {
+      texts.push({ text: message.text, time: change.time });
+    } else {
+      last.time = change.time; // the oldest change that still had this text
+    }
+  }
+  // texts[0] is the current text; each earlier one was replaced when the
+  // next newer one appeared.
+  return texts.slice(1).map((entry, i) => ({ text: entry.text, time: texts[i].time }));
+}
 
 // A topic's title: the one given, else its first message.
 export function issueTitle(issue) {
@@ -921,6 +975,29 @@ export class HiveComments {
     }
   }
 
+  // Deleted topics (managers and up), loaded when the panel shows them.
+  async loadDeleted() {
+    if (!this.can.moderate) {
+      this.deletedTopics = [];
+      return;
+    }
+    const version = this.dataVersion;
+    try {
+      const response = await fetch(this.apiURL("/deleted"));
+      if (!response.ok) return;
+      this.deletedTopics = (await response.json()).deleted || [];
+      this.deletedVersion = version;
+      for (const listener of this.listeners) listener();
+    } catch (error) {
+      // try again at the next change
+    }
+  }
+
+  async restoreDeleted(number) {
+    const data = await this.send("POST", `/${number}/restore`);
+    if (data) this.loadDeleted();
+  }
+
   async rename(number, title) {
     const data = await this.send("PATCH", `/${number}`, { title });
     if (data) this.renaming = null;
@@ -1186,6 +1263,8 @@ export class HiveComments {
       target.issue ?? null,
       this.editing,
       this.renaming,
+      this.earlierShown,
+      this.earlier?.versions?.length ?? null,
       this.busy,
       this.error,
       this.can,
@@ -1675,12 +1754,71 @@ export class HiveComments {
         }, [initials(author)]),
         el("span", { class: "who" }, [author.name || author.username || "?"]),
         el("span", { class: "when", title: message.created || "" }, [
-          relativeTime(message.created) + (message.edited ? " · edited" : ""),
+          relativeTime(message.created),
+          message.edited
+            ? el(
+                "button",
+                {
+                  class: "link edited",
+                  title: "See what it said before",
+                  onclick: () => this.toggleEarlierVersions(issue.number, message.id),
+                },
+                [" · edited"]
+              )
+            : null,
         ]),
         actions.length ? el("span", { class: "actions" }, actions) : null,
       ]),
       body,
+      this.earlierVersionsElement(issue.number, message),
     ]);
+  }
+
+  // --- what an edited message said before (from the topic's history) --------
+
+  async toggleEarlierVersions(number, id) {
+    const key = `${number}:${id}`;
+    if (this.earlierShown === key) {
+      this.earlierShown = null;
+      this.changed();
+      return;
+    }
+    this.earlierShown = key;
+    this.earlier = { key, versions: null };
+    this.changed();
+    try {
+      const response = await fetch(this.apiURL(`/${number}/history`));
+      if (!response.ok) throw new Error(await response.text());
+      const { history } = await response.json();
+      if (this.earlier?.key === key) {
+        this.earlier = { key, versions: earlierVersions(history, id) };
+      }
+    } catch (error) {
+      if (this.earlier?.key === key) this.earlier = { key, versions: [], error: error.message };
+    }
+    this.changed();
+  }
+
+  earlierVersionsElement(number, message) {
+    const key = `${number}:${message.id}`;
+    if (this.earlierShown !== key) return null;
+    const versions = this.earlier?.key === key ? this.earlier.versions : null;
+    return el(
+      "div",
+      { class: "earlier" },
+      versions === null
+        ? ["Loading…"]
+        : versions.length
+          ? versions.map((v) =>
+              el("div", { class: "earlier-version" }, [
+                el("span", { class: "when" }, [
+                  `until ${relativeTime(new Date(v.time * 1000).toISOString())}`,
+                ]),
+                el("div", { class: "text" }, [v.text]),
+              ])
+            )
+          : [this.earlier?.error || "No earlier version found."]
+    );
   }
 
   // A message at the bottom of the canvas; with an action, a button that
@@ -2154,7 +2292,52 @@ export class HiveCommentsPanel extends HTMLElement {
       rows.push(el("div", { class: "group-title" }, [`Resolved (${resolved.length})`]));
       rows.push(...resolved.map((issue) => this.row(issue, !glyphName)));
     }
+    if (comments.can.moderate && comments.deletedVersion !== comments.dataVersion) {
+      comments.deletedVersion = comments.dataVersion; // one request per change
+      comments.loadDeleted();
+    }
+    const deleted = (comments.deletedTopics || []).filter(
+      (d) => !glyphName || d.issue?.glyph === glyphName
+    );
+    if (comments.can.moderate && deleted.length) {
+      rows.push(
+        el("details", { class: "deleted" }, [
+          el("summary", { class: "group-title" }, [`Deleted (${deleted.length})`]),
+          ...deleted.map((d) =>
+            el("div", { class: "issue deleted-issue", dataset: { number: d.number } }, [
+              el("span", { class: "badge" }, [String(d.number)]),
+              el("span", { class: "text" }, [issueTitle(d.issue || {})]),
+              el("span", { class: "meta" }, [
+                [
+                  glyphName ? null : d.issue?.glyph,
+                  `deleted by ${d.deletedBy} ${relativeTime(new Date(d.deletedAt * 1000).toISOString())}`,
+                ]
+                  .filter(Boolean)
+                  .join(" · "),
+                " ",
+                el(
+                  "button",
+                  {
+                    class: "restore-deleted",
+                    onclick: (event) => {
+                      event.stopPropagation();
+                      comments.restoreDeleted(d.number);
+                    },
+                  },
+                  ["Restore"]
+                ),
+              ]),
+            ])
+          ),
+        ])
+      );
+    }
+    const openDetails = this.listElement.querySelector("details.deleted")?.open;
     this.listElement.replaceChildren(...rows);
+    if (openDetails) {
+      const details = this.listElement.querySelector("details.deleted");
+      if (details) details.open = true;
+    }
   }
 
   row(issue, withGlyph) {

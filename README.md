@@ -414,6 +414,11 @@ thread of replies, open or resolved.
   comments", `#project/<owner>/<name>/comments`): every topic, filtered by
   state, glyph, person (wrote in it or assigned), label, branch and text,
   each with a link to open it in the editor.
+- **Nothing is lost.** "edited" next to a message shows what it said
+  before; managers see the deleted topics at the bottom of the Comments
+  panel and restore them. Both are read from the commits of
+  `refs/hive/comments`. Project cards on Hive's home page say how many
+  comments are open.
 - **Who may do what.** Reviewers and up (`comment`): open topics, reply,
   edit their own messages, resolve, reopen and move their own topics.
   Designers and up (`edit`): resolve, reopen and move any topic. Managers and
@@ -438,6 +443,10 @@ PATCH  /api/hive/projects/<name>/comments/<n>            {state: "open"|"resolve
                                                          or {assignee: username|null, labels: [...]}
 PATCH  /api/hive/projects/<name>/comments/<n>/messages/<id>   {text}
 DELETE /api/hive/projects/<name>/comments/<n>[/messages/<id>]
+GET    /api/hive/projects/<name>/comments/<n>/history    every change of a topic, newest first
+GET    /api/hive/projects/<name>/comments/deleted        deleted topics (managers and up)
+POST   /api/hive/projects/<name>/comments/<n>/restore    bring one back (managers and up)
+GET    /api/hive/projects/<name>/comments/summary        {open, resolved}; never creates the repository
 ```
 
 ## Tests
