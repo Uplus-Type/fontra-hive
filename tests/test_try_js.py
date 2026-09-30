@@ -47,6 +47,8 @@ def _fontraClient():
 
 
 PYODIDE_DIR = os.environ.get("HIVE_TEST_PYODIDE_DIR")
+# fontc built for the browser (tools/build-fontc-wasm.sh): compiled exports.
+FONTC_WASM = os.environ.get("HIVE_TEST_FONTC_WASM")
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -74,7 +76,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/editor.html" and self.fontraClient:
             html = (self.fontraClient / "editor.html").read_text(encoding="utf-8")
             pyodide = "/hive/pyodide/" if PYODIDE_DIR else None
-            return self._send(injectTryScripts(html, pyodide).encode(), "text/html")
+            fontc = "/hive/try/fontc.wasm" if FONTC_WASM else None
+            return self._send(injectTryScripts(html, pyodide, fontc).encode(), "text/html")
+        if path == "/hive/try/fontc.wasm" and FONTC_WASM:
+            return self._send(pathlib.Path(FONTC_WASM).read_bytes(), "application/wasm")
         if path == "/hive/try/python.zip":
             from fontra_hive import trybundle
 
@@ -805,6 +810,54 @@ def test_branches_of_a_font_kept_in_the_browser(server, browser, tmp_path):
         "window.editorController?.fontController?.glyphMap?.A", timeout=90000
     )
     page.wait_for_function(f"({LAYERS_A}).then(l => l === {json.dumps(edited)})")
+    assert not errors
+    context.close()
+
+
+def test_compiled_fonts_are_exported_from_the_browser(server, browser, tmp_path):
+    """File › Export as TrueType and WOFF2: fontc in WebAssembly on the
+    .fontra package, WOFF2 by fontTools in Pyodide; on the demo and on a
+    font kept in the browser."""
+    _needsHiveInTheBrowser()
+    if not FONTC_WASM:
+        pytest.skip("$HIVE_TEST_FONTC_WASM is not set (tools/build-fontc-wasm.sh)")
+    from fontTools.ttLib import TTFont
+
+    context = browser.new_context(
+        viewport={"width": 1400, "height": 850}, accept_downloads=True
+    )
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.goto(f"{server}/editor.html?{TRY_PAGE_QUERY}")
+    page.wait_for_function("window.editorController?.fontController?.glyphMap?.A")
+
+    with page.expect_download(timeout=120000) as info:
+        _exportAs(page, "TrueType (*.ttf)")
+    assert info.value.suggested_filename == "MutatorSans.ttf"
+    font = TTFont(info.value.path())
+    assert "A" in font.getGlyphOrder() and "fvar" in font  # variable, as the demo
+    assert font["cmap"].getBestCmap()[ord("A")] == "A"
+
+    archive = tmp_path / "Mutator.fontra.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
+        for path in sorted(FIXTURE.rglob("*")):
+            if path.is_file():
+                z.write(path, "Mutator.fontra/" + path.relative_to(FIXTURE).as_posix())
+    page.get_by_role("button", name="Your fonts").click()
+    page.locator(".hive-try-panel input[accept]").set_input_files(str(archive))
+    page.wait_for_function(
+        "new URLSearchParams(location.search).get('project').startsWith('local:')",
+        timeout=90000,
+    )
+    page.wait_for_function(
+        "window.editorController?.fontController?.glyphMap?.A", timeout=90000
+    )
+    with page.expect_download(timeout=120000) as info:
+        _exportAs(page, "Webfont (*.woff2)")
+    assert info.value.suggested_filename == "Mutator.woff2"
+    data = pathlib.Path(info.value.path()).read_bytes()
+    assert data[:4] == b"wOF2" and len(data) > 1000
     assert not errors
     context.close()
 

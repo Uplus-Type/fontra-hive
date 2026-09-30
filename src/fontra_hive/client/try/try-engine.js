@@ -273,10 +273,12 @@
     return files;
   }
 
-  // format: "fontra" (zipped package) | "designspace" (zipped, with UFOs).
+  // format: "fontra" (zipped package) | "designspace" (zipped, with UFOs) |
+  // "ttf" | "woff2" (compiled by fontc in the browser, when this server
+  // has it: see COMPILED).
   function exportAs(options) {
     var format = options && options.format;
-    if (format !== "fontra" && format !== "designspace") {
+    if (format !== "fontra" && format !== "designspace" && COMPILED.indexOf(format) === -1) {
       return Promise.reject(new Error("Not available in the browser: " + format));
     }
     return downloadAs(format, progress).finally(function () {
@@ -284,9 +286,70 @@
     });
   }
 
+  // ---- compiled fonts: fontc in WebAssembly (try-fontc-worker.js) ----
+
+  // Where this server keeps fontc for the browser, if it does
+  // (<meta name="hive-fontc">): then TTF and WOFF2 can be exported.
+  var FONTC_URL = (function () {
+    var meta = document.querySelector('meta[name="hive-fontc"]');
+    return meta && meta.content ? new URL(meta.content, location.href).href : null;
+  })();
+  var COMPILED = FONTC_URL ? ["ttf", "woff2"] : [];
+  var fontcWorker = null;
+  var fontcCalls = {};
+  var fontcId = 1;
+
+  function fontc(stem, entries, onProgress) {
+    if (!fontcWorker) {
+      fontcWorker = new Worker("/hive/try/try-fontc-worker.js", { type: "module" });
+      fontcWorker.onmessage = function (event) {
+        var reply = event.data;
+        var call = fontcCalls[reply.id];
+        if (!call) return;
+        if (reply.progress) {
+          if (call.onProgress) call.onProgress(reply.progress);
+          return;
+        }
+        delete fontcCalls[reply.id];
+        if (reply.log) console.info("fontc:\n" + reply.log);
+        if (reply.error) call.reject(new Error("Could not compile the font: " + reply.error));
+        else call.resolve(reply.data);
+      };
+    }
+    return new Promise(function (resolve, reject) {
+      var id = fontcId++;
+      fontcCalls[id] = { resolve: resolve, reject: reject, onProgress: onProgress };
+      fontcWorker.postMessage(
+        { id: id, url: FONTC_URL, stem: stem, files: entries },
+        entries.map(function (e) {
+          return e[1];
+        })
+      );
+    });
+  }
+
+  async function asBuffers(files) {
+    var entries = [];
+    for (var [path, data] of files) {
+      entries.push([path, await (typeof data === "string" ? new Blob([data]) : data).arrayBuffer()]);
+    }
+    return entries;
+  }
+
+  async function compiled(format, stem, onProgress) {
+    var ttf = await fontc(stem, await asBuffers(await packageFiles(onProgress)), onProgress);
+    if (format === "ttf") {
+      saveBlob(new Blob([ttf], { type: "font/ttf" }), stem + ".ttf");
+      return;
+    }
+    var reply = await python("woff2", { data: ttf }, [ttf], onProgress);
+    saveBlob(new Blob([reply.data], { type: "font/woff2" }), stem + ".woff2");
+  }
+
   async function downloadAs(format, onProgress) {
     if (localId) await localInfo();
     var stem = fileStem();
+    if (COMPILED.indexOf(format) !== -1) return compiled(format, stem, onProgress);
     if (format === "designspace" && localId) {
       var result = await python("exportDesignspace", { name: project, stem: stem }, [], onProgress);
       saveBlob(new Blob([result.data], { type: "application/zip" }), stem + ".designspace.zip");
@@ -479,7 +542,7 @@
         name: "FontraHiveTry",
         features: { "background-image": true, "find-glyphs-that-use-glyph": true },
         // File › Export as: a download (exportAs below).
-        projectManagerFeatures: { "export-as": ["fontra", "designspace"] },
+        projectManagerFeatures: { "export-as": ["fontra", "designspace"].concat(COMPILED) },
       };
     },
     getGlyphMap: function (font) {
@@ -641,7 +704,12 @@
         return {};
       })
       .then(function (info) {
-        return python("wsOpen", { socket: self.id, project: projectId, label: info.name }, [], progress);
+        return python(
+          "wsOpen",
+          { socket: self.id, project: projectId, label: info.name, compiled: COMPILED },
+          [],
+          progress
+        );
       })
       .then(
       function () {

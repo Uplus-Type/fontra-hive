@@ -250,7 +250,7 @@ class DevHiveProjectManager(CommentRoutesMixin):
             text = self.fontraClientFile(f"{view}.html").read_text(encoding="utf-8")
         except FileNotFoundError:
             raise web.HTTPNotFound()
-        return _htmlResponse(injectTryScripts(text, pyodideURL()))
+        return _htmlResponse(injectTryScripts(text, pyodideURL(), fontcURL()))
 
     async def pythonBundleHandler(self, request: web.Request) -> web.Response:
         """/hive/try/python.zip: the Python "Try Fontra" runs in the browser
@@ -291,6 +291,19 @@ class DevHiveProjectManager(CommentRoutesMixin):
                 "Content-Type": contentType,
                 "Cache-Control": "public, max-age=86400",
             },
+        )
+
+    async def fontcHandler(self, request: web.Request) -> web.Response:
+        """/hive/try/fontc.wasm: fontc built for the browser
+        (tools/build-fontc-wasm.sh), when this server has it
+        ($HIVE_FONTC_WASM, the file): "Try Fontra" then exports TTF and
+        WOFF2. Else 404."""
+        path = os.environ.get("HIVE_FONTC_WASM")
+        if not path or not pathlib.Path(path).is_file():
+            raise web.HTTPNotFound()
+        return web.FileResponse(
+            path,
+            headers={"Content-Type": "application/wasm", "Cache-Control": "no-cache"},
         )
 
     async def tryHandler(self, request: web.Request) -> web.Response:
@@ -537,11 +550,16 @@ class DevHiveProjectManager(CommentRoutesMixin):
             accessForToken=accessForToken,
             # "File › Export as" lists these; Hive's page script turns the
             # choice into a download from /api/hive/projects/<id>/export.
-            exportManager=HiveExportManager(),
+            exportManager=self.makeExportManager(),
         )
         await fontHandler.startTasks()
         self.fontHandlers[key] = fontHandler
         return fontHandler
+
+    def makeExportManager(self):
+        """What "File › Export as" lists (Try Fontra adds what the browser
+        compiles)."""
+        return HiveExportManager()
 
     def setupWebRoutes(self, server) -> None:
         server.httpApp.add_routes(self.webRoutes())
@@ -564,6 +582,7 @@ class DevHiveProjectManager(CommentRoutesMixin):
             web.get("/try", self.tryHandler),
             web.get("/hive/try/python{which:(-glyphs)?}.zip", self.pythonBundleHandler),
             web.get("/hive/pyodide/{name}", self.pyodideHandler),
+            web.get("/hive/try/fontc.wasm", self.fontcHandler),
             web.get("/hive/{path:.*}", self.clientFileHandler),
             web.get("/favicon.ico", self.faviconHandler),
             web.get("/api/hive/me", self.meHandler),
@@ -1715,6 +1734,15 @@ PYODIDE_CONTENT_TYPES = {
 }
 
 
+def fontcURL() -> str | None:
+    """Where the page finds fontc for the browser: here ($HIVE_FONTC_WASM),
+    elsewhere ($HIVE_FONTC_URL), or nowhere (no compiled exports)."""
+    path = os.environ.get("HIVE_FONTC_WASM")
+    if path and pathlib.Path(path).is_file():
+        return "/hive/try/fontc.wasm"
+    return os.environ.get("HIVE_FONTC_URL") or None
+
+
 def pyodideURL() -> str | None:
     if os.environ.get("HIVE_PYODIDE_DIR"):
         return "/hive/pyodide/"
@@ -1730,18 +1758,22 @@ def _isTryRequest(request, view: str) -> bool:
     )
 
 
-def injectTryScripts(html: str, pyodide: str | None = None) -> str:
+def injectTryScripts(
+    html: str, pyodide: str | None = None, fontc: str | None = None
+) -> str:
     """Fontra's page for "Try Fontra": the demo engine first in <head> (it
     must replace the WebSocket before Fontra's modules run), Hive's icons,
     and the notice at the end of <body>. None of Hive's own scripts.
-    ``pyodide``: where the page loads Pyodide from, if not its default."""
+    ``pyodide``: where the page loads Pyodide from, if not its default;
+    ``fontc``: fontc for the browser, if this server has it (compiled
+    exports)."""
     lower = html.lower()
     head = lower.find("<head>")
     cut = head + len("<head>") if head != -1 else 0
-    meta = (
-        f'<meta name="hive-pyodide" content="{html_escape(pyodide, quote=True)}">'
-        if pyodide
-        else ""
+    meta = "".join(
+        f'<meta name="{name}" content="{html_escape(value, quote=True)}">'
+        for name, value in (("hive-pyodide", pyodide), ("hive-fontc", fontc))
+        if value
     )
     html = html[:cut] + meta + TRY_HEAD_SCRIPT + HIVE_ICON_LINKS + html[cut:]
     body = html.lower().rfind("</body>")

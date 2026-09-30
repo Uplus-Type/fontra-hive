@@ -30,6 +30,7 @@ const REPOS = "/repos";
 const PERSIST_DELAY = 2500; // ms after an edit: the git backend commits after 1 s
 let pyodidePromise = null;
 let pyclipperPromise = null;
+let brotliPromise = null;
 let hivePromise = null;
 let counter = 0;
 const mounts = new Map(); // mount point → promise (loaded from IndexedDB)
@@ -314,6 +315,7 @@ const OPS = {
     if (request.label) {
       await call(py, "hive.setName(hive_args['name'], hive_args['label'])", { name, label: request.label });
     }
+    await call(py, "hive.setCompiledFormats(hive_args['formats'])", { formats: request.compiled || [] });
     say("");
     call(py, "await hive.connect(hive_args['socket'], hive_args['project'])", {
       socket,
@@ -425,6 +427,31 @@ json.dumps(_r)
       { name: request.name, args: request.args }
     );
     return [{ body: result }];
+  },
+
+  // A TrueType font (from fontc) as WOFF2: fontTools, with Pyodide's brotli.
+  async woff2(request, say) {
+    const py = await ready(request.base, say);
+    say("Compressing as WOFF2…");
+    if (!brotliPromise) {
+      brotliPromise = py.loadPackage("brotli", { messageCallback: () => {} });
+      brotliPromise.catch(() => (brotliPromise = null));
+    }
+    await brotliPromise;
+    const work = "/tmp/hive-try-in/" + counter++;
+    py.FS.mkdirTree(work);
+    py.FS.writeFile(work + "/in.ttf", new Uint8Array(request.data));
+    await call(
+      py,
+      `
+from fontTools.ttLib import woff2
+woff2.compress(hive_args["src"], hive_args["dst"])
+`,
+      { src: work + "/in.ttf", dst: work + "/out.woff2" }
+    );
+    const data = py.FS.readFile(work + "/out.woff2").slice().buffer;
+    cleanUp(py, work);
+    return [{ data }, [data]];
   },
 
   async flush(request, say) {

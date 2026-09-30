@@ -541,9 +541,22 @@ accounts): only the branch pill, as online (new branch, switch, delete,
 restore, merge, update from main), served by Hive's routes in Pyodide. An
 export (File › Export as) is of the branch open, named after it.
 
-Limits for now: no compiled font download (fontc in
-WebAssembly, later). Opening a font kept in the browser loads about 15 MB
-the first time (Pyodide and `python.zip`), cached by the browser after.
+Compiled fonts: File › Export as TrueType (variable when the font has
+axes) and WOFF2, made in the browser by fontc (googlefonts/fontc) built
+for WebAssembly as a WASI program (`tools/build-fontc-wasm.sh`: pinned
+revision, `wasm32-wasip1`, without rayon so without threads). It runs in
+a worker of its own (`try-fontc-worker.js`) on the font's `.fontra`
+package, given as files in memory by a small WASI host (`try-wasi.js`);
+WOFF2 is the TrueType font compressed by fontTools in Pyodide, with
+Pyodide's brotli (its wheel next to a self-hosted Pyodide, as pyclipper's).
+The server offers these formats when it has fontc: `HIVE_FONTC_WASM=/path/to/fontc.wasm`
+(served at `/hive/try/fontc.wasm`, announced to the page by
+`<meta name="hive-fontc">`), or `HIVE_FONTC_URL` elsewhere. No OTF: fontc
+writes TrueType outlines only.
+
+Opening a font kept in the browser loads about 15 MB the first time
+(Pyodide and `python.zip`), cached by the browser after; fontc (about
+N MB) the first time a compiled font is exported.
 
 To change the demo font: convert a font to `.fontra` with Fontra
 (`fontra-copy`), then write the JSON with the same calls as the engine

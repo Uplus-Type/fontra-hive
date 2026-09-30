@@ -249,3 +249,31 @@ def test_python_bundle_route(manager):  # noqa: F811
                 await manager.pythonBundleHandler(glyphs)
 
     asyncio.run(go())
+
+
+def test_fontc_is_served_here(manager, tmp_path, monkeypatch):  # noqa: F811
+    """fontc for the browser ($HIVE_FONTC_WASM): served, and announced to the
+    page, which then offers TTF and WOFF2 in File › Export as."""
+    from fontra_hive.projectmanager import fontcURL
+
+    async def go():
+        monkeypatch.delenv("HIVE_FONTC_WASM", raising=False)
+        monkeypatch.delenv("HIVE_FONTC_URL", raising=False)
+        assert fontcURL() is None
+        with pytest.raises(web.HTTPNotFound):
+            await manager.fontcHandler(SimpleNamespace(headers={}))
+        page = (await manager.viewHandler(request(TRY_PROJECT), view="editor")).text
+        assert "hive-fontc" not in page
+
+        wasm = tmp_path / "fontc-4c75e67.wasm"
+        wasm.write_bytes(b"\0asm")
+        monkeypatch.setenv("HIVE_FONTC_WASM", str(wasm))
+        assert fontcURL() == "/hive/try/fontc.wasm"
+        response = await manager.fontcHandler(SimpleNamespace(headers={}))
+        assert response.headers["Content-Type"] == "application/wasm"
+        page = (await manager.viewHandler(request(TRY_PROJECT), view="editor")).text
+        assert page.index('name="hive-fontc" content="/hive/try/fontc.wasm"') < page.index(
+            "try-engine.js"
+        )
+
+    asyncio.run(go())

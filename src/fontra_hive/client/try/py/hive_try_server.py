@@ -124,10 +124,30 @@ class _Request:
         return (self._body or "").encode()
 
 
+class _ExportManager:
+    """File › Export as, in the browser: the source formats, and the compiled
+    ones the page can make (fontc in WebAssembly); the page does the export."""
+
+    def __init__(self, extra):
+        self.extra = extra
+
+    def getSupportedExportFormats(self) -> list[str]:
+        from fontra_hive.export import SOURCE_FORMATS
+
+        return list(SOURCE_FORMATS) + list(self.extra)
+
+    async def exportAs(self, projectIdentifier: str, options: dict) -> None:
+        raise NotImplementedError("the page exports")
+
+
 class _Manager(DevHiveProjectManager):
     """Hive's development project manager, with the fonts' own names."""
 
     names: dict[str, str] = {}
+    compiledFormats: list[str] = []
+
+    def makeExportManager(self):
+        return _ExportManager(self.compiledFormats)
 
     async def getMetaInfo(self, projectIdentifier, authorizationToken):
         info = await super().getMetaInfo(projectIdentifier, authorizationToken)
@@ -203,6 +223,10 @@ class BrowserHive:
         socket = _Socket(send)
         socket.feed(json.dumps({"client-uuid": f"browser-{socketId}"}))
         self.sockets[socketId] = socket
+
+    def setCompiledFormats(self, formats) -> None:
+        """The compiled formats the page can export (File › Export as)."""
+        self.manager.compiledFormats = list(formats)
 
     def setName(self, name: str, label: str) -> None:
         """The font's name, shown by the editor instead of "local:<id>"."""
