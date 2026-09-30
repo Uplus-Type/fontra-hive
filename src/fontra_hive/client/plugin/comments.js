@@ -360,6 +360,21 @@ const CARD_STYLES = `
     color: #fff;
     pointer-events: none;
   }
+  .toast.with-action {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    pointer-events: auto;
+  }
+  .toast-action {
+    border: none;
+    background: #f3c744;
+    color: #1c1c1c;
+    white-space: nowrap;
+  }
+  .toast-action:hover {
+    background: #f6d266;
+  }
 `;
 
 const PANEL_STYLES = `
@@ -1657,12 +1672,29 @@ export class HiveComments {
     ]);
   }
 
-  toast(text) {
+  // A message at the bottom of the canvas; with an action, a button that
+  // does it (and the message stays a little longer).
+  toast(text, { label, action } = {}) {
     if (!this.overlayRoot) return;
     this.overlayRoot.querySelector(".toast")?.remove();
-    const toast = el("div", { class: "toast" }, [text]);
+    const toast = el("div", { class: `toast${action ? " with-action" : ""}` }, [
+      text,
+      action
+        ? el(
+            "button",
+            {
+              class: "toast-action",
+              onclick: () => {
+                toast.remove();
+                action();
+              },
+            },
+            [label]
+          )
+        : null,
+    ]);
     this.overlayRoot.append(toast);
-    setTimeout(() => toast.remove(), TOAST_MS);
+    setTimeout(() => toast.remove(), action ? TOAST_MS * 3 : TOAST_MS);
   }
 
   // --- canvas events: pins answer the click whatever the tool -------------------------
@@ -1824,32 +1856,25 @@ export class HiveComments {
       this.open(issue.number);
       return;
     }
-    // Select the glyph if it is on the canvas; else put it in place of the
-    // selected glyph, like Fontra's glyph search does.
+    // Select the glyph if it is on the canvas; else offer to add it at the
+    // end of the text (nothing typed there is replaced).
     const selected = model.getSelectedPositionedGlyph?.();
     if (selected?.glyphName !== issue.glyph) {
-      const lines = model.positionedLines || [];
-      let found = null;
-      lines.forEach((line, lineIndex) =>
-        (line.glyphs || []).forEach((g, glyphIndex) => {
-          if (!found && g.glyphName === issue.glyph) found = { lineIndex, glyphIndex };
-        })
-      );
+      const found = this.findOnCanvas(issue.glyph);
       if (found) {
         sceneSettings.selectedGlyph = { ...found, isEditing: true };
-      } else if (sceneSettings.selectedGlyph && this.editor.insertGlyphInfos) {
-        const info = this.editor.sceneController.glyphInfoFromGlyphName?.(issue.glyph) || {
-          glyphName: issue.glyph,
-        };
-        await this.editor.insertGlyphInfos([info], 0, true);
+      } else {
         const glyphMap = this.editor.fontController?.glyphMap;
         if (glyphMap && !(issue.glyph in glyphMap)) {
           this.toast(`${issue.glyph} is not in the font any more.`);
           return;
         }
-        sceneSettings.selectedGlyph = { ...sceneSettings.selectedGlyph, isEditing: true };
-      } else {
-        this.toast(`Put ${issue.glyph} on the canvas to see #${issue.number}.`);
+        this.toast(`${issue.glyph} is not on the canvas.`, {
+          label: `Add ${issue.glyph} and show #${issue.number}`,
+          action: async () => {
+            if (await this.appendToText(issue.glyph)) this.show(issue);
+          },
+        });
         return;
       }
     }
@@ -1865,6 +1890,41 @@ export class HiveComments {
     }
     this.open(issue.number);
     requestAnimationFrame(() => this.centerOn(issue));
+  }
+
+  // Where a glyph is on the canvas: {lineIndex, glyphIndex}, the last
+  // occurrence (a glyph just added is at the end), or null.
+  findOnCanvas(glyphName) {
+    let found = null;
+    (this.sceneModel?.positionedLines || []).forEach((line, lineIndex) =>
+      (line.glyphs || []).forEach((g, glyphIndex) => {
+        if (g.glyphName === glyphName) found = { lineIndex, glyphIndex };
+      })
+    );
+    return found;
+  }
+
+  // Add a glyph at the end of the text shown on the canvas, and wait for it
+  // to be laid out.
+  async appendToText(glyphName) {
+    const controller = this.editor.sceneController;
+    const sceneSettings = controller?.sceneSettings;
+    if (!sceneSettings) return false;
+    const info = controller.glyphInfoFromGlyphName?.(glyphName) || { glyphName };
+    const lines = (sceneSettings.characterLines || []).map((line) => [...line]);
+    if (!lines.length) lines.push([]);
+    lines[lines.length - 1].push(info);
+    const laidOut = controller.sceneSettingsController?.waitForKeyChange?.(
+      "positionedLines",
+      false,
+      2000
+    );
+    sceneSettings.characterLines = lines;
+    await laidOut;
+    for (let i = 0; i < 20 && !this.findOnCanvas(glyphName); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return !!this.findOnCanvas(glyphName);
   }
 
   centerOn(issue) {

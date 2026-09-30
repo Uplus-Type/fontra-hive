@@ -806,3 +806,39 @@ def test_an_optional_title(page):
     p.evaluate("card().querySelector('.title-input').value = ''")
     p.evaluate("card().querySelector('.title-row button.primary').click()")
     p.wait_for_function("comments.issue(1).title === null")
+
+
+def test_a_glyph_not_on_the_canvas_can_be_added_from_the_message(page):
+    p = page(issues=[topic(1), topic(4, glyph="C")])
+    p.evaluate("""() => {
+      const settings = editor.sceneController.sceneSettings;
+      window.lines = [[{ glyphName: "H" }, { glyphName: "O" }]];
+      Object.defineProperty(settings, "characterLines", {
+        get: () => window.lines,
+        set: (value) => {
+          window.lines = value;
+          const added = value.at(-1).at(-1);
+          settings.positionedLines[0].glyphs.push({
+            glyphName: added.glyphName, x: 1200, y: 0, glyph: positioned.glyph });
+        },
+      });
+      editor.sceneController.glyphInfoFromGlyphName = (name) => ({ glyphName: name });
+      editor.sceneController.sceneSettingsController.waitForKeyChange = async () => null;
+      window.selections = [];
+      Object.defineProperty(settings, "selectedGlyph", {
+        get: () => window.selections.at(-1),
+        set: (value) => window.selections.push(value),
+      });
+    }""")
+    p.evaluate("comments.show(comments.issue(4))")
+    toast = "comments.overlayRoot.querySelector('.toast')"
+    assert "C is not on the canvas." in p.evaluate(f"{toast}.textContent")
+    assert p.evaluate("window.lines.at(-1).length") == 2  # nothing added yet
+    p.evaluate(f"{toast}.querySelector('button').click()")
+    p.wait_for_function("comments.openNumber === 4")
+    assert p.evaluate("window.lines.at(-1).map(g => g.glyphName)") == ["H", "O", "C"]
+    assert p.evaluate("window.selections.at(-1)") == {
+        "lineIndex": 0,
+        "glyphIndex": 2,
+        "isEditing": True,
+    }
