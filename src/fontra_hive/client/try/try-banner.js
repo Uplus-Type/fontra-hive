@@ -341,7 +341,9 @@ function start() {
     {
       type: "button",
       class: "plain extra",
-      title: "Keep this font, with your edits, in this browser",
+      title:
+        "Keep this font, with your edits, in this browser, and try Fontra Hive on it: " +
+        "history of every glyph, snapshots, branches, comments. No account needed.",
       onclick: async () => {
         try {
           const id = await tryAPI.saveCopy("MutatorSans", (text) => (status.textContent = text));
@@ -354,7 +356,7 @@ function start() {
         }
       },
     },
-    "Keep a copy"
+    "Keep a copy and try Hive"
   );
   const bar = el(
     "div",
@@ -408,6 +410,13 @@ function start() {
   window.addEventListener("hive-try-progress", (event) => {
     if (event.detail) status.textContent = event.detail.replace(/…$/, "") + "…";
     else if (isLocal) status.textContent = "kept in this browser";
+  });
+  window.addEventListener("hive-try-error", (event) => {
+    setTimeout(() => {
+      status.classList.add("error");
+      status.textContent = event.detail.split("\n")[0].slice(0, 160);
+      status.title = event.detail;
+    }, 0);
   });
   window.addEventListener("hive-try-status", (event) => {
     const { text } = event.detail;

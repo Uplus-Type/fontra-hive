@@ -471,7 +471,7 @@ Fontra's own.
   licence, see `MUTATORSANS-LICENSE.txt`): `try-engine.js` replaces the
   editor's WebSocket by an object that answers the same calls (`getGlyph`,
   `getAxes`, `editFinal`…) in JavaScript, instantly. Not saved: a reload
-  starts over, "Keep a copy" makes it a font kept in the browser.
+  starts over, "Keep a copy and try Hive" makes it a font kept in the browser.
 - **A font kept in the browser** (`local:<id>`): Hive solo. The font is a
   bare git repository (`/repos/local:<id>.git`) in the browser's IndexedDB
   (Emscripten's IDBFS), and it is served by the same code as fontrahive.com,
@@ -491,7 +491,7 @@ Fontra's own.
   UFOs, Glyphs (`.glyphs`, `.glyphspackage`), TrueType/OpenType/WOFF/TTX
   in; `.fontra` or designspace + UFOs out.
 - `try-banner.js`: the bar at the bottom (name, save state, "Your fonts",
-  "Keep a copy" on the demo, "Fontra Hive for teams" to fontrahive.com) and
+  "Keep a copy and try Hive" on the demo, "Fontra Hive for teams" to fontrahive.com) and
   the "Your fonts" panel (open a file or a folder, open, delete). Fontra's
   own File › Export as downloads the font (`.fontra` or designspace + UFOs,
   zipped): the engine answers `exportAs` itself instead of the server.
@@ -544,19 +544,25 @@ export (File › Export as) is of the branch open, named after it.
 Compiled fonts: File › Export as TrueType (variable when the font has
 axes) and WOFF2, made in the browser by fontc (googlefonts/fontc) built
 for WebAssembly as a WASI program (`tools/build-fontc-wasm.sh`: pinned
-revision, `wasm32-wasip1`, without rayon so without threads). It runs in
-a worker of its own (`try-fontc-worker.js`) on the font's `.fontra`
-package, given as files in memory by a small WASI host (`try-wasi.js`);
+revision, `wasm32-wasip1`, without rayon so without threads; about 15 MB).
+It runs in a worker of its own (`try-fontc-worker.js`), on files in
+memory given by a small WASI host (`try-wasi.js`). fontc does not read
+`.fontra` yet (its reader is a stub): the font goes through designspace +
+UFOs first (as File › Export as designspace), then
+`hive_try_convert.fontcSources` makes one designspace per combination of
+discrete axis values (fontc takes none: an italic axis 0/1 gives an
+Upright and an Italic font, zipped together) and leaves out rule
+substitutions naming a glyph the font lacks (where fontc would stop).
 WOFF2 is the TrueType font compressed by fontTools in Pyodide, with
-Pyodide's brotli (its wheel next to a self-hosted Pyodide, as pyclipper's).
-The server offers these formats when it has fontc: `HIVE_FONTC_WASM=/path/to/fontc.wasm`
-(served at `/hive/try/fontc.wasm`, announced to the page by
-`<meta name="hive-fontc">`), or `HIVE_FONTC_URL` elsewhere. No OTF: fontc
-writes TrueType outlines only.
+Pyodide's brotli (its wheel next to a self-hosted Pyodide, as
+pyclipper's). The server offers these formats when it has fontc:
+`HIVE_FONTC_WASM=/path/to/fontc.wasm` (served at `/hive/try/fontc.wasm`,
+announced to the page by `<meta name="hive-fontc">`), or `HIVE_FONTC_URL`
+elsewhere. No OTF: fontc writes TrueType outlines only.
 
 Opening a font kept in the browser loads about 15 MB the first time
 (Pyodide and `python.zip`), cached by the browser after; fontc (about
-N MB) the first time a compiled font is exported.
+15 MB) the first time a compiled font is exported.
 
 To change the demo font: convert a font to `.fontra` with Fontra
 (`fontra-copy`), then write the JSON with the same calls as the engine

@@ -10,9 +10,9 @@ downloaded as designspace + UFOs. Skipped without Playwright."""
 import asyncio
 import base64
 import http.server
-import os
 import io
 import json
+import os
 import pathlib
 import threading
 import urllib.parse
@@ -834,9 +834,13 @@ def test_compiled_fonts_are_exported_from_the_browser(server, browser, tmp_path)
 
     with page.expect_download(timeout=120000) as info:
         _exportAs(page, "TrueType (*.ttf)")
-    assert info.value.suggested_filename == "MutatorSans.ttf"
-    font = TTFont(info.value.path())
-    assert "A" in font.getGlyphOrder() and "fvar" in font  # variable, as the demo
+    # The demo has a discrete axis (italic): one variable font per value.
+    assert info.value.suggested_filename == "MutatorSans.ttf.zip"
+    with zipfile.ZipFile(info.value.path()) as z:
+        assert sorted(z.namelist()) == ["MutatorSans-Italic.ttf", "MutatorSans-Upright.ttf"]
+        upright = z.read("MutatorSans-Upright.ttf")
+    font = TTFont(io.BytesIO(upright))
+    assert [a.axisTag for a in font["fvar"].axes] == ["wght", "wdth"]
     assert font["cmap"].getBestCmap()[ord("A")] == "A"
 
     archive = tmp_path / "Mutator.fontra.zip"
@@ -872,7 +876,7 @@ def test_the_demo_is_kept_with_its_edits(server, browser):
     page.wait_for_function("window.editorController?.fontController?.glyphMap?.A")
     page.evaluate(EDIT_A, 40)
     edited = page.evaluate(LAYERS_A)
-    page.get_by_role("button", name="Keep a copy").click()
+    page.get_by_role("button", name="Keep a copy and try Hive").click()
     page.wait_for_url("**project=local*", timeout=90000)
     page.wait_for_function(
         "window.editorController?.fontController?.glyphMap?.A", timeout=90000

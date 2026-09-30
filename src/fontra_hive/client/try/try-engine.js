@@ -281,9 +281,15 @@
     if (format !== "fontra" && format !== "designspace" && COMPILED.indexOf(format) === -1) {
       return Promise.reject(new Error("Not available in the browser: " + format));
     }
-    return downloadAs(format, progress).finally(function () {
-      progress("");
-    });
+    return downloadAs(format, progress)
+      .catch(function (error) {
+        // Fontra shows nothing when an export fails: the bar says it.
+        window.dispatchEvent(new CustomEvent("hive-try-error", { detail: String(error.message || error) }));
+        throw error;
+      })
+      .finally(function () {
+        progress("");
+      });
   }
 
   // ---- compiled fonts: fontc in WebAssembly (try-fontc-worker.js) ----
@@ -299,7 +305,10 @@
   var fontcCalls = {};
   var fontcId = 1;
 
-  function fontc(stem, entries, onProgress) {
+  // Compile `main` (a .designspace among the files) with fontc: the
+  // TrueType font, an ArrayBuffer. The files are copied, not moved: several
+  // compiles may use them.
+  function fontc(stem, main, entries, onProgress) {
     if (!fontcWorker) {
       fontcWorker = new Worker("/hive/try/try-fontc-worker.js", { type: "module" });
       fontcWorker.onmessage = function (event) {
@@ -319,12 +328,7 @@
     return new Promise(function (resolve, reject) {
       var id = fontcId++;
       fontcCalls[id] = { resolve: resolve, reject: reject, onProgress: onProgress };
-      fontcWorker.postMessage(
-        { id: id, url: FONTC_URL, stem: stem, files: entries },
-        entries.map(function (e) {
-          return e[1];
-        })
-      );
+      fontcWorker.postMessage({ id: id, url: FONTC_URL, stem: stem, main: main, files: entries });
     });
   }
 
@@ -336,14 +340,42 @@
     return entries;
   }
 
-  async function compiled(format, stem, onProgress) {
-    var ttf = await fontc(stem, await asBuffers(await packageFiles(onProgress)), onProgress);
-    if (format === "ttf") {
-      saveBlob(new Blob([ttf], { type: "font/ttf" }), stem + ".ttf");
-      return;
+  // fontc reads the font as designspace + UFOs (its .fontra reader is not
+  // written yet): made by Python here, as "Export as designspace" does.
+  async function designspaceZip(stem, onProgress) {
+    if (localId) {
+      return (await python("exportDesignspace", { name: project, stem: stem }, [], onProgress)).data;
     }
-    var reply = await python("woff2", { data: ttf }, [ttf], onProgress);
-    saveBlob(new Blob([reply.data], { type: "font/woff2" }), stem + ".woff2");
+    var entries = await asBuffers(await packageFiles(onProgress));
+    var reply = await python(
+      "toDesignspaceZip",
+      { stem: stem, files: entries },
+      entries.map(function (e) {
+        return e[1];
+      }),
+      onProgress
+    );
+    return reply.data;
+  }
+
+  // One variable font per combination of discrete axis values (Upright,
+  // Italic…): a single file, or a .zip of them.
+  async function compiled(format, stem, onProgress) {
+    var zipped = await designspaceZip(stem, onProgress);
+    var prepared = await python("forFontc", { data: zipped, stem: stem }, [zipped], onProgress);
+    var entries = await asBuffers(await Format.unzip(new Blob([prepared.data])));
+    var fonts = new Map();
+    for (var part of prepared.parts) {
+      var data = await fontc(part[1], part[0], entries, onProgress);
+      if (format === "woff2") data = (await python("woff2", { data: data }, [data], onProgress)).data;
+      fonts.set(part[1] + "." + format, new Blob([data], { type: "font/" + format }));
+    }
+    if (fonts.size === 1) {
+      var [name, blob] = fonts.entries().next().value;
+      saveBlob(blob, name);
+    } else {
+      saveBlob(await Format.zip(fonts), stem + "." + format + ".zip");
+    }
   }
 
   async function downloadAs(format, onProgress) {

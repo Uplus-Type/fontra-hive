@@ -429,6 +429,24 @@ json.dumps(_r)
     return [{ body: result }];
   },
 
+  // A designspace + UFOs .zip made ready for fontc: one designspace per
+  // combination of discrete axis values (hive_try_convert.fontcSources).
+  async forFontc(request, say) {
+    const py = await ready(request.base, say);
+    const work = "/tmp/hive-try-in/" + counter++;
+    py.FS.mkdirTree(work);
+    py.FS.writeFile(work + "/sources.zip", new Uint8Array(request.data));
+    const result = await call(
+      py,
+      "import json; json.dumps(hive_try_convert.fontcSources(hive_args['zip'], hive_args['stem']))",
+      { zip: work + "/sources.zip", stem: request.stem }
+    );
+    const { zip, parts } = JSON.parse(result);
+    const data = py.FS.readFile(zip).slice().buffer;
+    cleanUp(py, work, zip);
+    return [{ data, parts }, [data]];
+  },
+
   // A TrueType font (from fontc) as WOFF2: fontTools, with Pyodide's brotli.
   async woff2(request, say) {
     const py = await ready(request.base, say);
