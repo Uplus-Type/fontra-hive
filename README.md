@@ -393,6 +393,9 @@ thread of replies, open or resolved.
   open then resolved, or the whole project's when no glyph is selected; a
   click goes to the glyph and its source and opens the post-it. "Resolved"
   shows resolved topics on the canvas too.
+- **Title.** A topic's first message stands for its title; its author and
+  designers and up may give it one ("Add a title" in the post-it), and
+  empty it to go back to the first message.
 - **Organize.** Designers and up assign a topic to a member of the project
   and give it labels (free, with the project's labels as suggestions), from
   the post-it. A click outside the post-it closes it.
@@ -431,6 +434,7 @@ GET    /api/hive/projects/<name>/comments/head           changes with every comm
 POST   /api/hive/projects/<name>/comments                {glyph, source: {layer, name, location}, point: {x, y}, text[, branch]}
 POST   /api/hive/projects/<name>/comments/<n>/messages   {text}
 PATCH  /api/hive/projects/<name>/comments/<n>            {state: "open"|"resolved"} or {point: {x, y}}
+                                                         or {title: text|null}
                                                          or {assignee: username|null, labels: [...]}
 PATCH  /api/hive/projects/<name>/comments/<n>/messages/<id>   {text}
 DELETE /api/hive/projects/<name>/comments/<n>[/messages/<id>]

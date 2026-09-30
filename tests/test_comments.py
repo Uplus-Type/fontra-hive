@@ -563,3 +563,35 @@ def test_hive_api_members_are_cached():
         assert calls == [("/api/internal/members", {"project": "uplustype/Mutator"})]
 
     run(go())
+
+
+def test_a_topic_may_be_given_a_title(team):
+    async def go():
+        await team.createCommentHandler(request("ria", body=NEW))
+        issue = (await answer(await team.commentsHandler(request("ria"))))["issues"][0]
+        assert issue["title"] is None
+        with pytest.raises(web.HTTPForbidden):  # another reviewer
+            await team.updateCommentHandler(
+                request("rex", body={"title": "Mine"}, number=1)
+            )
+        done = await answer(
+            await team.updateCommentHandler(
+                request("ria", body={"title": "  Terminal   too heavy "}, number=1)
+            )
+        )
+        assert done["issue"]["title"] == "Terminal too heavy"
+        done = await answer(
+            await team.updateCommentHandler(
+                request("dan", body={"title": ""}, number=1)
+            )
+        )
+        assert done["issue"]["title"] is None
+        for bad in [
+            {"title": 3},
+            {"title": "x" * 201},
+            {"title": "a", "state": "open"},
+        ]:
+            with pytest.raises(web.HTTPBadRequest):
+                await team.updateCommentHandler(request("ria", body=bad, number=1))
+
+    run(go())

@@ -209,18 +209,20 @@ class CommentRoutesMixin:
         return await self._commentChange(request, "comment", change)
 
     async def updateCommentHandler(self, request) -> web.Response:
-        """Resolve or reopen (``state``), move the pin (``point``), or
-        organize: ``assignee`` (a member's username, or null) and/or
-        ``labels`` (designers and up)."""
+        """Resolve or reopen (``state``), move the pin (``point``), rename
+        (``title``; null or empty: the first message is the title again) —
+        its author or designers and up —, or organize: ``assignee`` (a
+        member's username, or null) and/or ``labels`` (designers and up)."""
         number = _number(request)
         body = await _jsonBody(request)
         name = request.match_info["name"]
         state = body.get("state")
         point = body.get("point")
         organizing = "assignee" in body or "labels" in body
-        if [state is not None, point is not None, organizing].count(True) != 1:
+        titling = "title" in body
+        if [state is not None, point is not None, titling, organizing].count(True) != 1:
             raise web.HTTPBadRequest(
-                text="give one of: state, point, or assignee and labels"
+                text="give one of: state, point, title, or assignee and labels"
             )
         if organizing:
             return await self._organizeComment(request, number, body)
@@ -234,6 +236,10 @@ class CommentRoutesMixin:
                     )
 
             signature = _signature(access, self.author)
+            if titling:
+                return comments.set_title(
+                    number, body["title"], check=check, author=signature
+                )
             if point is not None:
                 return comments.move(number, point, check=check, author=signature)
             commit = store.head(branch) if isinstance(branch, str) else None

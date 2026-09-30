@@ -20,6 +20,7 @@ A topic::
       "point": {"x": 312, "y": 540},
       "branch": "main",
       "commit": "<head of the branch when the topic was opened>",
+      "title": null | "Terminal too heavy",  (optional: else the first message)
       "state": "open" | "resolved",
       "author": {"username": "ana", "name": "Ana", "uid": "…"},
       "created": "2026-09-30T10:12:00Z",
@@ -62,6 +63,7 @@ MAX_TEXT = 10_000
 MAX_MESSAGES = 500  # per topic
 MAX_LABELS = 10  # per topic
 MAX_LABEL = 40
+MAX_TITLE = 200
 MAX_NAME = 200
 MAX_COORDINATE = 1_000_000
 MAX_LOCATION_AXES = 64
@@ -342,6 +344,7 @@ class CommentStore:
                 "state": "open",
                 "author": by,
                 "created": created,
+                "title": None,  # optional; the first message stands for it
                 "resolved": None,
                 "assignee": None,
                 "labels": [],
@@ -437,6 +440,29 @@ class CommentStore:
                 return f"Resolve #{number}"
             issue["resolved"] = None
             return f"Reopen #{number}"
+
+        return self._update_issue(number, edit, author)
+
+    def set_title(
+        self,
+        number: int,
+        title: Any,
+        *,
+        check: Callable[[dict], None] | None = None,
+        author: Signature = SERVER_SIGNATURE,
+    ) -> dict:
+        """Name a topic; None or blank: its first message is its title again."""
+        if title is not None and not isinstance(title, str):
+            raise CommentError("title must be text")
+        title = " ".join((title or "").split()) or None
+        if title and (len(title) > MAX_TITLE or "\x00" in title):
+            raise CommentError(f"a title has at most {MAX_TITLE} characters")
+
+        def edit(issue):
+            if check is not None:
+                check(issue)
+            issue["title"] = title
+            return f"Rename #{number}" if title else f"Untitle #{number}"
 
         return self._update_issue(number, edit, author)
 

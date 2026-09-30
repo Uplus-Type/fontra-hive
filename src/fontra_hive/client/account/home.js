@@ -24,7 +24,7 @@ import {
   openShareDialog,
   timeAgo,
 } from "../views/hive-views.js";
-import { issueLink, relativeTime } from "../plugin/comments.js";
+import { issueLink, issueTitle, relativeTime } from "../plugin/comments.js";
 
 const ROLES = ["observer", "reviewer", "designer", "manager", "admin"];
 const main = () => document.getElementById("main");
@@ -466,7 +466,7 @@ export function filterComments(issues, f, you) {
       }
     }
     if (text) {
-      const haystack = [issue.glyph, `#${issue.number}`, ...(issue.labels || []), ...issue.messages.map((m) => m.text)]
+      const haystack = [issue.glyph, `#${issue.number}`, issue.title, ...(issue.labels || []), ...issue.messages.map((m) => m.text)]
         .join("\n")
         .toLowerCase();
       if (!haystack.includes(text)) return false;
@@ -534,7 +534,7 @@ async function commentsSection(projectId) {
             el("small", {}, [issue.source?.name || ""]),
           ]),
           el("td", { class: "text" }, [
-            el("span", {}, [first.text || ""]),
+            el("span", { title: issue.title ? first.text || "" : "" }, [issueTitle(issue)]),
             el("small", {}, [
               [
                 `${first.author?.name || first.author?.username || "?"}, ${relativeTime(issue.created)}`,

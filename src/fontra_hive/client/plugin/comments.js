@@ -146,6 +146,47 @@ const CARD_STYLES = `
     font-size: 15px;
     line-height: 1;
   }
+  .title-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px 2px;
+    font-weight: bold;
+    font-size: 14px;
+  }
+  .title-row.empty {
+    font-weight: normal;
+    font-size: 12px;
+    padding-top: 4px;
+  }
+  .title-row .title {
+    flex: 1;
+    overflow-wrap: anywhere;
+  }
+  .title-row .hint {
+    font-weight: normal;
+    font-size: 11px;
+    color: var(--card-muted);
+  }
+  .title-row input {
+    flex: 1;
+    min-width: 0;
+    font: inherit;
+    color: inherit;
+    background: var(--input-bg);
+    border: 1px solid var(--card-line);
+    border-radius: 4px;
+    padding: 2px 5px;
+  }
+  .title-row .svg-icon, .add-title .svg-icon {
+    width: 13px;
+    height: 13px;
+  }
+  .add-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+  }
   .organize, .version {
     display: flex;
     flex-wrap: wrap;
@@ -497,7 +538,7 @@ function drawArguments(args) {
 }
 
 // Icons from Tabler Icons (outline, MIT; see TABLER-ICONS-LICENSE.txt), the
-// icon set Fontra uses for its own panels: "trash", "link", "eye".
+// icon set Fontra uses for its own panels: "trash", "link", "pencil", "eye".
 const ICON_PATHS = {
   trash: [
     "M4 7l16 0",
@@ -511,6 +552,7 @@ const ICON_PATHS = {
     "M11 6l.463 -.536a5 5 0 0 1 7.071 7.072l-.534 .464",
     "M13 18l-.397 .534a5.068 5.068 0 0 1 -7.127 0a4.972 4.972 0 0 1 0 -7.071l.524 -.463",
   ],
+  pencil: ["M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4", "M13.5 6.5l4 4"],
   eye: [
     "M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0",
     "M21 12c-2.4 4 -5.4 6 -9 6c-3.6 0 -6.6 -2 -9 -6c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6",
@@ -546,6 +588,11 @@ export function issueLink(projectName, issue, origin = window.location.origin) {
 }
 
 const PENDING_ISSUE_KEY = "hive.openIssue";
+
+// A topic's title: the one given, else its first message.
+export function issueTitle(issue) {
+  return issue.title || issue.messages?.[0]?.text || "";
+}
 
 function stopKeys(element) {
   // Keys typed in the card must not reach the editor's shortcuts.
@@ -598,6 +645,7 @@ export class HiveComments {
     this.openNumber = null; // the topic whose post-it is open
     this.draft = null; // {glyph, source, point, text} while a new comment is written
     this.editing = null; // {number, id} while a message is edited
+    this.renaming = null; // the topic whose title is being edited
     this.drag = null; // {number, point} while a pin is dragged
     this.busy = false;
     this.error = null;
@@ -854,6 +902,13 @@ export class HiveComments {
     }
   }
 
+  async rename(number, title) {
+    const data = await this.send("PATCH", `/${number}`, { title });
+    if (data) this.renaming = null;
+    this.changed();
+    return !!data;
+  }
+
   async organize(number, changes) {
     await this.send("PATCH", `/${number}`, changes);
   }
@@ -905,6 +960,7 @@ export class HiveComments {
     }
     this.draft = null;
     this.editing = null;
+    this.renaming = null;
     this.error = null;
     this.openNumber = number;
     this.changed();
@@ -1094,6 +1150,7 @@ export class HiveComments {
       target.kind,
       target.issue ?? null,
       this.editing,
+      this.renaming,
       this.busy,
       this.error,
       this.can,
@@ -1325,6 +1382,7 @@ export class HiveComments {
     if (note) messages.append(note);
     return el("div", { class: `card${resolved ? " resolved" : ""}`, dataset: { number: issue.number } }, [
       header,
+      this.titleRow(issue),
       this.organizeRow(issue),
       this.versionRow(issue),
       messages,
@@ -1337,6 +1395,62 @@ export class HiveComments {
             onSubmit: (text) => this.reply(issue.number, text),
             onCancel: () => this.close(),
           })
+        : null,
+    ]);
+  }
+
+  // The title, when the topic has one (else its first message stands for
+  // it); its author and designers and up may give or change it.
+  titleRow(issue) {
+    const editable = this.mayChangeState(issue);
+    if (this.renaming === issue.number && editable) {
+      const input = el("input", {
+        class: "title-input",
+        placeholder: issue.messages?.[0]?.text?.slice(0, 80) || "Title",
+        maxlength: 200,
+      });
+      input.value = issue.title || "";
+      stopKeys(input);
+      const save = () => this.rename(issue.number, input.value.trim() || null);
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          save();
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          this.renaming = null;
+          this.changed();
+        }
+      });
+      requestAnimationFrame(() => input.focus());
+      return el("div", { class: "title-row editing" }, [
+        input,
+        el("button", { class: "primary", disabled: this.busy, onclick: save }, ["Save"]),
+        el("span", { class: "hint" }, ["empty: the first message"]),
+      ]);
+    }
+    const startRenaming = () => {
+      this.renaming = issue.number;
+      this.changed();
+    };
+    if (!issue.title) {
+      return editable
+        ? el("div", { class: "title-row empty" }, [
+            el("button", { class: "link add-title", onclick: startRenaming }, [
+              icon("pencil"),
+              " Add a title",
+            ]),
+          ])
+        : null;
+    }
+    return el("div", { class: "title-row" }, [
+      el("span", { class: "title" }, [issue.title]),
+      editable
+        ? el(
+            "button",
+            { class: "icon rename", title: "Change the title", onclick: startRenaming },
+            [icon("pencil")]
+          )
         : null,
     ]);
   }
@@ -1956,12 +2070,12 @@ export class HiveCommentsPanel extends HTMLElement {
       {
         class: `issue ${issue.state}${issue.number === this.comments.openNumber ? " current" : ""}`,
         dataset: { number: issue.number },
-        title: first.text || "",
+        title: issue.title ? `${issue.title}\n\n${first.text || ""}` : first.text || "",
         onclick: () => this.comments.show(issue),
       },
       [
         el("span", { class: "badge" }, [String(issue.number)]),
-        el("span", { class: "text" }, [first.text || ""]),
+        el("span", { class: "text" }, [issueTitle(issue)]),
         el("span", { class: "meta" }, [meta]),
       ]
     );

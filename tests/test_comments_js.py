@@ -105,6 +105,7 @@ async ({ you, can, issues }) => {
           : null;
       }
       if (body.labels) issue.labels = body.labels;
+      if ("title" in body) issue.title = body.title;
       if (body.state) {
         issue.state = body.state;
         issue.resolved = body.state === "resolved" ? { by: person, at: now } : null;
@@ -757,3 +758,35 @@ def test_a_click_outside_closes_the_post_it(page):
         "document.body.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}))"
     )
     assert p.evaluate("comments.draft.text") == "keep me"
+
+
+def test_an_optional_title(page):
+    p = page(you=ANA, can=REVIEWER, issues=[topic(1, author=ANA), topic(2, author=BOB)])
+    p.evaluate("comments.open(2)")  # not hers: no way to name it
+    p.evaluate("frame()")
+    assert p.evaluate("card().querySelector('.title-row')") is None
+    p.evaluate("comments.open(1)")
+    p.evaluate("frame()")
+    p.evaluate("card().querySelector('.add-title').click()")
+    p.evaluate("frame()")
+    p.evaluate("card().querySelector('.title-input').focus()")
+    p.keyboard.type("Terminal too heavy")
+    assert p.evaluate("windowKeys") == 0
+    p.keyboard.press("Enter")
+    p.wait_for_function("comments.issue(1).title === 'Terminal too heavy'")
+    assert requests(p, "PATCH")[-1]["body"] == {"title": "Terminal too heavy"}
+    p.evaluate("frame()")
+    assert p.evaluate("card().querySelector('.title-row .title').textContent") == (
+        "Terminal too heavy"
+    )
+    # The panel lists it by its title; the other one by its first message.
+    texts = p.evaluate(
+        "[...panel.shadowRoot.querySelectorAll('.issue .text')].map(e => e.textContent)"
+    )
+    assert texts == ["Terminal too heavy", "Topic 2"]
+    # Emptied: the first message is the title again.
+    p.evaluate("card().querySelector('.rename').click()")
+    p.evaluate("frame()")
+    p.evaluate("card().querySelector('.title-input').value = ''")
+    p.evaluate("card().querySelector('.title-row button.primary').click()")
+    p.wait_for_function("comments.issue(1).title === null")

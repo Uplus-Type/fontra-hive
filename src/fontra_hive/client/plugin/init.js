@@ -925,7 +925,7 @@ class HiveHistoryPanel extends HTMLElement {
   commentEventRow(event, nested) {
     const { issue } = event;
     const who = event.by?.name || event.by?.username || "?";
-    const first = issue.messages?.[0]?.text || "";
+    const first = issue.title || issue.messages?.[0]?.text || "";
     return el(
       "div",
       {
