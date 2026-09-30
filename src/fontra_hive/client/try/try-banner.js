@@ -233,15 +233,15 @@ function openPanel() {
             {
               type: "button",
               class: "plain",
-              title: "Delete from this browser",
+              title: "Remove from this browser (your own files are not touched)",
               onclick: async () => {
-                if (!confirm(`Delete “${project.name}” from this browser? Export it first (File › Export as) to keep it.`)) return;
+                if (!confirm(`Remove “${project.name}” from this browser? Its history, branches and comments here go with it; the files you opened it from are not touched. To keep what you did, export it first (File › Export as).`)) return;
                 await window.hiveTry.deleteLocal(project.id);
                 if (project.id === current) go(DEMO_URL);
                 else fill();
               },
             },
-            "Delete"
+            "Remove"
           )
         )
       );
@@ -319,8 +319,15 @@ async function startBranches() {
   }
 }
 
+// The tab's icon follows the bar's: Fontra's on the demo.
+function useFontraIcon() {
+  for (const link of document.querySelectorAll('link[rel="icon"]')) link.remove();
+  document.head.append(el("link", { rel: "icon", href: "/images/fontra-icon.svg", type: "image/svg+xml" }));
+}
+
 function start() {
   document.head.append(el("style", {}, STYLE));
+  if (!window.hiveTry?.localId) useFontraIcon();
   const tryAPI = window.hiveTry;
   const isLocal = !!tryAPI?.localId;
   const name = el("span", { class: "name" }, isLocal ? "…" : "Try Fontra");
@@ -352,7 +359,13 @@ function start() {
   const bar = el(
     "div",
     { class: "hive-try", role: "region", "aria-label": "Try Fontra" },
-    el("img", { src: "/hive/icons/hive-icon.svg", alt: "" }),
+    // Fontra's icon on the demo (Fontra alone); Hive's once a font is kept
+    // here, with Hive's history, branches and comments.
+    el("img", {
+      src: isLocal ? "/hive/icons/hive-icon.svg" : "/images/fontra-icon.svg",
+      alt: "",
+      title: isLocal ? "Fontra with Fontra Hive" : "Fontra",
+    }),
     name,
     status,
     el("button", { type: "button", class: "plain", onclick: openPanel }, "Your fonts"),

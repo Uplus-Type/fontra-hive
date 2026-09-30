@@ -446,7 +446,7 @@ def test_a_local_font_has_hive_in_the_browser(server, browser, tmp_path):
     # Deleted: gone from the list, and its storage with it.
     page.get_by_role("button", name="Your fonts").click()
     page.locator(".hive-try-panel li", has_text="Mutator").get_by_role(
-        "button", name="Delete"
+        "button", name="Remove"
     ).click()
     page.wait_for_url("**project=demo*", timeout=30000)
     page.get_by_role("button", name="Your fonts").click()
