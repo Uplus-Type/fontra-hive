@@ -189,7 +189,7 @@ def test_parse_hash(browser_and_url):  # noqa: F811
     result = page.evaluate("""async () => {
           const m = await import('/account/home.js');
           return ['', '#new', '#project/uplustype/Mutator%20Sans', '#orgs', '#org/uplustype',
-                  '#profile', '#nonsense'].map(m.parseHash);
+                  '#profile', '#nonsense', '#project/uplustype/Mutator/comments'].map(m.parseHash);
         }""")
     assert result == [
         {"section": "projects"},
@@ -199,6 +199,7 @@ def test_parse_hash(browser_and_url):  # noqa: F811
         {"section": "orgs", "view": "org", "login": "uplustype"},
         {"section": "profile"},
         {"section": "projects"},
+        {"section": "projects", "view": "comments", "project": "uplustype/Mutator"},
     ]
     page.close()
 
@@ -545,4 +546,92 @@ def test_project_branches(browser_and_url):  # noqa: F811
     export = page.evaluate("calls.find(c => c.path.endsWith('/export'))")
     assert export["query"] == "?format=fontra&branch=wide"
     assert page.errors == []
+    page.close()
+
+
+def comment(
+    number, glyph, state="open", labels=(), assignee=None, text="Hm", branch="main"
+):
+    ana = {"username": "ana", "name": "Ana López"}
+    return {
+        "number": number,
+        "glyph": glyph,
+        "branch": branch,
+        "state": state,
+        "source": {"layer": "Bold", "name": "Bold", "location": {}},
+        "point": {"x": 1, "y": 2},
+        "commit": "c" * 40,
+        "author": ana,
+        "created": "2026-09-30T10:00:00Z",
+        "resolved": (
+            {"by": ana, "at": "2026-09-30T11:00:00Z"} if state == "resolved" else None
+        ),
+        "assignee": assignee,
+        "labels": list(labels),
+        "messages": [
+            {
+                "id": 1,
+                "author": ana,
+                "created": "2026-09-30T10:00:00Z",
+                "edited": None,
+                "text": text,
+            }
+        ],
+    }
+
+
+def test_project_comments(browser_and_url):  # noqa: F811
+    hive = "/api/hive/projects/uplustype%2FMutator"
+    jeremie = {"username": "jeremie", "name": "Jérémie Hornus"}
+    comments = {
+        "head": "h",
+        "you": jeremie,
+        "can": {
+            "comment": True,
+            "resolveAny": True,
+            "organize": True,
+            "moderate": True,
+        },
+        "members": [jeremie, {"username": "ana", "name": "Ana López"}],
+        "issues": [
+            comment(1, "A", labels=["curve"], assignee=jeremie, text="Stem too thin"),
+            comment(2, "B", state="resolved"),
+            comment(3, "A", labels=["spacing"], text="Too tight"),
+        ],
+    }
+    extra = {
+        "GET /api/projects/uplustype/Mutator": [
+            200,
+            {"project": project("uplustype", "Mutator", "admin")},
+        ],
+        f"GET {hive}/repository": [200, {"exists": True}],
+        f"GET {hive}/branches": [200, BRANCHES],
+        f"GET {hive}/comments": [200, comments],
+        "GET /api/hive/export-formats": [200, {"formats": []}],
+    }
+    page = open_home(browser_and_url, "#project/uplustype/Mutator", extra)
+    page.wait_for_selector(".comments-summary")
+    assert page.text_content(".comments-summary .note") == (
+        "2 open · 1 resolved · 1 assigned to you"
+    )
+    page.click(".comments-summary button")
+    page.wait_for_selector("table.comments tr")
+    numbers = lambda: page.eval_on_selector_all(  # noqa: E731
+        "table.comments tr", "rows => rows.map(r => r.dataset.number)"
+    )
+    assert numbers() == ["3", "1"]  # open ones, newest first
+    href = page.get_attribute("tr[data-number='1'] a", "href")
+    assert "editor.html?project=uplustype%2FMutator" in href and "hive-issue=1" in href
+    page.select_option("[data-filter=label]", "curve")
+    assert numbers() == ["1"]
+    page.select_option("[data-filter=label]", "")
+    page.select_option("[data-filter=person]", "me")
+    page.select_option("[data-filter=role]", "assignee")
+    assert numbers() == ["1"]
+    page.select_option("[data-filter=person]", "")
+    page.select_option("[data-filter=state]", "all")
+    assert numbers() == ["3", "2", "1"]
+    page.fill("[data-filter=q]", "tight")
+    assert numbers() == ["3"]
+    assert "1 of 3 comments" in page.text_content("main")
     page.close()

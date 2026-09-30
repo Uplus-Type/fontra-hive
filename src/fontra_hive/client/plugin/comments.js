@@ -146,6 +146,57 @@ const CARD_STYLES = `
     font-size: 15px;
     line-height: 1;
   }
+  .organize, .version {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px 8px;
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--card-line);
+    font-size: 12px;
+  }
+  .version {
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+  .version .link {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+  }
+  .version .svg-icon {
+    width: 13px;
+    height: 13px;
+  }
+  .organize select, .organize input {
+    font: inherit;
+    color: inherit;
+    background: var(--input-bg);
+    border: 1px solid var(--card-line);
+    border-radius: 4px;
+    padding: 1px 4px;
+  }
+  .organize input {
+    width: 7em;
+  }
+  .labels {
+    display: contents;
+  }
+  .label-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 7px;
+    border-radius: 9px;
+    background: rgba(200, 146, 34, 0.18);
+    line-height: 18px;
+  }
+  .chip-remove {
+    border: none;
+    padding: 0 0 0 2px;
+    background: none;
+    line-height: 1;
+  }
   .svg-icon {
     display: inline-flex;
     width: 16px;
@@ -445,21 +496,56 @@ function drawArguments(args) {
   return { context, positionedGlyph, parameters, model, controller };
 }
 
-// "trash" from Tabler Icons (outline, MIT; see TABLER-ICONS-LICENSE.txt), the
-// icon set Fontra uses for its own panels.
-const TRASH_SVG =
-  '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" ' +
-  'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
-  'stroke-linejoin="round"><path d="M4 7l16 0" /><path d="M10 11l0 6" />' +
-  '<path d="M14 11l0 6" /><path d="M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2 -2l1 -12" />' +
-  '<path d="M9 7v-3a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v3" /></svg>';
+// Icons from Tabler Icons (outline, MIT; see TABLER-ICONS-LICENSE.txt), the
+// icon set Fontra uses for its own panels: "trash", "link", "eye".
+const ICON_PATHS = {
+  trash: [
+    "M4 7l16 0",
+    "M10 11l0 6",
+    "M14 11l0 6",
+    "M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2 -2l1 -12",
+    "M9 7v-3a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v3",
+  ],
+  link: [
+    "M9 15l6 -6",
+    "M11 6l.463 -.536a5 5 0 0 1 7.071 7.072l-.534 .464",
+    "M13 18l-.397 .534a5.068 5.068 0 0 1 -7.127 0a4.972 4.972 0 0 1 0 -7.071l.524 -.463",
+  ],
+  eye: [
+    "M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0",
+    "M21 12c-2.4 4 -5.4 6 -9 6c-3.6 0 -6.6 -2 -9 -6c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6",
+  ],
+};
 
-function trashIcon() {
+function icon(name) {
   const span = document.createElement("span");
-  span.className = "svg-icon";
-  span.innerHTML = TRASH_SVG;
+  span.className = `svg-icon icon-${name}`;
+  span.innerHTML =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" ' +
+    'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+    'stroke-linejoin="round">' +
+    ICON_PATHS[name].map((d) => `<path d="${d}" />`).join("") +
+    "</svg>";
   return span;
 }
+
+// The editor's address for a topic: the glyph alone on the canvas, being
+// edited; the Hive page script keeps "hive-issue" for the plug-in, which then
+// goes to the source and opens the post-it. (Fontra reads the other
+// parameters itself, its older URL format: JSON values.)
+export function issueLink(projectName, issue, origin = window.location.origin) {
+  const url = new URL("/editor.html", origin);
+  url.searchParams.set("project", projectName);
+  url.searchParams.set("text", JSON.stringify(`/${issue.glyph}`));
+  url.searchParams.set(
+    "selectedGlyph",
+    JSON.stringify({ lineIndex: 0, glyphIndex: 0, isEditing: true })
+  );
+  url.searchParams.set("hive-issue", String(issue.number));
+  return url.toString();
+}
+
+const PENDING_ISSUE_KEY = "hive.openIssue";
 
 function stopKeys(element) {
   // Keys typed in the card must not reach the editor's shortcuts.
@@ -519,7 +605,11 @@ export class HiveComments {
     this.listeners = new Set();
     this.overlayFrame = null;
     this.generation = 0; // bumped by each refresh and each change we send
-    this.sentRoles = new Set(); // compose boxes whose text was sent: cleared at the next rebuild
+    this.sentRoles = new Set();
+    this.members = []; // the project's people, for assigning
+    this.dataVersion = 0; // bumped whenever the topics change
+    this.history = null; // the history panel, to show a commented version
+    this.pendingIssue = this.takePendingIssue(); // compose boxes whose text was sent: cleared at the next rebuild
   }
 
   install() {
@@ -585,9 +675,12 @@ export class HiveComments {
       this.issues = data.issues || [];
       this.you = data.you || null;
       this.can = { ...this.can, ...(data.can || {}) };
+      this.members = data.members || this.members;
+      this.dataVersion++;
       this.loaded = true;
       if (this.openNumber !== null && !this.issue(this.openNumber)) this.openNumber = null;
       this.changed();
+      this.openPendingIssue();
     } catch (error) {
       // keep what we have
     }
@@ -628,6 +721,7 @@ export class HiveComments {
       }
       const data = await response.json();
       this.generation++;
+      this.dataVersion++;
       if (data.issue) {
         const index = this.issues.findIndex((i) => i.number === data.issue.number);
         if (index === -1) this.issues.push(data.issue);
@@ -701,9 +795,74 @@ export class HiveComments {
     const data = await this.send("DELETE", `/${number}`);
     if (data) {
       this.issues = this.issues.filter((issue) => issue.number !== number);
+      this.dataVersion++;
       if (this.openNumber === number) this.openNumber = null;
       this.changed();
     }
+  }
+
+  // --- a topic asked for by the page's address (a link to a comment) --------------
+
+  // register.js moves "hive-issue" out of the address before Fontra rewrites
+  // it; the parameter itself is read too, for pages without that script.
+  takePendingIssue() {
+    let number = null;
+    try {
+      const stored = JSON.parse(sessionStorage.getItem(PENDING_ISSUE_KEY) || "null");
+      const project = parseProjectIdentifier(stored?.project || "").name;
+      if (stored && project === this.projectName) number = stored.number;
+      sessionStorage.removeItem(PENDING_ISSUE_KEY);
+    } catch (error) {
+      // no storage
+    }
+    const param = new URL(window.location.href).searchParams.get("hive-issue");
+    if (number === null && param) number = param;
+    number = parseInt(number, 10);
+    return Number.isInteger(number) && number > 0 ? number : null;
+  }
+
+  // Once the topics are loaded and the glyph is on the canvas.
+  openPendingIssue(attempt = 0) {
+    const number = this.pendingIssue;
+    if (number === null) return;
+    const issue = this.issue(number);
+    if (!issue) {
+      this.pendingIssue = null;
+      this.toast(`Comment #${number} does not exist any more.`);
+      return;
+    }
+    if (!this.positionedGlyphFor(issue.glyph)) {
+      if (attempt < 40) setTimeout(() => this.openPendingIssue(attempt + 1), 250);
+      else this.pendingIssue = null;
+      return;
+    }
+    this.pendingIssue = null;
+    this.show(issue);
+  }
+
+  linkFor(issue) {
+    return issueLink(this.projectName, issue);
+  }
+
+  async copyLink(issue) {
+    const link = this.linkFor(issue);
+    try {
+      await navigator.clipboard.writeText(link);
+      this.toast(`Link to #${issue.number} copied`);
+    } catch (error) {
+      window.prompt("Link to this comment:", link);
+    }
+  }
+
+  async organize(number, changes) {
+    await this.send("PATCH", `/${number}`, changes);
+  }
+
+  // The version of the glyph the topic was written on, drawn by the history
+  // panel's preview (amber), to compare with the current one.
+  showCommentedVersion(issue) {
+    if (!issue.commit || !this.history?.showExternalVersion) return;
+    this.history.showExternalVersion(issue.commit, issue.glyph, `the version commented in #${issue.number}`);
   }
 
   // --- permissions (the server has the last word) ---------------------------------
@@ -1131,6 +1290,11 @@ export class HiveComments {
             [resolved ? "Reopen" : "Resolve"]
           )
         : null,
+      el(
+        "button",
+        { class: "icon", title: "Copy a link to this comment", onclick: () => this.copyLink(issue) },
+        [icon("link")]
+      ),
       this.mayDeleteIssue(issue)
         ? el(
             "button",
@@ -1140,7 +1304,7 @@ export class HiveComments {
               disabled: this.busy,
               onclick: () => this.confirmDelete(issue),
             },
-            [trashIcon()]
+            [icon("trash")]
           )
         : null,
       el("button", { class: "icon", title: "Close", onclick: () => this.close() }, ["×"]),
@@ -1151,15 +1315,18 @@ export class HiveComments {
       issue.messages.map((message) => this.messageElement(issue, message))
     );
     const note = issue.resolved
-      ? el("div", { class: "message" }, [
+      ? el("div", { class: "message resolved-note" }, [
           el("span", { class: "when" }, [
-            `Resolved by ${issue.resolved.by?.name || issue.resolved.by?.username || "?"} ${relativeTime(issue.resolved.at)}`,
+            `Resolved by ${issue.resolved.by?.name || issue.resolved.by?.username || "?"} ${relativeTime(issue.resolved.at)}` +
+              (issue.resolved.commit ? `, in version ${issue.resolved.commit.slice(0, 7)}` : ""),
           ]),
         ])
       : null;
     if (note) messages.append(note);
     return el("div", { class: `card${resolved ? " resolved" : ""}`, dataset: { number: issue.number } }, [
       header,
+      this.organizeRow(issue),
+      this.versionRow(issue),
       messages,
       this.error ? el("div", { class: "error" }, [this.error]) : null,
       this.can.comment
@@ -1170,6 +1337,137 @@ export class HiveComments {
             onSubmit: (text) => this.reply(issue.number, text),
             onCancel: () => this.close(),
           })
+        : null,
+    ]);
+  }
+
+  // Assigned to, labels: a line under the header. Editable by designers and
+  // up; for the others, shown when set.
+  organizeRow(issue) {
+    const editable = this.can.organize && !this.busy;
+    const labels = issue.labels || [];
+    if (!editable && !issue.assignee && !labels.length) return null;
+    const parts = [];
+    if (editable) {
+      const known = new Set(this.members.map((m) => m.username));
+      const options = [
+        el("option", { value: "" }, ["Nobody"]),
+        ...this.members.map((m) =>
+          el("option", { value: m.username, selected: issue.assignee?.username === m.username }, [
+            m.name || m.username,
+          ])
+        ),
+      ];
+      if (issue.assignee && !known.has(issue.assignee.username)) {
+        options.push(
+          el("option", { value: issue.assignee.username, selected: true }, [
+            issue.assignee.name || issue.assignee.username,
+          ])
+        );
+      }
+      parts.push(
+        el("label", { class: "assignee" }, [
+          "Assigned to ",
+          el(
+            "select",
+            {
+              class: "assignee-select",
+              onchange: (event) =>
+                this.organize(issue.number, { assignee: event.target.value || null }),
+            },
+            options
+          ),
+        ])
+      );
+    } else if (issue.assignee) {
+      parts.push(
+        el("span", { class: "assignee" }, [
+          `Assigned to ${issue.assignee.name || issue.assignee.username}`,
+        ])
+      );
+    }
+    const chips = labels.map((label) =>
+      el("span", { class: "label-chip" }, [
+        label,
+        editable
+          ? el(
+              "button",
+              {
+                class: "chip-remove",
+                title: `Remove “${label}”`,
+                onclick: () =>
+                  this.organize(issue.number, { labels: labels.filter((l) => l !== label) }),
+              },
+              ["×"]
+            )
+          : null,
+      ])
+    );
+    parts.push(el("span", { class: "labels" }, chips));
+    if (editable) {
+      const listId = `hive-labels-${issue.number}`;
+      const input = el("input", {
+        class: "label-input",
+        placeholder: "+ label",
+        list: listId,
+        maxlength: 40,
+      });
+      stopKeys(input);
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && input.value.trim()) {
+          event.preventDefault();
+          this.organize(issue.number, { labels: [...labels, input.value.trim()] });
+        }
+      });
+      input.addEventListener("change", () => {
+        // A suggestion picked with the mouse.
+        if (input.value.trim() && this.allLabels().includes(input.value.trim())) {
+          this.organize(issue.number, { labels: [...labels, input.value.trim()] });
+        }
+      });
+      parts.push(
+        input,
+        el(
+          "datalist",
+          { id: listId },
+          this.allLabels()
+            .filter((l) => !labels.some((mine) => mine.toLowerCase() === l.toLowerCase()))
+            .map((l) => el("option", { value: l }))
+        )
+      );
+    }
+    return el("div", { class: "organize" }, parts);
+  }
+
+  // The project's labels, most used first (suggestions).
+  allLabels() {
+    const counts = new Map();
+    for (const issue of this.issues) {
+      for (const label of issue.labels || []) {
+        counts.set(label, (counts.get(label) || 0) + 1);
+      }
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([l]) => l);
+  }
+
+  versionRow(issue) {
+    if (!issue.commit) return null;
+    const canShow = !!this.history?.showExternalVersion;
+    return el("div", { class: "version" }, [
+      el("span", { class: "when" }, [
+        `Written on version ${issue.commit.slice(0, 7)}` +
+          (issue.branch ? ` of ${issue.branch}` : ""),
+      ]),
+      canShow
+        ? el(
+            "button",
+            {
+              class: "link show-version",
+              title: "Draw that version of the glyph on the canvas, to compare",
+              onclick: () => this.showCommentedVersion(issue),
+            },
+            [icon("eye"), " Show"]
+          )
         : null,
     ]);
   }
@@ -1265,6 +1563,26 @@ export class HiveComments {
         event.preventDefault();
         event.stopPropagation();
         this.pressPin(hit, event, local);
+      },
+      true
+    );
+    // A click anywhere outside the post-it closes it (a draft with text
+    // stays: nothing typed is lost). Clicks on the pins, and on the canvas
+    // with the Comment tool, are handled above and by the tool.
+    document.addEventListener(
+      "mousedown",
+      (event) => {
+        if (this.openNumber === null && !this.draft) return;
+        if (this.overlayHost && event.composedPath().includes(this.overlayHost)) return;
+        if (event.target === canvas) {
+          if (this.editor.sceneController?.selectedTool === this.tool) return;
+          if (this.layerVisible() && this.pinAt(local(event))) return;
+        }
+        if (this.draft) {
+          if (!this.draft.text?.trim()) this.cancelDraft();
+          return;
+        }
+        this.close();
       },
       true
     );
@@ -1628,6 +1946,8 @@ export class HiveCommentsPanel extends HTMLElement {
       first.author?.name || first.author?.username,
       relativeTime(issue.created),
       replies ? `${replies} repl${replies > 1 ? "ies" : "y"}` : null,
+      issue.assignee ? `→ ${issue.assignee.name || issue.assignee.username}` : null,
+      ...(issue.labels || []),
     ]
       .filter(Boolean)
       .join(" · ");

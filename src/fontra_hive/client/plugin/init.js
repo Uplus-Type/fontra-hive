@@ -207,6 +207,43 @@ const STYLES = `
     font-size: 0.85em;
     opacity: 0.7;
   }
+  .comment-event {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4em;
+    padding: 0.15em 0.5em;
+    font-size: 0.85em;
+    font-style: italic;
+    opacity: 0.75;
+    cursor: pointer;
+    border-radius: 0.3em;
+    white-space: nowrap;
+  }
+  .comment-event:hover {
+    opacity: 1;
+    background: rgba(128, 128, 128, 0.12);
+  }
+  .comment-event.nested {
+    padding-left: 1.6em;
+  }
+  .comment-event .mark {
+    color: var(--hive-accent);
+    font-style: normal;
+  }
+  .comment-event.resolved .mark {
+    color: #3a9a5b;
+  }
+  .comment-event .message {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .resolved-count {
+    font-size: 0.85em;
+    color: #3a9a5b;
+    white-space: nowrap;
+  }
   .group-label {
     flex: none;
     font-size: 0.8em;
@@ -368,6 +405,25 @@ function el(tag, attrs = {}, children = []) {
 // gives each version its "sources"), newest first, without repeats.
 export function changedSources(commits) {
   return [...new Set(commits.flatMap((c) => c.sources || []))].filter(Boolean);
+}
+
+// The events of a glyph's comments, newest first: {kind: "opened" |
+// "resolved", time (unix seconds), by, issue}.
+export function commentEvents(issues) {
+  const events = [];
+  for (const issue of issues) {
+    const opened = Date.parse(issue.created) / 1000;
+    if (Number.isFinite(opened)) {
+      events.push({ kind: "opened", time: opened, by: issue.author, issue });
+    }
+    if (issue.state === "resolved" && issue.resolved?.at) {
+      const resolved = Date.parse(issue.resolved.at) / 1000;
+      if (Number.isFinite(resolved)) {
+        events.push({ kind: "resolved", time: resolved, by: issue.resolved.by, issue });
+      }
+    }
+  }
+  return events.sort((a, b) => b.time - a.time);
 }
 
 function sourcesSpan(sources) {
@@ -820,8 +876,23 @@ class HiveHistoryPanel extends HTMLElement {
   renderGlyphList(glyphName) {
     const [loose, ...groups] = this.glyphGroups();
     const count = (group) => group.items.filter((item) => item.commit).length;
+    // Comment events (#1 opened, #1 resolved) go just above the first
+    // version older than them; the ones older than every version, at the end.
+    const allItems = [loose, ...groups].flatMap((group) => group.items);
+    const eventsBefore = new Map();
+    const trailing = [];
+    for (const event of commentEvents(this.comments?.issuesOf(glyphName) || [])) {
+      const item = allItems.find((it) => (it.commit || it.landmark).time <= event.time);
+      if (item) {
+        if (!eventsBefore.has(item)) eventsBefore.set(item, []);
+        eventsBefore.get(item).push(event);
+      } else {
+        trailing.push(event);
+      }
+    }
     const rows = (items, nested) =>
-      items.map((item) =>
+      items.flatMap((item) => [
+        ...(eventsBefore.get(item) || []).map((event) => this.commentEventRow(event, nested)),
         item.commit
           ? this.commitRow(item.commit, glyphName, nested)
           : this.landmarkRow(
@@ -829,8 +900,8 @@ class HiveHistoryPanel extends HTMLElement {
               glyphName,
               nested,
               changedSources(this.commits.filter((c) => c.snapshot === item.landmark.name))
-            )
-      );
+            ),
+      ]);
     if (groups.length && count(loose)) {
       this.listElement.append(
         el("div", { class: "group-label" }, [
@@ -847,6 +918,41 @@ class HiveHistoryPanel extends HTMLElement {
       );
       if (this.expanded.has(key)) this.listElement.append(...rows(group.items, true));
     }
+    this.listElement.append(...trailing.map((event) => this.commentEventRow(event, false)));
+  }
+
+  // "#1 opened by Ana" / "#1 resolved by Dan": a click shows the comment.
+  commentEventRow(event, nested) {
+    const { issue } = event;
+    const who = event.by?.name || event.by?.username || "?";
+    const first = issue.messages?.[0]?.text || "";
+    return el(
+      "div",
+      {
+        class: `comment-event ${event.kind}${nested ? " nested" : ""}`,
+        title: `#${issue.number} ${event.kind} by ${who} — ${formatFullDate(event.time)}\n\n${first}\n\nClick to show the comment`,
+        onclick: () => this.comments?.show(issue),
+      },
+      [
+        el("span", { class: "mark" }, [event.kind === "resolved" ? "✓" : "●"]),
+        el("span", { class: "message" }, [
+          `#${issue.number} ${event.kind} by ${who}`,
+          el("span", { class: "sources" }, [` · ${first}`]),
+        ]),
+        el("span", { class: "when" }, [formatDate(event.time)]),
+      ]
+    );
+  }
+
+  // Comments resolved between two snapshots (after ``after``, up to ``until``,
+  // unix seconds), of one glyph or of the whole font.
+  resolvedBetween(after, until, glyphName = null) {
+    const issues = glyphName ? this.comments?.issuesOf(glyphName) : this.comments?.issues;
+    return (issues || []).filter((issue) => {
+      if (issue.state !== "resolved" || !issue.resolved?.at) return false;
+      const time = Date.parse(issue.resolved.at) / 1000;
+      return time <= until && (after === null || time > after);
+    });
   }
 
   // One of the font's snapshots, in a glyph's history: a landmark (the glyph
@@ -893,7 +999,8 @@ class HiveHistoryPanel extends HTMLElement {
       this.hovered = null;
       this.requestCanvasUpdate();
     }
-    if (this.pinned && !visible.has(this.pinned.sha)) {
+    // A version shown from a comment ("Show" in a post-it) has no row.
+    if (this.pinned && !this.isExternalPin(this.pinned) && !visible.has(this.pinned.sha)) {
       this.disarmRestore();
       this.pinned = null;
       this.requestCanvasUpdate();
@@ -959,6 +1066,14 @@ class HiveHistoryPanel extends HTMLElement {
   // ``key``: the group's key in this.expanded (a glyph snapshot's is
   // "glyph:<name>", a font snapshot's its name).
   snapshotRow(snapshot, grouped, glyphName, key = snapshot.name, sources = []) {
+    const ofGlyphSnapshot = key !== snapshot.name;
+    const list = ofGlyphSnapshot ? this.glyphSnapshots : this.snapshots;
+    const previous = list[list.indexOf(snapshot) + 1];
+    const resolved = this.resolvedBetween(
+      previous ? previous.time : null,
+      snapshot.time,
+      ofGlyphSnapshot ? glyphName : null
+    );
     const isCurrent = snapshot.sha === this.head;
     const isPinned = this.pinned?.sha === snapshot.sha;
     const isOpen = this.expanded.has(key);
@@ -1002,6 +1117,11 @@ class HiveHistoryPanel extends HTMLElement {
               `${snapshot.author} — ${formatFullDate(snapshot.time)}\n` +
               (glyphName ? `${count} version${count === 1 ? "" : "s"} of ${glyphName}, ` : "") +
               `${snapshot.changes} change${snapshot.changes === 1 ? "" : "s"} in the font`) +
+          (resolved.length
+            ? `\nComments resolved since the previous snapshot: ${resolved
+                .map((issue) => `#${issue.number}`)
+                .join(", ")}`
+            : "") +
           (isCurrent
             ? " (current)"
             : glyphName
@@ -1011,6 +1131,9 @@ class HiveHistoryPanel extends HTMLElement {
       [
         caret,
         el("span", { class: "name" }, [snapshot.title, sourcesSpan(sources)]),
+        ...(resolved.length
+          ? [el("span", { class: "resolved-count" }, [`✓ ${resolved.length}`])]
+          : []),
         ...(isCurrent ? [el("span", { class: "current-mark" }, ["current"])] : []),
         el("span", { class: "count" }, [`${count}`]),
         el("span", { class: "when" }, [formatDate(snapshot.time)]),
@@ -1049,7 +1172,9 @@ class HiveHistoryPanel extends HTMLElement {
       );
       return;
     }
-    let text = `${isHover ? "Hovering" : "Previewing"} ${this.describeRef(p.sha)}`;
+    let text = `${isHover ? "Hovering" : "Previewing"} ${
+      !isHover && this.isExternalPin(p) ? this.externalPin.label : this.describeRef(p.sha)
+    }`;
     if (!p.ready) text += " — loading…";
     else if (p.error) text += ` — ${p.error}`;
     else if (p.shownLayer) text += ` — layer “${p.shownLayer}”`;
@@ -1272,8 +1397,33 @@ class HiveHistoryPanel extends HTMLElement {
       this.clearAllPreviews();
       this.head = data.head;
       await this.refresh(true);
+      this.offerToReopen(sha, glyphName);
     } catch (error) {
       this.render(glyphName, `Restore failed (${error.message}).`, true);
+    }
+  }
+
+  // After a restore: the comments on this glyph resolved after the restored
+  // version may be about what the restore brings back. Offer to reopen them.
+  async offerToReopen(sha, glyphName) {
+    const item =
+      this.commits.find((c) => c.sha === sha) ||
+      this.snapshots.find((s) => s.sha === sha) ||
+      this.glyphSnapshots.find((s) => s.sha === sha);
+    if (!item || !this.comments) return;
+    const reopenable = this.resolvedBetween(item.time, Infinity, glyphName).filter((issue) =>
+      this.comments.mayChangeState(issue)
+    );
+    if (!reopenable.length) return;
+    const numbers = reopenable.map((issue) => `#${issue.number}`).join(", ");
+    const one = reopenable.length === 1;
+    if (
+      window.confirm(
+        `The restored version of ${glyphName} is older than the resolution of ${numbers}. ` +
+          `Reopen ${one ? "it" : "them"}?`
+      )
+    ) {
+      for (const issue of reopenable) await this.comments.setState(issue.number, "open");
     }
   }
 
@@ -1342,9 +1492,26 @@ class HiveHistoryPanel extends HTMLElement {
     this.editor.canvasController?.requestUpdate();
   }
 
+  // A version asked for from elsewhere (a comment's "Show"): pinned like a
+  // clicked row, with a label saying where it comes from, and kept even
+  // though no row of the list stands for it.
+  showExternalVersion(sha, glyphName, label) {
+    this.disarmRestore();
+    this.pinned = this.getPreview(sha, glyphName);
+    this.externalPin = { preview: this.pinned, label };
+    this.render(this.lastGlyph, null);
+    this.requestCanvasUpdate();
+    return this.pinned.loaded;
+  }
+
+  isExternalPin(preview) {
+    return !!preview && this.externalPin?.preview === preview;
+  }
+
   // Pin a version (click): it stays on the canvas and offers "Restore".
   startPreview(sha, glyphName) {
     this.disarmRestore();
+    this.externalPin = null;
     this.pinned = this.getPreview(sha, glyphName);
     this.render(this.lastGlyph, null);
     this.requestCanvasUpdate();
@@ -1555,6 +1722,7 @@ class HiveHistoryPanel extends HTMLElement {
   // Unpin (the × of the status line, a second click on the pinned row).
   clearPreview() {
     this.disarmRestore();
+    this.externalPin = null;
     if (!this.pinned) return;
     this.pinned = null;
     this.render(this.lastGlyph, null);
@@ -1590,7 +1758,17 @@ export function init(editor, pluginPath) {
   // Comments on glyphs: the Comment tool, pins on the canvas, post-its and
   // the "Comments" panel (comments.js).
   try {
-    initComments(editor, pluginPath);
+    const { comments } = initComments(editor, pluginPath);
+    // The two know each other: a post-it's "Show" uses the history preview,
+    // and the history shows the comments' events and what snapshots resolved.
+    comments.history = panel;
+    panel.comments = comments;
+    let seen = comments.dataVersion;
+    comments.listeners.add(() => {
+      if (comments.dataVersion === seen) return; // only when the comments changed
+      seen = comments.dataVersion;
+      if (panel.visible && panel.lastGlyph !== undefined) panel.render(panel.lastGlyph, null);
+    });
   } catch (error) {
     console.error("Fontra Hive: comments could not start", error);
   }

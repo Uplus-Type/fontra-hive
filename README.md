@@ -379,7 +379,7 @@ Reviewers leave notes where they belong: on a point of a glyph, on one of
 its sources. Each comment is a numbered topic (#12) of the project with a
 thread of replies, open or resolved.
 
-- **The Comment tool** (a speech bubble in the toolbar): click in the glyph
+- **The Comment tool** (a speech bubble with a “+” in the toolbar): click in the glyph
   being edited to pin a comment there, on the source being edited (at an
   interpolated position there is no source: go to one first). Clicking over
   another glyph of the line selects it, like the pointer tool.
@@ -393,6 +393,24 @@ thread of replies, open or resolved.
   open then resolved, or the whole project's when no glyph is selected; a
   click goes to the glyph and its source and opens the post-it. "Resolved"
   shows resolved topics on the canvas too.
+- **Organize.** Designers and up assign a topic to a member of the project
+  and give it labels (free, with the project's labels as suggestions), from
+  the post-it. A click outside the post-it closes it.
+- **Links.** "Copy link" in a post-it gives an editor address that opens
+  the glyph on its source with the post-it open
+  (`editor.html?project=…&text="/H"&selectedGlyph=…&hive-issue=12`).
+- **With the history.** A post-it says which version it was written on;
+  "Show" draws that version on the canvas (the history preview), to compare
+  with the current one; a resolved topic says in which version. In a glyph's
+  history, "#1 opened" and "#1 resolved" appear between the versions, at
+  their date. Restoring a version older than a topic's resolution offers to
+  reopen it. Snapshots show how many comments were resolved since the
+  previous one (✓ 3). Restoring never changes the comments themselves: a
+  discussion goes forward even when the drawing goes back.
+- **The project's comments** on Hive's home page (project → "See all
+  comments", `#project/<owner>/<name>/comments`): every topic, filtered by
+  state, glyph, person (wrote in it or assigned), label, branch and text,
+  each with a link to open it in the editor.
 - **Who may do what.** Reviewers and up (`comment`): open topics, reply,
   edit their own messages, resolve, reopen and move their own topics.
   Designers and up (`edit`): resolve, reopen and move any topic. Managers and
@@ -408,11 +426,12 @@ thread of replies, open or resolved.
   commit it was resolved on.
 
 ```
-GET    /api/hive/projects/<name>/comments[?glyph=H]      topics, who you are, what you may do
+GET    /api/hive/projects/<name>/comments[?glyph=H]      topics, who you are, what you may do, members
 GET    /api/hive/projects/<name>/comments/head           changes with every comment (polled every 3 s)
 POST   /api/hive/projects/<name>/comments                {glyph, source: {layer, name, location}, point: {x, y}, text[, branch]}
 POST   /api/hive/projects/<name>/comments/<n>/messages   {text}
 PATCH  /api/hive/projects/<name>/comments/<n>            {state: "open"|"resolved"} or {point: {x, y}}
+                                                         or {assignee: username|null, labels: [...]}
 PATCH  /api/hive/projects/<name>/comments/<n>/messages/<id>   {text}
 DELETE /api/hive/projects/<name>/comments/<n>[/messages/<id>]
 ```
@@ -468,7 +487,8 @@ install chromium`) and is skipped otherwise.
 
 GPLv3, like Fontra. See `LICENSE`.
 
-The icons of the history and comments panels (`history`, `message-circle`)
-and the delete button of a comment (`trash`) are from [Tabler Icons](https://tabler.io/icons)
+The icons of the history and comments panels (`history`,
+`message-circle-search`), of the Comment tool (`message-circle-plus`) and of
+the post-it's buttons (`trash`, `link`, `eye`) are from [Tabler Icons](https://tabler.io/icons)
 (MIT License, see `src/fontra_hive/client/plugin/TABLER-ICONS-LICENSE.txt`),
 the icon set Fontra uses for its own panels.

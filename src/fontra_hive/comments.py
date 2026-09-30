@@ -60,6 +60,8 @@ ISSUES_DIR = "issues/"
 
 MAX_TEXT = 10_000
 MAX_MESSAGES = 500  # per topic
+MAX_LABELS = 10  # per topic
+MAX_LABEL = 40
 MAX_NAME = 200
 MAX_COORDINATE = 1_000_000
 MAX_LOCATION_AXES = 64
@@ -150,6 +152,30 @@ def clean_source(source: Any) -> dict:
             for axis, value in sorted(location.items())
         },
     }
+
+
+def clean_labels(labels: Any) -> list[str]:
+    """Free labels ("curve", "spacing", "client"…): trimmed, inner spaces
+    collapsed, duplicates dropped regardless of case, first spelling kept."""
+    if not isinstance(labels, list):
+        raise CommentError("labels must be a list")
+    result: list[str] = []
+    seen: set[str] = set()
+    for label in labels:
+        if not isinstance(label, str):
+            raise CommentError("a label must be text")
+        label = " ".join(label.split())
+        if not label:
+            continue
+        if len(label) > MAX_LABEL or "\x00" in label:
+            raise CommentError(f"a label has at most {MAX_LABEL} characters")
+        if label.casefold() in seen:
+            continue
+        seen.add(label.casefold())
+        result.append(label)
+    if len(result) > MAX_LABELS:
+        raise CommentError(f"at most {MAX_LABELS} labels")
+    return result
 
 
 def person(username: str, name: str | None, uid: str | None = None) -> dict:
@@ -429,6 +455,38 @@ class CommentStore:
                 check(issue)
             issue["point"] = point
             return f"Move #{number}"
+
+        return self._update_issue(number, edit, author)
+
+    def organize(
+        self,
+        number: int,
+        *,
+        assignee: dict | None | object = ...,
+        labels: list[str] | object = ...,
+        author: Signature = SERVER_SIGNATURE,
+    ) -> dict:
+        """Set who the topic is assigned to (a person, or None) and/or its
+        labels; ``...`` leaves a field as it is."""
+        if labels is not ...:
+            labels = clean_labels(labels)
+
+        def edit(issue):
+            changes = []
+            if assignee is not ...:
+                issue["assignee"] = assignee
+                changes.append(
+                    f"assign #{number} to {assignee['username']}"
+                    if assignee
+                    else f"unassign #{number}"
+                )
+            if labels is not ...:
+                issue["labels"] = labels
+                changes.append(f"label #{number}: {', '.join(labels) or '(none)'}")
+            if not changes:
+                raise CommentError("nothing to change")
+            text = "; ".join(changes)
+            return text[0].upper() + text[1:]
 
         return self._update_issue(number, edit, author)
 

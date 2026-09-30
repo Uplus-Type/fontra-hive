@@ -6,6 +6,7 @@
 // One page, sections chosen by the URL fragment:
 //   #                        projects          #new             new project
 //   #project/<owner>/<name>  project settings  #orgs            organizations
+//   #project/<owner>/<name>/comments           the project's comments
 //   #org/<login>             one organization  #profile         profile
 //
 // Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
@@ -23,6 +24,7 @@ import {
   openShareDialog,
   timeAgo,
 } from "../views/hive-views.js";
+import { issueLink, relativeTime } from "../plugin/comments.js";
 
 const ROLES = ["observer", "reviewer", "designer", "manager", "admin"];
 const main = () => document.getElementById("main");
@@ -416,6 +418,152 @@ function branchesPanel(project, data) {
   return panel;
 }
 
+// --- comments on glyphs -------------------------------------------------------------
+
+async function loadComments(projectId) {
+  try {
+    return await hiveCall(`/api/hive/projects/${encodeURIComponent(projectId)}/comments`);
+  } catch (error) {
+    return null;
+  }
+}
+
+function commentsPanel(project, data) {
+  const open = data.issues.filter((i) => i.state === "open");
+  const mine = data.you
+    ? open.filter((i) => i.assignee?.username === data.you.username).length
+    : 0;
+  return el("div", { class: "panel comments-summary" }, [
+    el("h3", { style: "margin-top:0" }, ["Comments"]),
+    el("p", { class: "note" }, [
+      data.issues.length
+        ? `${open.length} open · ${data.issues.length - open.length} resolved` +
+          (mine ? ` · ${mine} assigned to you` : "")
+        : "No comments yet. In the editor, the Comment tool pins a note to a point of a glyph.",
+    ]),
+    data.issues.length
+      ? el("a", { href: projectHash(project.id) + "/comments" }, [
+          el("button", { class: "secondary" }, ["See all comments"]),
+        ])
+      : null,
+  ]);
+}
+
+// Filters of the comments page, kept in the page's address after "?".
+export function filterComments(issues, f, you) {
+  const text = (f.q || "").trim().toLowerCase();
+  return issues.filter((issue) => {
+    if (f.state === "open" && issue.state !== "open") return false;
+    if (f.state === "resolved" && issue.state !== "resolved") return false;
+    if (f.glyph && issue.glyph !== f.glyph) return false;
+    if (f.branch && issue.branch !== f.branch) return false;
+    if (f.label && !(issue.labels || []).includes(f.label)) return false;
+    const person = f.person === "me" ? you?.username : f.person;
+    if (person) {
+      const involved = [issue.author, issue.assignee, ...issue.messages.map((m) => m.author)];
+      if (f.role === "assignee" ? issue.assignee?.username !== person : !involved.some((p) => p?.username === person)) {
+        return false;
+      }
+    }
+    if (text) {
+      const haystack = [issue.glyph, `#${issue.number}`, ...(issue.labels || []), ...issue.messages.map((m) => m.text)]
+        .join("\n")
+        .toLowerCase();
+      if (!haystack.includes(text)) return false;
+    }
+    return true;
+  });
+}
+
+async function commentsSection(projectId) {
+  const data = await hiveCall(`/api/hive/projects/${encodeURIComponent(projectId)}/comments`);
+  const issues = [...data.issues].sort((a, b) => b.number - a.number);
+  const f = { state: "open", glyph: "", person: "", role: "involved", label: "", branch: "", q: "" };
+  const unique = (values) => [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const select = (key, label, options) => {
+    const element = el("select", { "aria-label": label, "data-filter": key }, options.map(([value, text]) =>
+      el("option", { value }, [text])
+    ));
+    element.value = f[key];
+    element.addEventListener("change", () => {
+      f[key] = element.value;
+      render();
+    });
+    return element;
+  };
+  const people = new Map();
+  for (const m of data.members || []) people.set(m.username, m.name || m.username);
+  for (const issue of issues) {
+    for (const p of [issue.author, issue.assignee, ...issue.messages.map((m) => m.author)]) {
+      if (p && !people.has(p.username)) people.set(p.username, p.name || p.username);
+    }
+  }
+  const search = el("input", { type: "search", placeholder: "Search", "aria-label": "Search", "data-filter": "q" });
+  search.addEventListener("input", () => {
+    f.q = search.value;
+    render();
+  });
+  const filters = el("div", { class: "row comment-filters" }, [
+    select("state", "State", [["open", "Open"], ["resolved", "Resolved"], ["all", "All"]]),
+    select("glyph", "Glyph", [["", "Any glyph"], ...unique(issues.map((i) => i.glyph)).map((g) => [g, g])]),
+    select("person", "Person", [
+      ["", "Anyone"],
+      ...(data.you ? [["me", "Me"]] : []),
+      ...[...people.entries()].sort((a, b) => a[1].localeCompare(b[1])).map(([u, n]) => [u, n]),
+    ]),
+    select("role", "How", [["involved", "wrote or assigned"], ["assignee", "assigned"]]),
+    select("label", "Label", [["", "Any label"], ...unique(issues.flatMap((i) => i.labels || [])).map((l) => [l, l])]),
+    unique(issues.map((i) => i.branch)).length > 1
+      ? select("branch", "Branch", [["", "Any branch"], ...unique(issues.map((i) => i.branch)).map((b) => [b, b])])
+      : null,
+    search,
+  ]);
+  const table = el("table", { class: "people comments" });
+  const count = el("p", { class: "note" });
+  const render = () => {
+    const shown = filterComments(issues, f, data.you);
+    count.textContent = `${shown.length} of ${issues.length} comment${issues.length === 1 ? "" : "s"}`;
+    table.replaceChildren(
+      ...shown.map((issue) => {
+        const first = issue.messages[0] || {};
+        const replies = issue.messages.length - 1;
+        return el("tr", { "data-number": issue.number, class: issue.state }, [
+          el("td", { class: "number" }, [`#${issue.number}`]),
+          el("td", {}, [
+            el("b", {}, [issue.glyph]),
+            el("small", {}, [issue.source?.name || ""]),
+          ]),
+          el("td", { class: "text" }, [
+            el("span", {}, [first.text || ""]),
+            el("small", {}, [
+              [
+                `${first.author?.name || first.author?.username || "?"}, ${relativeTime(issue.created)}`,
+                replies ? `${replies} repl${replies > 1 ? "ies" : "y"}` : null,
+                issue.state === "resolved"
+                  ? `resolved by ${issue.resolved?.by?.name || issue.resolved?.by?.username || "?"}`
+                  : null,
+                issue.assignee ? `→ ${issue.assignee.name || issue.assignee.username}` : null,
+              ].filter(Boolean).join(" · "),
+            ]),
+          ]),
+          el("td", { class: "labels" }, (issue.labels || []).map((l) => el("span", { class: "label-chip" }, [l]))),
+          el("td", {}, [
+            el("a", { href: issueLink(projectId, issue) }, [el("button", { class: "secondary" }, ["Open"])]),
+          ]),
+        ]);
+      })
+    );
+  };
+  main().replaceChildren(
+    el("h2", {}, [
+      el("span", { class: "grow" }, [`${projectId} — comments`]),
+      el("a", { href: projectHash(projectId) }, [el("button", { class: "secondary" }, ["Back to the project"])]),
+    ]),
+    el("div", { class: "panel" }, [filters, count, table]),
+  );
+  render();
+}
+
 // Whether the project has its font yet (a repository on the Fontra server).
 // When the server cannot say, assume it does: opening then works as before.
 async function hasFont(projectId) {
@@ -483,6 +631,8 @@ async function projectSection(projectId) {
       branches = null;
     }
     if (branches) content.push(branchesPanel(project, branches));
+    const comments = await loadComments(project.id);
+    if (comments) content.push(commentsPanel(project, comments));
   }
 
   // Download: the sources, or fonts built on the server (managers, admins).
@@ -783,6 +933,9 @@ export function parseHash(hash) {
     case "new":
       return { section: "projects", view: "new" };
     case "project":
+      if (parts.length === 4 && parts[3] === "comments") {
+        return { section: "projects", view: "comments", project: `${parts[1]}/${parts[2]}` };
+      }
       return parts.length === 3 ? { section: "projects", view: "project", project: `${parts[1]}/${parts[2]}` } : { section: "projects" };
     case "orgs":
       return { section: "orgs" };
@@ -803,6 +956,7 @@ async function route() {
   try {
     if (where.view === "new") await newProjectSection();
     else if (where.view === "project") await projectSection(where.project);
+    else if (where.view === "comments") await commentsSection(where.project);
     else if (where.view === "org") await orgSection(where.login);
     else if (where.section === "orgs") await orgsSection();
     else if (where.section === "profile") await profileSection();

@@ -612,3 +612,98 @@ def test_glyph_snapshot_form(page):
     ]
     assert page.evaluate("panel.snapshotForm") is None
     assert page.errors == []
+
+
+COMMENTS = """
+() => {
+  const person = (u) => ({ username: u, name: u.toUpperCase() });
+  const issue = (number, created, resolvedAt, glyph = "A") => ({
+    number, glyph, created, state: resolvedAt ? "resolved" : "open",
+    author: person("ana"), messages: [{ id: 1, text: `Topic ${number}` }],
+    resolved: resolvedAt ? { by: person("dan"), at: resolvedAt } : null,
+  });
+  const issues = [
+    issue(1, "2027-01-01T00:00:00Z", "2027-01-02T00:00:00Z"),
+    issue(2, "2019-01-01T00:00:00Z", null),
+    issue(3, "2025-01-01T00:00:00Z", "2025-02-01T00:00:00Z", "B"),
+  ];
+  window.reopened = [];
+  panel.comments = {
+    issues,
+    issuesOf: (g) => issues.filter((i) => i.glyph === g),
+    show: (i) => (window.shown = i.number),
+    mayChangeState: () => true,
+    setState: async (n, s) => window.reopened.push([n, s]),
+  };
+}
+"""
+
+
+def test_comment_events_in_the_glyph_history(page):
+    page.evaluate(SETUP)
+    page.evaluate("wait(300)")
+    page.evaluate(COMMENTS)
+    page.evaluate("panel.render('A', null)")
+    rows = [
+        r for r in page.evaluate("rows()") if r not in ("summary-line", "group-label")
+    ]
+    assert rows[:3] == [
+        "comment-event resolved",
+        "comment-event opened",
+        "commit current:3",
+    ]
+    assert rows[-1] == "comment-event opened"  # #2, older than every version
+    assert "#1 resolved by DAN" in page.evaluate(
+        "panel.shadowRoot.querySelector('.comment-event').textContent"
+    )
+    page.evaluate("panel.shadowRoot.querySelector('.comment-event').click()")
+    assert page.evaluate("window.shown") == 1
+
+
+def test_a_commented_version_stays_pinned_without_a_row(page):
+    page.evaluate(SETUP)
+    page.evaluate("wait(300)")
+    page.evaluate(
+        "panel.showExternalVersion(sha('1'), 'A', 'the version commented in #1')"
+    )
+    page.evaluate("wait(100)")
+    page.evaluate(
+        "panel.render('A', null)"
+    )  # c1 is inside the collapsed snapshot group
+    assert page.evaluate("panel.pinned?.sha") == "1" * 40
+    assert page.evaluate("statusText()").startswith(
+        "Previewing the version commented in #1"
+    )
+    assert page.evaluate("drawCall()") == {"alpha": None, "fills": 1}
+    # Clicking a row replaces it, with its own label.
+    page.evaluate("rowFor('2').click()")
+    assert page.evaluate("statusText()").startswith("Previewing 2222222222")
+
+
+def test_restoring_an_older_version_offers_to_reopen(page):
+    page.evaluate(SETUP)
+    page.evaluate("wait(300)")
+    page.evaluate(COMMENTS)
+    page.evaluate("window.confirm = (text) => { window.asked = text; return true; }")
+    page.evaluate("rowFor('2').click()")
+    page.evaluate("restoreButton().click()")
+    page.evaluate("restoreButton().click()")
+    page.wait_for_function("window.reopened.length === 1")
+    assert page.evaluate("window.reopened") == [[1, "open"]]
+    assert "older than the resolution of #1" in page.evaluate("window.asked")
+
+
+def test_snapshots_count_the_comments_they_resolved(page):
+    page.evaluate(SETUP)
+    page.evaluate("wait(300)")
+    page.evaluate(COMMENTS)
+    page.evaluate(
+        "editor.sceneController.sceneSettings.selectedGlyphName = null;"
+        " state.listeners.forEach((f) => f())"
+    )
+    page.evaluate("wait(200)")
+    counts = page.evaluate(
+        "[...panel.shadowRoot.querySelectorAll('.resolved-count')].map(e => e.textContent)"
+    )
+    assert counts == ["✓ 1"]  # #3, resolved before the font snapshot "V1"
+    assert page.errors == []

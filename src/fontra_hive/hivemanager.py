@@ -497,6 +497,13 @@ class HiveProjectManager(DevHiveProjectManager):
     async def membersHandler(self, request: web.Request) -> web.Response:
         raise web.HTTPNotFound(text="members are managed by hive-api: /api/projects/…")
 
+    async def projectMembers(self, name: str) -> list[dict]:
+        try:
+            return await self.api.members(name)
+        except HiveApiUnavailable as error:
+            logger.warning("hive-api unavailable: %s", error)
+            return []
+
     async def setMemberHandler(self, request: web.Request) -> web.Response:
         raise web.HTTPNotFound(text="members are managed by hive-api: /api/projects/…")
 

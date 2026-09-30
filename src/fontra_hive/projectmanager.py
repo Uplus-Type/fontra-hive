@@ -348,6 +348,16 @@ class DevHiveProjectManager(CommentRoutesMixin):
             }
         )
 
+    async def projectMembers(self, name: str) -> list[dict]:
+        """Everyone with a role on the project (username, name, role), for
+        assigning comments. Empty without accounts."""
+        if self.directory is None:
+            return []
+        return [
+            {"username": m["username"], "name": m["name"], "role": m["role"]}
+            for m in self.directory.members(name)
+        ]
+
     async def setMemberHandler(self, request: web.Request) -> web.Response:
         """Add, change or remove an outside collaborator (managers, admins)."""
         name = request.match_info["name"]

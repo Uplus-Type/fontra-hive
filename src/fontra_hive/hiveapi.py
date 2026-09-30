@@ -74,6 +74,8 @@ class HiveApi:
         # (uid, project) -> (ProjectAccess | None, fetched at)
         self._access: dict[tuple[str, str], tuple[ProjectAccess | None, float]] = {}
         self._refreshing: set[tuple[str, str]] = set()
+        # project -> (members, fetched at)
+        self._members: dict[str, tuple[list[dict], float]] = {}
 
     @property
     def session(self) -> aiohttp.ClientSession:
@@ -242,3 +244,22 @@ class HiveApi:
     async def project(self, project: str) -> dict | None:
         """A project's id, repository and default branch (no user needed)."""
         return await self._get("/api/internal/project", project=project)
+
+    async def members(self, project: str, ttl: float = 30.0) -> list[dict]:
+        """Everyone with a role on a project: username, name, uid, avatar,
+        role (kept ``ttl`` seconds: comments list them at each change)."""
+        key = project.lower()
+        cached = self._members.get(key)
+        if cached is not None and time.monotonic() - cached[1] < ttl:
+            return cached[0]
+        data = await self._get("/api/internal/members", project=project)
+        members = [
+            {
+                k: m.get(k)
+                for k in ("username", "name", "uid", "avatar", "role")
+                if m.get(k) is not None
+            }
+            for m in (data or {}).get("members", [])
+        ]
+        self._members[key] = (members, time.monotonic())
+        return members

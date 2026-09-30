@@ -74,7 +74,11 @@ async ({ you, can, issues }) => {
     server.requests.push({ method, path, body });
     if (method === "GET" && path === "/head") return json({ head: server.head });
     if (method === "GET" && path === "") return json({
-      head: server.head, issues: server.issues, you: server.you, can: server.can });
+      head: server.head, issues: server.issues, you: server.you, can: server.can,
+      members: [
+        { username: "ana", name: "Ana Reviewer" },
+        { username: "bob", name: "Bob Designer" },
+      ] });
     const person = { username: server.you.username, name: server.you.name };
     const now = "2026-09-30T10:00:00Z";
     if (method === "POST" && path === "") {
@@ -95,6 +99,12 @@ async ({ you, can, issues }) => {
         created: now, edited: null, text: body.text });
     } else if (method === "PATCH" && !m[2]) {
       if (body.point) issue.point = body.point;
+      if ("assignee" in body) {
+        issue.assignee = body.assignee
+          ? { username: body.assignee, name: body.assignee.toUpperCase() }
+          : null;
+      }
+      if (body.labels) issue.labels = body.labels;
       if (body.state) {
         issue.state = body.state;
         issue.resolved = body.state === "resolved" ? { by: person, at: now } : null;
@@ -221,8 +231,8 @@ async ({ you, can, issues }) => {
 
 ANA = {"username": "ana", "name": "Ana Reviewer"}
 BOB = {"username": "bob", "name": "Bob Designer"}
-ALL = {"comment": True, "resolveAny": True, "moderate": True}
-REVIEWER = {"comment": True, "resolveAny": False, "moderate": False}
+ALL = {"comment": True, "resolveAny": True, "organize": True, "moderate": True}
+REVIEWER = {"comment": True, "resolveAny": False, "organize": False, "moderate": False}
 
 
 def topic(number, author=BOB, layer="Bold", state="open", replies=(), glyph="H"):
@@ -607,3 +617,143 @@ def test_the_card_follows_a_pan_even_with_the_layer_off(page):
     p.evaluate("frame()")
     p.evaluate("frame()")
     assert p.evaluate("card().offsetLeft") == before + 40
+
+
+# --- step B ---------------------------------------------------------------------
+
+
+def test_designers_assign_and_label_in_the_post_it(page):
+    p = page(you=BOB, issues=[topic(1), {**topic(2), "labels": ["curve"]}])
+    p.evaluate("comments.open(1)")
+    p.evaluate("frame()")
+    options = p.evaluate(
+        "[...card().querySelectorAll('.assignee-select option')].map(o => o.textContent)"
+    )
+    assert options == ["Nobody", "Ana Reviewer", "Bob Designer"]
+    p.evaluate("""() => {
+      const select = card().querySelector('.assignee-select');
+      select.value = 'ana';
+      select.dispatchEvent(new Event('change'));
+    }""")
+    p.wait_for_function("comments.issue(1).assignee?.username === 'ana'")
+    p.evaluate("frame()")
+    assert p.evaluate("card().querySelector('.assignee-select').value") == "ana"
+    assert requests(p, "PATCH")[-1]["body"] == {"assignee": "ana"}
+    # Suggestions come from the project's labels.
+    assert p.evaluate(
+        "[...card().querySelectorAll('datalist option')].map(o => o.value)"
+    ) == ["curve"]
+    p.evaluate("card().querySelector('.label-input').focus()")
+    p.keyboard.type("spacing")
+    assert p.evaluate("windowKeys") == 0
+    p.keyboard.press("Enter")
+    p.wait_for_function("card().querySelectorAll('.label-chip').length === 1")
+    assert requests(p, "PATCH")[-1]["body"] == {"labels": ["spacing"]}
+    p.evaluate("card().querySelector('.chip-remove').click()")
+    p.wait_for_function("card().querySelectorAll('.label-chip').length === 0")
+    assert requests(p, "PATCH")[-1]["body"] == {"labels": []}
+
+
+def test_reviewers_see_the_assignee_and_labels(page):
+    labelled = {**topic(1), "labels": ["client"], "assignee": BOB}
+    p = page(you=ANA, can=REVIEWER, issues=[labelled, topic(2)])
+    p.evaluate("comments.open(1)")
+    p.evaluate("frame()")
+    assert p.evaluate("card().querySelector('.assignee-select')") is None
+    assert p.evaluate("card().querySelector('.organize').textContent") == (
+        "Assigned to Bob Designerclient"
+    )
+    p.evaluate("comments.open(2)")
+    p.evaluate("frame()")
+    assert p.evaluate("card().querySelector('.organize')") is None
+
+
+def test_a_link_opens_the_editor_on_the_comment(page):
+    p = page()
+    link = p.evaluate(
+        "module.issueLink('uplustype/Mutator', {glyph: 'a.alt', number: 7},"
+        " 'https://fontrahive.com')"
+    )
+    from urllib.parse import parse_qs, urlparse
+
+    url = urlparse(link)
+    assert url.path == "/editor.html"
+    query = parse_qs(url.query)
+    assert query["project"] == ["uplustype/Mutator"]
+    assert query["text"] == ['"/a.alt"']
+    assert query["hive-issue"] == ["7"]
+    assert query["selectedGlyph"] == ['{"lineIndex":0,"glyphIndex":0,"isEditing":true}']
+
+
+def test_a_pending_link_opens_its_comment_once_loaded(page):
+    p = page(issues=[topic(1), topic(2)])
+    p.evaluate("""async () => {
+      sessionStorage.setItem('hive.openIssue',
+        JSON.stringify({project: 'Mutator@main', number: '2'}));
+      comments.pendingIssue = comments.takePendingIssue();
+      await comments.refresh();
+    }""")
+    p.wait_for_function("comments.openNumber === 2")
+    assert p.evaluate("sessionStorage.getItem('hive.openIssue')") is None
+    assert p.evaluate("window.wentToSource") == 1
+
+
+def test_show_the_commented_version(page):
+    p = page(issues=[{**topic(1), "commit": "abcdef1234"}])
+    p.evaluate(
+        "comments.history = {showExternalVersion: (...a) => (window.shownVersion = a)}"
+    )
+    p.evaluate("comments.open(1)")
+    p.evaluate("frame()")
+    assert "Written on version abcdef1 of main" in p.evaluate("cardText()")
+    p.evaluate("card().querySelector('.show-version').click()")
+    assert p.evaluate("window.shownVersion") == [
+        "abcdef1234",
+        "H",
+        "the version commented in #1",
+    ]
+
+
+def test_copy_link(page):
+    p = page(issues=[topic(1)])
+    p.evaluate("navigator.clipboard.writeText = async (t) => (window.copied = t)")
+    p.evaluate("comments.open(1)")
+    p.evaluate("frame()")
+    p.evaluate("card().querySelector('[title^=\"Copy a link\"]').click()")
+    p.wait_for_function("window.copied")
+    assert "hive-issue=1" in p.evaluate("window.copied")
+
+
+def test_a_click_outside_closes_the_post_it(page):
+    p = page(issues=[topic(1)])
+    p.evaluate("comments.open(1)")
+    p.evaluate("frame()")
+    # Inside: stays open.
+    p.evaluate(
+        "card().querySelector('.messages').dispatchEvent("
+        "new MouseEvent('mousedown', {bubbles: true, composed: true}))"
+    )
+    assert p.evaluate("comments.openNumber") == 1
+    # On its own pin: the pin's click decides (here: closes, once).
+    p.evaluate("press(300, 184)")
+    assert p.evaluate("comments.openNumber") is None
+    p.evaluate("comments.open(1)")
+    # Elsewhere on the canvas, with another tool, or elsewhere on the page.
+    p.evaluate("press(600, 500)")
+    assert p.evaluate("comments.openNumber") is None
+    p.evaluate("comments.open(1)")
+    p.evaluate(
+        "document.body.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}))"
+    )
+    assert p.evaluate("comments.openNumber") is None
+    # An empty draft goes; one with text stays.
+    p.evaluate("useTool(120, 450)")
+    p.evaluate(
+        "document.body.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}))"
+    )
+    assert p.evaluate("comments.draft") is None
+    p.evaluate("useTool(120, 450); comments.draft.text = 'keep me'")
+    p.evaluate(
+        "document.body.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}))"
+    )
+    assert p.evaluate("comments.draft.text") == "keep me"

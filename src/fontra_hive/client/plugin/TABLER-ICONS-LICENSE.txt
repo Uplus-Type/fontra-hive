@@ -1,5 +1,6 @@
-The panel icons history.svg ("history") and comments.svg ("message-circle"),
-and the "trash" icon drawn in comments.js, come from Tabler Icons
+The icons history.svg ("history"), comments.svg ("message-circle-search"),
+comment-tool.svg ("message-circle-plus"), and the "trash", "link" and "eye"
+icons drawn in comments.js, come from Tabler Icons
 (https://tabler.io/icons, https://github.com/tabler/tabler-icons), the same
 icon set Fontra uses for its own panels, under this license:
 

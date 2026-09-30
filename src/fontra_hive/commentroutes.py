@@ -7,7 +7,8 @@ Who may do what:
 
 - ``comment`` (reviewers and up): open a topic, reply, edit their own
   messages, resolve or reopen their own topics, move their own pins;
-- ``edit`` (designers and up): resolve, reopen and move any topic;
+- ``edit`` (designers and up): resolve, reopen and move any topic, assign
+  it to a member of the project, label it;
 - ``moderate`` (managers and up): delete any topic or message.
 
 A person may also delete their own reply, and their own topic as long as
@@ -107,6 +108,7 @@ class CommentRoutesMixin:
         return {
             "comment": _can(access, "comment") and not self.readOnly,
             "resolveAny": _can(access, "edit") and not self.readOnly,
+            "organize": _can(access, "edit") and not self.readOnly,  # assign, label
             "moderate": _can(access, "moderate") and not self.readOnly,
         }
 
@@ -142,16 +144,23 @@ class CommentRoutesMixin:
         store = GitRepoStore.open(repoPath)
         try:
             comments = CommentStore(store)
-            return web.json_response(
-                {
-                    "head": comments.head(),
-                    "issues": comments.issues(glyph),
-                    "you": _who(access, self.author),
-                    "can": self._commentPermissions(access),
-                }
-            )
+            head, issues = comments.head(), comments.issues(glyph)
         finally:
             store.close()
+        members = await self.projectMembers(request.match_info["name"])
+        return web.json_response(
+            {
+                "head": head,
+                "issues": issues,
+                "you": _who(access, self.author),
+                "can": self._commentPermissions(access),
+                # For assigning, and for showing avatars.
+                "members": [
+                    {k: m[k] for k in ("username", "name", "avatar", "role") if k in m}
+                    for m in members
+                ],
+            }
+        )
 
     async def commentsHeadHandler(self, request) -> web.Response:
         """The head of the comments: it changes with every comment (polled)."""
@@ -200,14 +209,21 @@ class CommentRoutesMixin:
         return await self._commentChange(request, "comment", change)
 
     async def updateCommentHandler(self, request) -> web.Response:
-        """Resolve or reopen (``state``), or move the pin (``point``)."""
+        """Resolve or reopen (``state``), move the pin (``point``), or
+        organize: ``assignee`` (a member's username, or null) and/or
+        ``labels`` (designers and up)."""
         number = _number(request)
         body = await _jsonBody(request)
         name = request.match_info["name"]
         state = body.get("state")
         point = body.get("point")
-        if (state is None) == (point is None):
-            raise web.HTTPBadRequest(text="give either state or point")
+        organizing = "assignee" in body or "labels" in body
+        if [state is not None, point is not None, organizing].count(True) != 1:
+            raise web.HTTPBadRequest(
+                text="give one of: state, point, or assignee and labels"
+            )
+        if organizing:
+            return await self._organizeComment(request, number, body)
         branch = body.get("branch") or await self._defaultBranch(request, name)
 
         def change(comments, access, who, store):
@@ -232,6 +248,38 @@ class CommentRoutesMixin:
             )
 
         return await self._commentChange(request, "comment", change)
+
+    async def _organizeComment(self, request, number: int, body: dict):
+        assignee = ...
+        if "assignee" in body:
+            username = body["assignee"]
+            if username is None or username == "":
+                assignee = None
+            elif not isinstance(username, str):
+                raise web.HTTPBadRequest(text="assignee must be a username")
+            elif self.directory is None:
+                assignee = person(username[:100], username[:100])
+            else:
+                members = await self.projectMembers(request.match_info["name"])
+                member = next((m for m in members if m["username"] == username), None)
+                if member is None:
+                    raise web.HTTPBadRequest(
+                        text=f"{username} is not a member of this project"
+                    )
+                assignee = person(
+                    member["username"], member.get("name"), member.get("uid")
+                )
+        labels = body["labels"] if "labels" in body else ...
+
+        def change(comments, access, who, store):
+            return comments.organize(
+                number,
+                assignee=assignee,
+                labels=labels,
+                author=_signature(access, self.author),
+            )
+
+        return await self._commentChange(request, "edit", change)
 
     async def editMessageHandler(self, request) -> web.Response:
         number = _number(request)

@@ -250,11 +250,13 @@ def test_a_reviewer_opens_and_answers_a_topic(team, root):
         assert listed["can"] == {
             "comment": False,
             "resolveAny": False,
+            "organize": False,
             "moderate": False,
         }
         assert (await answer(await team.commentsHandler(request("ria"))))["can"] == {
             "comment": True,
             "resolveAny": False,
+            "organize": False,
             "moderate": False,
         }
         head = await answer(await team.commentsHeadHandler(request("otto")))
@@ -427,7 +429,12 @@ def test_without_accounts_everyone_may_do_everything(root):
         created = await answer(await manager.createCommentHandler(request(body=NEW)))
         assert created["issue"]["author"] == {"username": "dev", "name": "Jérémie"}
         listed = await answer(await manager.commentsHandler(request()))
-        assert listed["can"] == {"comment": True, "resolveAny": True, "moderate": True}
+        assert listed["can"] == {
+            "comment": True,
+            "resolveAny": True,
+            "organize": True,
+            "moderate": True,
+        }
         await manager.deleteCommentHandler(request(number=1))
 
     run(go())
@@ -457,5 +464,102 @@ def test_comments_do_not_disturb_the_font_history(team, root):
         assert [c["message"].splitlines()[0] for c in log["commits"]][0] == "Edit A"
         branches = await answer(await team.branchesHandler(request("ria")))
         assert [b["name"] for b in branches["branches"]] == ["main"]
+
+    run(go())
+
+
+# --- step B: assignee and labels -------------------------------------------------
+
+
+def test_labels_are_cleaned():
+    from fontra_hive.comments import clean_labels
+
+    assert clean_labels(["  curve ", "Curve", "client  review", ""]) == [
+        "curve",
+        "client review",
+    ]
+    for bad in ["curve", [1], ["x" * 41], [f"l{i}" for i in range(11)]]:
+        with pytest.raises(CommentError):
+            clean_labels(bad)
+
+
+def test_designers_assign_and_label(team):
+    async def go():
+        await team.createCommentHandler(request("ria", body=NEW))
+        listed = await answer(await team.commentsHandler(request("ria")))
+        assert {m["username"] for m in listed["members"]} >= {"dan", "ria", "owner"}
+        assert listed["can"]["organize"] is False
+        with pytest.raises(web.HTTPForbidden):
+            await team.updateCommentHandler(
+                request("ria", body={"assignee": "dan"}, number=1)
+            )
+        done = await answer(
+            await team.updateCommentHandler(
+                request(
+                    "dan",
+                    body={"assignee": "dan", "labels": ["curve", "Curve"]},
+                    number=1,
+                )
+            )
+        )
+        assert done["issue"]["assignee"] == {"username": "dan", "name": "Dan Designer"}
+        assert done["issue"]["labels"] == ["curve"]
+        # Labels alone keep the assignee; null unassigns.
+        done = await answer(
+            await team.updateCommentHandler(
+                request("dan", body={"labels": []}, number=1)
+            )
+        )
+        assert done["issue"]["assignee"]["username"] == "dan"
+        done = await answer(
+            await team.updateCommentHandler(
+                request("dan", body={"assignee": None}, number=1)
+            )
+        )
+        assert done["issue"]["assignee"] is None
+        with pytest.raises(web.HTTPBadRequest):
+            await team.updateCommentHandler(
+                request("dan", body={"assignee": "stranger"}, number=1)
+            )
+        with pytest.raises(web.HTTPBadRequest):
+            await team.updateCommentHandler(
+                request("dan", body={"assignee": "dan", "state": "resolved"}, number=1)
+            )
+
+    run(go())
+
+
+def test_hive_api_members_are_cached():
+    from fontra_hive.hiveapi import HiveApi
+
+    api = HiveApi("http://hive-api", "key")
+    calls = []
+
+    async def fake_get(path, **params):
+        calls.append((path, params))
+        return {
+            "members": [
+                {
+                    "username": "ana",
+                    "name": "Ana",
+                    "uid": "u1",
+                    "avatar": None,
+                    "role": "reviewer",
+                    "email": "never@shown",
+                }
+            ]
+        }
+
+    api._get = fake_get
+
+    async def go():
+        first = await api.members("uplustype/Mutator")
+        again = await api.members("UplusType/Mutator")
+        assert (
+            first
+            == again
+            == [{"username": "ana", "name": "Ana", "uid": "u1", "role": "reviewer"}]
+        )
+        assert calls == [("/api/internal/members", {"project": "uplustype/Mutator"})]
 
     run(go())
