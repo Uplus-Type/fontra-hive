@@ -17,6 +17,8 @@ import {
   compareWithDefault,
   exportDownload,
   hiveApiProjectPath,
+  mayRestore,
+  openRestoreBranchDialog,
   openShareDialog,
   timeAgo,
 } from "../views/hive-views.js";
@@ -346,12 +348,41 @@ function branchesPanel(project, data) {
       ]),
     ]);
   });
+  const archived = data.archived || [];
+  const archivedRows = archived.map((a) =>
+    el("tr", { "data-tag": a.tag }, [
+      el("td", {}, [
+        a.name,
+        el("small", {}, [
+          `deleted ${timeAgo(a.deleted)} by ${a.deletedBy}` +
+            (a.ahead ? ` · ${a.ahead} changes not in ${data.default}` : ""),
+        ]),
+      ]),
+      el("td", {}, [
+        mayRestore(a, data)
+          ? el("button", {
+              class: "secondary",
+              onclick: () => openRestoreBranchDialog(project.id, a, {
+                defaultBranch: data.default,
+                onRestored: () => route(),
+              }),
+            }, ["Restore"])
+          : null,
+      ]),
+    ])
+  );
   const panel = el("div", { class: "panel" }, [
     el("h3", { style: "margin-top:0" }, ["Branches"]),
     el("p", { class: "note" }, [
       `Copies of the font to try things out without changing ${data.default}; their changes can be merged back later.`,
     ]),
     el("table", { class: "people branches" }, rows),
+    archived.length
+      ? el("details", { class: "archived" }, [
+          el("summary", {}, [`Deleted branches (${archived.length})`]),
+          el("table", { class: "people archived" }, archivedRows),
+        ])
+      : null,
     error,
   ]);
   if (data.can.create) {

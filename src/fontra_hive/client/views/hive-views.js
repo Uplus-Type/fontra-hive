@@ -15,7 +15,8 @@
 //     managers and admins;
 //   - the branch pill (⎇ main ▾): the project's branches, who is on which,
 //     how each compares with the default branch; switch branch (the same
-//     view on the other branch), make a new branch, delete one.
+//     view on the other branch), make a new branch, delete one, bring back
+//     a deleted one.
 //
 // It only uses what Fontra exposes publicly: the top bar element, the
 // #fontra-project-name element Fontra adds to it, and the view controller
@@ -347,11 +348,94 @@ const STYLE = `
   .hive-menu .branch-row .delete:hover { opacity: 1; }
   .hive-menu .branch-row .delete:disabled { opacity: 0.15; cursor: default; }
   .hive-menu a.disabled { opacity: 0.45; pointer-events: none; }
+  .hive-menu .archived-list.hidden { display: none; }
+  .hive-menu .branch-row.archived { cursor: default; }
+  .hive-menu .branch-row.archived:hover { background: none; color: inherit; }
+  .hive-menu .branch-row.archived b { font-weight: normal; }
+  .hive-menu .branch-row .restore { font: inherit; font-size: 0.85em; border: 1px solid #8886; border-radius: 1em;
+                 padding: 1px 9px; background: none; color: inherit; cursor: pointer; }
+  .hive-menu .branch-row .restore:hover { background: #46f; border-color: #46f; color: white; }
   .hive-dialog label { display: block; margin: 10px 0 4px; font-size: 0.92em; }
   .hive-dialog label input, .hive-dialog label select { display: block; width: 100%; box-sizing: border-box; margin-top: 4px; }
   .hive-dialog .footer { gap: 8px; }
   .hive-dialog button.plain { background: #8882; color: inherit; }
 `;
+
+// A small dialog of ours (Fontra's dialogs are not reachable from here).
+export function modalDialog(title) {
+  ensureStyle();
+  const backdrop = el("div", { class: "hive-backdrop", onclick: () => close() });
+  const dialog = el("div", { class: "hive-dialog", role: "dialog" }, [el("h3", {}, [title])]);
+  isolateKeys(dialog);
+  const close = () => {
+    backdrop.remove();
+    dialog.remove();
+    document.removeEventListener("keydown", onKey, true);
+  };
+  const onKey = (event) => {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      close();
+    }
+  };
+  document.addEventListener("keydown", onKey, true);
+  document.body.append(backdrop, dialog);
+  return { dialog, close };
+}
+
+// Whether the requester may bring back a deleted branch (as the server
+// decides: managers and admins, whoever deleted it, whoever made it).
+export function mayRestore(archived, data) {
+  return !!data.can.create &&
+    (data.can.delete || archived.deletedByUsername === data.you || archived.createdBy === data.you);
+}
+
+// "Restore the branch…": under its name, or another one if it is taken.
+// onRestored(branchName) once done. Shared by the pill and the home page.
+export function openRestoreBranchDialog(projectName, archived, { defaultBranch = "main", onRestored } = {}) {
+  const { dialog, close } = modalDialog(`Restore the branch “${archived.name}”?`);
+  const name = el("input", { "aria-label": "Branch name", maxlength: "100", autocomplete: "off",
+                             spellcheck: "false", value: archived.name });
+  name.value = archived.name;
+  const error = el("div", { class: "error" });
+  const restore = el("button", { class: "pill blue" }, ["Restore"]);
+  const submit = async () => {
+    const problem = branchNameProblem(name.value.trim());
+    if (problem) {
+      error.textContent = problem;
+      return;
+    }
+    restore.disabled = true;
+    try {
+      const query = new URLSearchParams({ tag: archived.tag, name: name.value.trim() });
+      const restored = await api(
+        `/api/hive/projects/${encodeURIComponent(projectName)}/branches/restore?${query}`,
+        { method: "POST" }
+      );
+      close();
+      onRestored?.(restored.branch.name);
+    } catch (e) {
+      error.textContent = e.message.replace(/^\d+ /, "");
+      restore.disabled = false;
+    }
+  };
+  name.addEventListener("keydown", (e) => e.key === "Enter" && submit());
+  restore.addEventListener("click", submit);
+  const notIn = archived.ahead
+    ? `${archived.ahead} of its changes are not in ${defaultBranch}.`
+    : `Everything it contains is in ${defaultBranch} already.`;
+  dialog.append(
+    el("p", { class: "note", style: "margin-top:0" }, [
+      `Deleted ${timeAgo(archived.deleted)} by ${archived.deletedBy}. ${notIn} ` +
+        "It comes back as it was when it was deleted.",
+    ]),
+    el("label", {}, ["Name", name]),
+    error,
+    el("div", { class: "footer" }, [el("button", { class: "pill plain", onclick: close }, ["Cancel"]), restore])
+  );
+  name.focus();
+  return dialog;
+}
 
 // --- the Hive UI ------------------------------------------------------------------
 
@@ -367,6 +451,7 @@ export class HiveViews {
     this.menu = null;
     this.menuOwner = null; // the element that opened this.menu
     this.branches = null; // what /branches answered
+    this.showArchived = false; // the menu's "Deleted branches" unfolded
   }
 
   async mount() {
@@ -613,9 +698,50 @@ export class HiveViews {
         deleteButton,
       ]);
     });
+    const archived = data.archived || [];
+    const archivedRows = archived.map((a) =>
+      el("div", { class: "branch-row archived", "data-tag": a.tag, title: a.tag }, [
+        el("span", { class: "check" }),
+        el("span", { class: "text" }, [
+          el("b", {}, [a.name]),
+          el("small", {}, [
+            `deleted ${timeAgo(a.deleted)} by ${a.deletedBy}` +
+              (a.ahead ? ` · ${a.ahead} not in ${data.default}` : ""),
+          ]),
+        ]),
+        mayRestore(a, data)
+          ? el("button", {
+              class: "restore",
+              onclick: (e) => {
+                e.stopPropagation();
+                this.closeMenu();
+                this.branchDialog = openRestoreBranchDialog(this.project.name, a, {
+                  defaultBranch: data.default,
+                  onRestored: (branch) => this.gotoBranch(branch),
+                });
+              },
+            }, ["Restore"])
+          : null,
+      ])
+    );
+    const archivedBox = el("div", { class: `archived-list${this.showArchived ? "" : " hidden"}` }, archivedRows);
+    const archivedToggle = archived.length
+      ? el("a", {
+          class: "archived-toggle",
+          onclick: (e) => {
+            e.stopPropagation();
+            this.showArchived = !this.showArchived;
+            archivedBox.classList.toggle("hidden", !this.showArchived);
+            archivedToggle.firstChild.textContent = this.showArchived ? "▾ " : "▸ ";
+          },
+        }, [el("span", {}, [this.showArchived ? "▾ " : "▸ "]), `Deleted branches (${archived.length})`])
+      : null;
     this.menu = el("div", { class: "hive-menu branches" }, [
       el("div", { class: "title" }, ["Branches"]),
       ...rows,
+      archivedToggle ? el("hr") : null,
+      archivedToggle,
+      archivedToggle ? archivedBox : null,
       el("hr"),
       el("a", {
         class: data.can.create ? "" : "disabled",
@@ -629,26 +755,8 @@ export class HiveViews {
     this.showMenu(this.branchPill, rect);
   }
 
-  // A small dialog of ours (Fontra's dialogs are not reachable from here).
   dialog(title) {
-    ensureStyle();
-    const backdrop = el("div", { class: "hive-backdrop", onclick: () => close() });
-    const dialog = el("div", { class: "hive-dialog", role: "dialog" }, [el("h3", {}, [title])]);
-    isolateKeys(dialog);
-    const close = () => {
-      backdrop.remove();
-      dialog.remove();
-      document.removeEventListener("keydown", onKey, true);
-    };
-    const onKey = (event) => {
-      if (event.key === "Escape") {
-        event.stopPropagation();
-        close();
-      }
-    };
-    document.addEventListener("keydown", onKey, true);
-    document.body.append(backdrop, dialog);
-    return { dialog, close };
+    return modalDialog(title);
   }
 
   async openNewBranch() {
@@ -738,8 +846,8 @@ export class HiveViews {
     dialog.append(
       el("p", {}, [
         branch.ahead
-          ? `${branch.ahead} of its changes are not in ${data.default}. They stay in the project's history ` +
-            `(as “archive/${branch.name}”), but the branch will not be listed any more.`
+          ? `${branch.ahead} of its changes are not in ${data.default}. They are kept: the branch can be ` +
+            "restored from “Deleted branches”, in this menu."
           : `Everything it contains is already in ${data.default}.`,
       ]),
       error,

@@ -135,8 +135,11 @@ list), which Hive serves with its own script added (Fontra is not modified):
   × of a branch deletes it (managers and admins, or whoever made it; never
   the default branch, nor a branch someone has open): a branch whose
   changes are not all in the default branch is kept as an `archive/<name>`
-  tag. The project page of the home page lists the branches too (open,
-  delete, new branch) and downloads from any of them;
+  tag, listed under *Deleted branches* (folded) with who deleted it and
+  when; *Restore* brings it back, under its name or another one (managers
+  and admins, whoever deleted it, or whoever made it). The project page of
+  the home page lists the branches too (open, delete, new branch, deleted
+  branches) and downloads from any of them;
 - **File › Share…**: the members of the project and where their role comes
   from (owner, organization, collaborator). Managers and admins can add
   people, change or remove collaborators; in development this writes
@@ -285,6 +288,7 @@ GET  /api/hive/projects/<name>/glyph?glyph=A&ref=<sha|branch|tag>
 GET    /api/hive/projects/<name>/branches
 POST   /api/hive/projects/<name>/branches?name=bold&from=<branch|snapshot/<name>|sha>
 DELETE /api/hive/projects/<name>/branches?branch=bold
+POST   /api/hive/projects/<name>/branches/restore?tag=archive/bold[&name=bold-again]
 POST /api/hive/projects/<name>/restore?branch=main&glyph=A&ref=<sha|tag>
 GET  /api/hive/projects/<name>/snapshots?branch=main
 POST /api/hive/projects/<name>/snapshot?branch=main&name=Proofs%20sent
@@ -304,7 +308,12 @@ hive-api's `defaultBranch`, `main` in development), each with its head, its
 latest change, `ahead`/`behind` counts against the default branch (cached
 per pair of commits), `merged` (nothing the default branch lacks), `open`
 (someone has it in the editor), and who made it, when and from what; plus
-what the requester may do (`can`: create, delete any, merge). That
+what the requester may do (`can`: create, delete any, merge), and the
+deleted branches (`archived`: tag, name, who deleted it and when, how many
+of its commits the default branch lacks). An archive tag's message carries
+the branch's name, who deleted it and what was known about it
+(`Hive-Archived-Branch`, `Hive-Deleted-By`, `Hive-Branch-Info`); restoring
+recreates the branch with that information and removes the tag. That
 information is kept in git but outside the font: a commit chain on
 `refs/hive/meta` (`branches.json`), which backups carry (bundles of all
 refs) and a plain `git clone` does not fetch. Branch names follow git's

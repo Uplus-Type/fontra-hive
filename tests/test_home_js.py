@@ -410,6 +410,18 @@ BRANCHES = {
             "open": True,
         },
     ],
+    "archived": [
+        {
+            "tag": "archive/light",
+            "name": "light",
+            "head": "a" * 40,
+            "deleted": 1,
+            "deletedBy": "Mona",
+            "deletedByUsername": "mona",
+            "createdBy": "ana",
+            "ahead": 4,
+        },
+    ],
 }
 
 
@@ -427,6 +439,7 @@ def test_project_branches(browser_and_url):  # noqa: F811
             f"GET {hive}/branches": [200, BRANCHES],
             f"POST {hive}/branches": [200, {"branch": {"name": "x"}}],
             f"DELETE {hive}/branches": [200, {"deleted": "bold"}],
+            f"POST {hive}/branches/restore": [200, {"branch": {"name": "light"}}],
             "GET /api/hive/export-formats": [
                 200,
                 {"formats": [{"format": "fontra", "label": "Fontra package"}]},
@@ -470,6 +483,18 @@ def test_project_branches(browser_and_url):  # noqa: F811
         "calls.find(c => c.method === 'POST' && c.path.endsWith('/branches'))"
     )
     assert post["query"] == "?name=ana%2Fitalic&from=bold"
+
+    # Deleted branches, folded; restored under their name.
+    page.wait_for_selector("details.archived")
+    assert not page.is_visible("tr[data-tag='archive/light']")
+    page.click("details.archived summary")
+    assert "4 changes not in main" in page.inner_text("tr[data-tag='archive/light']")
+    page.click("tr[data-tag='archive/light'] button")
+    page.wait_for_selector(".hive-dialog input")
+    page.click(".hive-dialog button.blue")
+    page.wait_for_function("calls.some(c => c.path.endsWith('/restore'))")
+    restore = page.evaluate("calls.find(c => c.path.endsWith('/restore'))")
+    assert restore["query"] == "?tag=archive%2Flight&name=light"
 
     # Download: from the branch chosen.
     page.wait_for_selector("select[aria-label='Branch to download']")

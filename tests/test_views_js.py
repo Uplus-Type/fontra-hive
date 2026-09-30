@@ -57,6 +57,13 @@ PAGE = """<!doctype html><html><head>
     window.calls.push({ path, method, body, query: Object.fromEntries(parsed.searchParams) });
     const json = (data, status = 200) => new Response(JSON.stringify(data), { status });
     if (path === "/api/hive/me") return json(fake.me);
+    if (path.endsWith("/branches/restore")) {
+      const name = parsed.searchParams.get("name");
+      if (name === "taken") {
+        return new Response("There is a branch 'taken' already.", { status: 409 });
+      }
+      return json({ branch: { name } });
+    }
     if (path.endsWith("/branches") && fake.branches) {
       if (method === "GET") return json(fake.branches);
       const name = parsed.searchParams.get("name");
@@ -400,6 +407,28 @@ def branches(can_delete=False):
                 "open": True,
             },
         ],
+        "archived": [
+            {
+                "tag": "archive/light",
+                "name": "light",
+                "head": "a" * 40,
+                "deleted": NOW - 3600,
+                "deletedBy": "Mona Manager",
+                "deletedByUsername": "mona",
+                "createdBy": "jeremie",
+                "ahead": 4,
+            },
+            {
+                "tag": "archive/zoe/old",
+                "name": "zoe/old",
+                "head": "b" * 40,
+                "deleted": NOW - 86400 * 2,
+                "deletedBy": "Zoé",
+                "deletedByUsername": "zoe",
+                "createdBy": "zoe",
+                "ahead": 0,
+            },
+        ],
     }
 
 
@@ -428,7 +457,7 @@ def freeze_time(page):
 
 
 def menu_rows(page):
-    return page.evaluate("""[...document.querySelectorAll('.branch-row')].map(r => ({
+    return page.evaluate("""[...document.querySelectorAll('.branch-row:not(.archived)')].map(r => ({
         name: r.dataset.branch,
         check: r.querySelector('.check').textContent,
         text: r.querySelector('small').textContent,
@@ -569,7 +598,7 @@ def test_delete_branch_dialog(browser_and_url):
     page.click(".branch-row[data-branch='bold'] button.delete")
     text = page.inner_text(".hive-dialog")
     assert "Delete the branch “bold”?" in text
-    assert "2 of its changes are not in main" in text and "archive/bold" in text
+    assert "2 of its changes are not in main" in text and "Deleted branches" in text
     page.click(".hive-dialog button.red")
     page.wait_for_function("!document.querySelector('.hive-dialog')")
     deleted = page.evaluate("calls.find(c => c.method === 'DELETE')")
@@ -610,4 +639,50 @@ def test_branch_helpers(browser_and_url):
     assert result["compare"] == ["3 ahead of main", "same as main"]
     names = result["names"]
     assert names[:2] == [None, None] and all(names[2:])
+    page.close()
+
+
+def test_deleted_branches_in_the_menu(browser_and_url):
+    page = open_page(browser_and_url, data=branch_data())
+    freeze_time(page)
+    page.wait_for_function("hive.branches")
+    page.evaluate("hive.gotoBranch = (name) => { window.went = name; }")
+    page.click(".hive-branch")
+    page.wait_for_selector(".branch-row")
+    # Folded at first.
+    assert not page.is_visible(".branch-row.archived")
+    assert page.inner_text(".archived-toggle") == "▸ Deleted branches (2)"
+    page.click(".archived-toggle")
+    assert page.is_visible(".branch-row.archived")  # the menu stays open
+    rows = page.eval_on_selector_all(
+        ".branch-row.archived",
+        "rs => rs.map(r => [r.dataset.tag, r.querySelector('small').textContent,"
+        " !!r.querySelector('.restore')])",
+    )
+    assert rows == [
+        ["archive/light", "deleted 1 h ago by Mona Manager · 4 not in main", True],
+        # Neither made nor deleted by me, and a designer.
+        ["archive/zoe/old", "deleted 2 days ago by Zoé", False],
+    ]
+    page.click(".branch-row[data-tag='archive/light'] .restore")
+    page.wait_for_selector(".hive-dialog input")
+    assert page.input_value(".hive-dialog input") == "light"
+    assert "4 of its changes are not in main" in page.inner_text(".hive-dialog")
+    page.fill(".hive-dialog input", "taken")
+    page.click(".hive-dialog button.blue")
+    page.wait_for_function("document.querySelector('.hive-dialog .error').textContent")
+    assert "already" in page.inner_text(".hive-dialog .error")
+    page.fill(".hive-dialog input", "light")
+    page.press(".hive-dialog input", "Enter")
+    page.wait_for_function("window.went")
+    assert page.evaluate("window.went") == "light"
+    posts = page.evaluate(
+        "calls.filter(c => c.path.endsWith('/restore')).map(c => c.query)"
+    )
+    assert posts[-1] == {"tag": "archive/light", "name": "light"}
+    # Unfolded stays unfolded the next time.
+    page.click(".hive-branch")
+    page.wait_for_selector(".branch-row")
+    assert page.is_visible(".branch-row.archived")
+    assert page.errors == []
     page.close()

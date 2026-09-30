@@ -392,3 +392,83 @@ def test_delete_only_touches_listed_branches(manager, root):
         assert (root / "Mutator.git" / "HEAD").exists()
 
     run(go())
+
+
+def test_deleted_branches_are_listed_and_restored(team, root):
+    async def go():
+        await team.createBranchHandler(request(user="dan", name="dan-test"))
+        store = GitRepoStore.open(root / "Mutator.git")
+        store.commit(
+            {glyphPath("B"): b"{}\n"}, branch="dan-test", message="B", author=ME
+        )
+        head = store.head("dan-test")
+        store.close()
+        deleted = await body(
+            await team.deleteBranchHandler(request(user="mona", branch="dan-test"))
+        )
+        assert deleted["archived"] == "archive/dan-test"
+
+        listed = await body(await team.branchesHandler(request(user="dan")))
+        assert [b["name"] for b in listed["branches"]] == ["main"]
+        (archived,) = listed["archived"]
+        assert archived["tag"] == "archive/dan-test"
+        assert archived["name"] == "dan-test" and archived["head"] == head
+        assert archived["deletedBy"] == "Mona Manager"
+        assert archived["deletedByUsername"] == "mona"
+        assert archived["createdBy"] == "dan" and archived["ahead"] == 1
+
+        # Another designer cannot; its maker can, under another name if taken.
+        with pytest.raises(web.HTTPForbidden):
+            await team.restoreBranchHandler(
+                request(user="dora", tag="archive/dan-test")
+            )
+        with pytest.raises(web.HTTPNotFound):
+            await team.restoreBranchHandler(request(user="dan", tag="archive/nope"))
+        await team.createBranchHandler(request(user="dan", name="dan-test"))
+        with pytest.raises(web.HTTPConflict):
+            await team.restoreBranchHandler(request(user="dan", tag="archive/dan-test"))
+        restored = await body(
+            await team.restoreBranchHandler(
+                request(user="dan", tag="archive/dan-test", name="dan-test-back")
+            )
+        )
+        branch = restored["branch"]
+        assert branch["name"] == "dan-test-back" and branch["head"] == head
+        assert branch["createdBy"] == "dan" and branch["ahead"] == 1
+
+        listed = await body(await team.branchesHandler(request(user="dan")))
+        assert listed["archived"] == []
+        store = GitRepoStore.open(root / "Mutator.git")
+        assert store.tags() == []
+        store.close()
+
+    run(go())
+
+
+def test_whoever_deleted_a_branch_may_restore_it(team, root):
+    async def go():
+        await team.createBranchHandler(request(user="dan", name="x"))
+        store = GitRepoStore.open(root / "Mutator.git")
+        store.commit({"x.txt": b"x"}, branch="x", message="x", author=ME)
+        store.close()
+        # dora cannot delete dan's branch; a manager deletes it, and dora
+        # (neither maker nor deleter) cannot restore it; mona can.
+        await team.deleteBranchHandler(request(user="mona", branch="x"))
+        with pytest.raises(web.HTTPForbidden):
+            await team.restoreBranchHandler(request(user="dora", tag="archive/x"))
+        await team.restoreBranchHandler(request(user="mona", tag="archive/x"))
+        # Deleted again, twice: two archives, the newest first.
+        await team.deleteBranchHandler(request(user="dan", branch="x"))
+        await team.createBranchHandler(request(user="dan", name="x"))
+        store = GitRepoStore.open(root / "Mutator.git")
+        store.commit({"y.txt": b"y"}, branch="x", message="y", author=ME)
+        store.close()
+        await team.deleteBranchHandler(request(user="dan", branch="x"))
+        listed = await body(await team.branchesHandler(request(user="dan")))
+        assert sorted(a["tag"] for a in listed["archived"]) == [
+            "archive/x",
+            "archive/x-2",
+        ]
+        assert all(a["deletedByUsername"] == "dan" for a in listed["archived"])
+
+    run(go())

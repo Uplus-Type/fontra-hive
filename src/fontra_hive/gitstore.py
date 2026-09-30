@@ -122,6 +122,21 @@ class GlyphSnapshotInfo:
 
 
 @dataclass(frozen=True)
+class ArchivedBranch:
+    """A branch deleted before all its changes were in the default branch:
+    an annotated tag ``archive/<name>`` on its last commit, whose message
+    says which branch it was, who made it and who deleted it."""
+
+    tag: str  # "archive/bold", "archive/bold-2"…
+    branch: str  # the branch's name
+    sha: str  # its last commit
+    time: int  # when it was deleted
+    deletedBy: str  # display name
+    deletedByUsername: str | None
+    info: dict  # what was known about the branch (maker, start…)
+
+
+@dataclass(frozen=True)
 class TreeChange:
     kind: str  # "add" | "modify" | "delete"
     path: str
@@ -360,6 +375,80 @@ class GitRepoStore:
         if not ok:
             raise ValueError(f"tag {name!r} already exists")
         return _s(tag.id)
+
+    def delete_tag(self, name: str) -> None:
+        del self.repo.refs[_tag_ref(name)]
+
+    # --- deleted branches ------------------------------------------------
+
+    def archive_branch(
+        self,
+        branch: str,
+        *,
+        tagger: Signature = SERVER_SIGNATURE,
+        deleted_by: str | None = None,
+    ) -> str:
+        """Keep the last commit of ``branch`` as a tag ``archive/<branch>``
+        (``-2``, ``-3``… when taken), with what is known about the branch;
+        returns the tag's name. The branch itself is not deleted here."""
+        head = self.head(branch)
+        if head is None:
+            raise KeyError(branch)
+        info = self.branch_info().get(branch) or {}
+        message = (
+            f"Branch {branch}, deleted before being merged\n\n"
+            f"Hive-Archived-Branch: {branch}\n"
+            f"Hive-Deleted-By: {deleted_by or ''}\n"
+            f"Hive-Branch-Info: {json.dumps(info, sort_keys=True)}\n"
+        )
+        existing = set(self.tags())
+        n = 1
+        while True:
+            tag = ARCHIVE_TAG_PREFIX + branch + ("" if n == 1 else f"-{n}")
+            n += 1
+            if tag in existing:
+                continue
+            try:
+                self.create_tag(tag, head, message=message, tagger=tagger)
+            except ValueError:  # made meanwhile
+                continue
+            return tag
+
+    def archived_branches(self) -> list[ArchivedBranch]:
+        """The deleted branches kept as ``archive/*`` tags, newest first."""
+        prefix = _b("refs/tags/" + ARCHIVE_TAG_PREFIX)
+        result = []
+        for ref in self.repo.refs.keys():
+            if not ref.startswith(prefix):
+                continue
+            tag = self.repo[self.repo.refs[ref]]
+            if not isinstance(tag, Tag):
+                continue
+            name = _s(ref[len(b"refs/tags/") :])
+            tagger = _s(tag.tagger)
+            display, _, email = tagger.partition(" <")
+            email = email.rstrip(">")
+            try:
+                info = json.loads(_trailer(tag.message, b"Hive-Branch-Info:") or "{}")
+            except ValueError:
+                info = {}
+            result.append(
+                ArchivedBranch(
+                    tag=name,
+                    branch=_trailer(tag.message, b"Hive-Archived-Branch:")
+                    or name[len(ARCHIVE_TAG_PREFIX) :],
+                    sha=_s(tag.object[1]),
+                    time=tag.tag_time,
+                    deletedBy=display,
+                    deletedByUsername=(
+                        _trailer(tag.message, b"Hive-Deleted-By:")
+                        or (email[: -len("@hive")] if email.endswith("@hive") else None)
+                    ),
+                    info=info if isinstance(info, dict) else {},
+                )
+            )
+        result.sort(key=lambda a: (-a.time, a.tag))
+        return result
 
     def resolve(self, ref: str) -> str:
         """Resolve a branch name, tag name or commit sha to a commit sha."""

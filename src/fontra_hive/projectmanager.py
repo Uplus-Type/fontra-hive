@@ -43,7 +43,6 @@ from .backend_git import GitFontraBackend
 from .fonthandler import HiveFontHandler
 from .glyphdiff import changed_sources, font_source_names
 from .gitstore import (
-    ARCHIVE_TAG_PREFIX,
     DEFAULT_BRANCH,
     SERVER_SIGNATURE,
     GitRepoStore,
@@ -498,6 +497,9 @@ class DevHiveProjectManager:
             web.get("/api/hive/projects/{name}/branches", self.branchesHandler),
             web.post("/api/hive/projects/{name}/branches", self.createBranchHandler),
             web.delete("/api/hive/projects/{name}/branches", self.deleteBranchHandler),
+            web.post(
+                "/api/hive/projects/{name}/branches/restore", self.restoreBranchHandler
+            ),
             web.get("/api/hive/projects/{name}/log", self.logHandler),
             web.get("/api/hive/projects/{name}/glyph", self.glyphHandler),
             web.get("/api/hive/projects/{name}/head", self.headHandler),
@@ -770,6 +772,26 @@ class DevHiveProjectManager:
             ),
         }
 
+    def _archivedJSON(self, store: GitRepoStore, archived, defaultHead) -> dict:
+        ahead = (
+            self._aheadBehind(store, archived.sha, defaultHead)[0]
+            if defaultHead is not None
+            else 0
+        )
+        info = archived.info
+        return {
+            "tag": archived.tag,
+            "name": archived.branch,
+            "head": archived.sha,
+            "deleted": archived.time,
+            "deletedBy": archived.deletedBy,
+            "deletedByUsername": archived.deletedByUsername,
+            "createdBy": info.get("createdBy"),
+            "createdByName": info.get("createdByName"),
+            # Changes of the branch still not in the default branch.
+            "ahead": ahead,
+        }
+
     async def branchesHandler(self, request: web.Request) -> web.Response:
         """The branches of a project, the default one first, then the most
         recently changed; each compared with the default branch. Also what
@@ -783,6 +805,11 @@ class DevHiveProjectManager:
             branches = [
                 self._branchJSON(store, b, default, info) for b in store.branches()
             ]
+            defaultHead = store.head(default)
+            archived = [
+                self._archivedJSON(store, a, defaultHead)
+                for a in store.archived_branches()
+            ]
         finally:
             store.close()
         branches.sort(key=lambda b: (not b["isDefault"], -b["time"], b["name"]))
@@ -791,6 +818,8 @@ class DevHiveProjectManager:
             {
                 "default": default,
                 "branches": branches,
+                # Deleted before being merged, newest first: can be restored.
+                "archived": archived,
                 "you": access.user.username if access is not None else None,
                 "can": {
                     "create": can("branch") and not self.readOnly,
@@ -889,20 +918,11 @@ class DevHiveProjectManager:
             )
             archived = None
             if not merged:
-                who = access.user.name if access is not None else "someone"
-                existing = set(store.tags())
-                tag = f"{ARCHIVE_TAG_PREFIX}{branch}"
-                n = 2
-                while tag in existing:
-                    tag = f"{ARCHIVE_TAG_PREFIX}{branch}-{n}"
-                    n += 1
-                store.create_tag(
-                    tag,
-                    head,
-                    message=f"Branch {branch}, deleted by {who} before being merged",
+                archived = store.archive_branch(
+                    branch,
                     tagger=_author(access, self.author),
+                    deleted_by=access.user.username if access is not None else None,
                 )
-                archived = tag
             store.delete_branch(branch, default)
             store.set_branch_info(branch, None, author=_author(access, self.author))
         finally:
@@ -910,6 +930,55 @@ class DevHiveProjectManager:
         return web.json_response(
             {"deleted": branch, "head": head, "merged": merged, "archived": archived}
         )
+
+    async def restoreBranchHandler(self, request: web.Request) -> web.Response:
+        """Bring back a deleted branch (``tag``: its ``archive/…`` tag), under
+        its name or ``name``. Managers and admins, whoever deleted it, or
+        whoever made it. The archive tag goes: the branch holds it again."""
+        name = request.match_info["name"]
+        tag = request.query.get("tag") or ""
+        repoPath, access = await self._project(request, name, "branch")
+        if self.readOnly:
+            raise web.HTTPForbidden(text="read-only server")
+        default = await self._defaultBranch(request, name)
+        store = GitRepoStore.open(repoPath)
+        try:
+            found = [a for a in store.archived_branches() if a.tag == tag]
+            if not found:
+                raise web.HTTPNotFound(text=f"No deleted branch {tag!r}.")
+            archived = found[0]
+            if access is not None and not access.can("merge"):
+                me = access.user.username
+                if me not in (
+                    archived.deletedByUsername,
+                    archived.info.get("createdBy"),
+                ):
+                    raise web.HTTPForbidden(
+                        text="Only managers, admins, and whoever made or deleted "
+                        "a branch can restore it."
+                    )
+            branch = (request.query.get("name") or "").strip() or archived.branch
+            if branch in store.branches():
+                raise web.HTTPConflict(
+                    text=f"There is a branch {branch!r} already: choose another name."
+                )
+            error = store.branch_name_error(branch)
+            if error:
+                raise web.HTTPBadRequest(text=error)
+            store.create_branch(branch, archived.sha)
+            info = dict(archived.info)
+            info.update(
+                {
+                    "restored": int(time.time()),
+                    "restoredBy": access.user.username if access is not None else None,
+                }
+            )
+            store.set_branch_info(branch, info, author=_author(access, self.author))
+            store.delete_tag(tag)
+            data = self._branchJSON(store, branch, default, store.branch_info())
+        finally:
+            store.close()
+        return web.json_response({"branch": data})
 
     async def logHandler(self, request: web.Request) -> web.Response:
         repoPath, _ = await self._project(request, request.match_info["name"], "read")
