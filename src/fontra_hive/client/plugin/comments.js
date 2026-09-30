@@ -31,10 +31,14 @@ const PIN_LIFT = 16; // the pin's circle sits this far above the point it marks
 const DRAG_THRESHOLD = 3;
 const PALE_ALPHA = 0.35;
 const TOAST_MS = 3500;
+const SKETCH_WIDTH = 2.5; // screen pixels
+const SKETCH_ALPHA_PALE = 0.3; // sketches of closed post-its, on their own source
+const SKETCH_MIN_STEP = 1.5; // screen pixels between two recorded points
+const SKETCH_TOLERANCE = 0.75; // screen pixels: simplification of a stroke
 
 const COLORS = {
-  light: { open: "#e9b02a", resolved: "#8a8a8a", text: "#1c1c1c", ring: "#1c1c1c" },
-  dark: { open: "#e6be5a", resolved: "#9a9a9a", text: "#1c1c1c", ring: "#ffffff" },
+  light: { open: "#e9b02a", resolved: "#8a8a8a", text: "#1c1c1c", ring: "#1c1c1c", pen: "#e5484d" },
+  dark: { open: "#e6be5a", resolved: "#9a9a9a", text: "#1c1c1c", ring: "#ffffff", pen: "#ff6b6b" },
 };
 
 const CARD_STYLES = `
@@ -149,6 +153,35 @@ const CARD_STYLES = `
     padding: 0 5px;
     font-size: 15px;
     line-height: 1;
+  }
+  .pen-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+  }
+  .pen {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 12px;
+    padding: 1px 7px;
+  }
+  .pen.on {
+    background: #e5484d;
+    border-color: #e5484d;
+    color: #fff;
+  }
+  .pen .svg-icon, .sketch-mark .svg-icon {
+    width: 13px;
+    height: 13px;
+  }
+  .sketch-mark {
+    color: #e5484d;
+    display: inline-flex;
+  }
+  .pen-count {
+    color: var(--card-muted);
   }
   .edited {
     font-size: 11px;
@@ -662,6 +695,40 @@ export function earlierVersions(history, id) {
   return texts.slice(1).map((entry, i) => ({ text: entry.text, time: texts[i].time }));
 }
 
+// Ramer–Douglas–Peucker: the points of a freehand stroke that matter,
+// within ``tolerance`` (same units as the points).
+export function simplifyStroke(points, tolerance) {
+  if (points.length <= 2) return points.slice();
+  const keep = new Array(points.length).fill(false);
+  keep[0] = keep[points.length - 1] = true;
+  const stack = [[0, points.length - 1]];
+  while (stack.length) {
+    const [first, last] = stack.pop();
+    const [ax, ay] = points[first];
+    const [bx, by] = points[last];
+    const dx = bx - ax;
+    const dy = by - ay;
+    const length = Math.hypot(dx, dy);
+    let farthest = -1;
+    let distance = tolerance;
+    for (let i = first + 1; i < last; i++) {
+      const [px, py] = points[i];
+      const d = length
+        ? Math.abs(dy * px - dx * py + bx * ay - by * ax) / length
+        : Math.hypot(px - ax, py - ay);
+      if (d > distance) {
+        distance = d;
+        farthest = i;
+      }
+    }
+    if (farthest !== -1) {
+      keep[farthest] = true;
+      stack.push([first, farthest], [farthest, last]);
+    }
+  }
+  return points.filter((_, i) => keep[i]);
+}
+
 // A topic's title: the one given, else its first message.
 export function issueTitle(issue) {
   return issue.title || issue.messages?.[0]?.text || "";
@@ -719,6 +786,10 @@ export class HiveComments {
     this.draft = null; // {glyph, source, point, text} while a new comment is written
     this.editing = null; // {number, id} while a message is edited
     this.renaming = null; // the topic whose title is being edited
+    // The strokes being drawn for a message not sent yet: {role, glyph,
+    // strokes: [[[x, y], …], …], active (the pen is on), touched}.
+    this.sketch = null;
+    this.stroke = null; // the stroke under the pointer: {points, positioned}
     this.drag = null; // {number, point} while a pin is dragged
     this.busy = false;
     this.error = null;
@@ -865,7 +936,8 @@ export class HiveComments {
 
   async submitDraft(text) {
     const draft = this.draft;
-    if (!draft || !text.trim()) return false;
+    const sketch = this.sketchFor("draft");
+    if (!draft || (!text.trim() && !sketch)) return false;
     draft.text = text;
     const data = await this.send("POST", "", {
       glyph: draft.glyph,
@@ -873,6 +945,7 @@ export class HiveComments {
       point: draft.point,
       text,
       branch: this.branch,
+      ...(sketch ? { sketch } : {}),
     });
     if (!data?.issue) return false;
     this.draft = null;
@@ -883,8 +956,9 @@ export class HiveComments {
   }
 
   async reply(number, text) {
-    if (!text.trim()) return false;
-    return !!(await this.send("POST", `/${number}/messages`, { text }));
+    const sketch = this.sketchFor("reply");
+    if (!text.trim() && !sketch) return false;
+    return !!(await this.send("POST", `/${number}/messages`, { text, ...(sketch ? { sketch } : {}) }));
   }
 
   async setState(number, state) {
@@ -902,7 +976,11 @@ export class HiveComments {
   }
 
   async editMessage(number, id, text) {
-    const data = await this.send("PATCH", `/${number}/messages/${id}`, { text });
+    const role = `edit-${id}`;
+    const body = { text };
+    // The strokes are sent only if the pen was used: else they are kept.
+    if (this.sketch?.role === role && this.sketch.touched) body.sketch = this.sketchFor(role);
+    const data = await this.send("PATCH", `/${number}/messages/${id}`, body);
     if (data) this.editing = null;
     this.changed();
     return !!data;
@@ -1027,6 +1105,91 @@ export class HiveComments {
     );
   }
 
+  // --- the red pen ----------------------------------------------------------------
+
+  sketchFor(role) {
+    const strokes = this.sketch?.role === role ? this.sketch.strokes : [];
+    return strokes.length ? { strokes } : null;
+  }
+
+  // The pen of a compose box: on/off. ``initial``: strokes of a message
+  // being edited.
+  toggleSketch(role, glyph, initial = []) {
+    if (this.sketch?.role === role) {
+      this.sketch.active = !this.sketch.active;
+    } else {
+      this.sketch = {
+        role,
+        glyph,
+        strokes: initial.map((stroke) => stroke.map((p) => [...p])),
+        active: true,
+        touched: false,
+      };
+    }
+    this.changed();
+  }
+
+  undoStroke() {
+    if (!this.sketch?.strokes.length) return;
+    this.sketch.strokes.pop();
+    this.sketch.touched = true;
+    this.changed();
+  }
+
+  clearSketch() {
+    if (!this.sketch) return;
+    this.sketch.strokes = [];
+    this.sketch.touched = true;
+    this.changed();
+  }
+
+  dropSketch() {
+    this.sketch = null;
+    this.stroke = null;
+  }
+
+  // Screen point (relative to the canvas) -> glyph units of a positioned glyph.
+  glyphPoint(positionedGlyph, screen) {
+    const canvas = this.editor.canvasController;
+    const magnification = canvas?.magnification || 1;
+    return [
+      (screen.x - canvas.origin.x) / magnification - positionedGlyph.x,
+      -(screen.y - canvas.origin.y) / magnification - positionedGlyph.y,
+    ];
+  }
+
+  startStroke(screen) {
+    const positioned = this.positionedGlyphFor(this.sketch.glyph);
+    if (!positioned) return false;
+    this.stroke = { positioned, points: [this.glyphPoint(positioned, screen)], last: screen };
+    return true;
+  }
+
+  continueStroke(screen) {
+    const stroke = this.stroke;
+    if (!stroke) return;
+    if (Math.hypot(screen.x - stroke.last.x, screen.y - stroke.last.y) < SKETCH_MIN_STEP) return;
+    stroke.last = screen;
+    stroke.points.push(this.glyphPoint(stroke.positioned, screen));
+    this.editor.canvasController?.requestUpdate?.();
+  }
+
+  endStroke() {
+    const stroke = this.stroke;
+    this.stroke = null;
+    if (!stroke || !this.sketch) return;
+    const magnification = this.editor.canvasController?.magnification || 1;
+    const points = simplifyStroke(stroke.points, SKETCH_TOLERANCE / magnification).map(([x, y]) => [
+      Math.round(x * 10) / 10,
+      Math.round(y * 10) / 10,
+    ]);
+    if (points.length >= 2) {
+      this.sketch.strokes.push(points);
+      this.sketch.touched = true;
+    }
+    this.changed();
+  }
+
   // --- permissions (the server has the last word) ---------------------------------
 
   isMine(item) {
@@ -1074,6 +1237,7 @@ export class HiveComments {
     this.editing = null;
     this.renaming = null;
     this.error = null;
+    if (this.openNumber !== number) this.dropSketch();
     this.openNumber = number;
     this.changed();
     this.focusCompose();
@@ -1082,6 +1246,7 @@ export class HiveComments {
   close() {
     this.openNumber = null;
     this.editing = null;
+    this.dropSketch();
     this.error = null;
     this.changed();
   }
@@ -1098,6 +1263,7 @@ export class HiveComments {
 
   cancelDraft() {
     this.draft = null;
+    this.dropSketch();
     this.error = null;
     this.changed();
   }
@@ -1171,7 +1337,8 @@ export class HiveComments {
         return glyphs.filter(
           (g) =>
             this.issuesOf(g.glyphName).some((issue) => this.isShown(issue)) ||
-            this.draft?.glyph === g.glyphName
+            this.draft?.glyph === g.glyphName ||
+            this.sketch?.glyph === g.glyphName
         );
       },
       draw: (...args) => this.drawPins(drawArguments(args)),
@@ -1219,10 +1386,52 @@ export class HiveComments {
         current: true,
       });
     }
+    this.drawSketches(context, positionedGlyph, magnification, colors.pen, currentLayer);
     for (const pin of pins) {
       drawPin(context, pin, magnification, colors);
     }
     this.scheduleOverlay();
+  }
+
+  // The strokes of the open topic (full), of the other topics shown on this
+  // glyph's source (pale), and the ones being drawn.
+  drawSketches(context, positionedGlyph, magnification, color, currentLayer) {
+    const glyphName = positionedGlyph.glyphName;
+    const sets = [];
+    for (const issue of this.issuesOf(glyphName)) {
+      const isOpen = issue.number === this.openNumber;
+      if (!isOpen && (!this.isShown(issue) || issue.source?.layer !== currentLayer)) continue;
+      for (const message of issue.messages || []) {
+        // A message being edited with the pen shows its new strokes instead.
+        if (this.sketch?.role === `edit-${message.id}` && isOpen) continue;
+        if (message.sketch?.strokes?.length) {
+          sets.push({ strokes: message.sketch.strokes, alpha: isOpen ? 1 : SKETCH_ALPHA_PALE });
+        }
+      }
+    }
+    if (this.sketch?.glyph === glyphName) {
+      sets.push({ strokes: this.sketch.strokes, alpha: 1 });
+      if (this.stroke && this.stroke.positioned.glyphName === glyphName) {
+        sets.push({ strokes: [this.stroke.points], alpha: 1 });
+      }
+    }
+    if (!sets.length) return;
+    context.save();
+    context.strokeStyle = color;
+    context.lineWidth = SKETCH_WIDTH / magnification;
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    for (const { strokes, alpha } of sets) {
+      context.globalAlpha = alpha;
+      for (const stroke of strokes) {
+        if (stroke.length < 2) continue;
+        context.beginPath();
+        context.moveTo(stroke[0][0], stroke[0][1]);
+        for (const [x, y] of stroke.slice(1)) context.lineTo(x, y);
+        context.stroke();
+      }
+    }
+    context.restore();
   }
 
   // --- the post-it (HTML over the canvas) ------------------------------------------------
@@ -1265,6 +1474,7 @@ export class HiveComments {
       this.renaming,
       this.earlierShown,
       this.earlier?.versions?.length ?? null,
+      this.sketch ? [this.sketch.role, this.sketch.active, this.sketch.strokes.length] : null,
       this.busy,
       this.error,
       this.can,
@@ -1361,6 +1571,13 @@ export class HiveComments {
     const height = host.clientHeight || 600;
     const cardWidth = card.offsetWidth || 280;
     const cardHeight = card.offsetHeight || 160;
+    if (this.sketch?.active) {
+      // Drawing: the post-it steps aside, to the top right of the canvas,
+      // so the glyph around the pin is free for the pen.
+      card.style.left = `${Math.round(Math.max(8, width - cardWidth - 16))}px`;
+      card.style.top = "16px";
+      return;
+    }
     let left = tip.x + PIN_RADIUS + 8;
     if (left + cardWidth > width - 8) left = tip.x - PIN_RADIUS - 8 - cardWidth;
     let top = tip.y - PIN_LIFT - PIN_RADIUS;
@@ -1371,7 +1588,17 @@ export class HiveComments {
     card.style.top = `${Math.round(top)}px`;
   }
 
-  composeBox({ role, placeholder, submitLabel, onSubmit, onCancel, first = false, initial = "" }) {
+  composeBox({
+    role,
+    placeholder,
+    submitLabel,
+    onSubmit,
+    onCancel,
+    first = false,
+    initial = "",
+    glyph = null,
+    strokes = [],
+  }) {
     const textarea = el("textarea", {
       class: "compose-text",
       placeholder,
@@ -1381,11 +1608,16 @@ export class HiveComments {
     textarea.value = initial;
     stopKeys(textarea);
     const submit = el("button", { class: "primary", disabled: true }, [submitLabel]);
-    const update = () => (submit.disabled = this.busy || !textarea.value.trim());
+    const hasStrokes = () => this.sketch?.role === role && this.sketch.strokes.length > 0;
+    const editingStrokes = () => role.startsWith("edit-") && strokes.length && this.sketch?.role !== role;
+    const update = () =>
+      (submit.disabled =
+        this.busy || !(textarea.value.trim() || hasStrokes() || editingStrokes()));
     const go = async () => {
       if (submit.disabled) return;
       if (await onSubmit(textarea.value)) {
         this.sentRoles.add(role);
+        if (this.sketch?.role === role) this.dropSketch();
         this.changed();
       }
     };
@@ -1404,8 +1636,51 @@ export class HiveComments {
     });
     submit.addEventListener("click", go);
     update();
+    const mine = this.sketch?.role === role ? this.sketch : null;
+    const pen = glyph
+      ? el("div", { class: `pen-row${mine?.active ? " active" : ""}` }, [
+          el(
+            "button",
+            {
+              class: `pen${mine?.active ? " on" : ""}`,
+              title: mine?.active
+                ? "Stop drawing (the strokes stay with this message)"
+                : "Draw on the glyph with a red pen",
+              onclick: () => this.toggleSketch(role, glyph, strokes),
+            },
+            [icon("pencil"), mine?.active ? " Drawing…" : " Draw"]
+          ),
+          mine
+            ? el(
+                "span",
+                { class: "pen-count" },
+                [`${mine.strokes.length} stroke${mine.strokes.length === 1 ? "" : "s"}`]
+              )
+            : null,
+          mine
+            ? el(
+                "button",
+                {
+                  class: "link",
+                  disabled: !mine.strokes.length,
+                  title: "Remove the last stroke",
+                  onclick: () => this.undoStroke(),
+                },
+                ["Undo"]
+              )
+            : null,
+          mine
+            ? el(
+                "button",
+                { class: "link", disabled: !mine.strokes.length, onclick: () => this.clearSketch() },
+                ["Clear"]
+              )
+            : null,
+        ])
+      : null;
     return el("div", { class: `compose${first ? " first" : ""}` }, [
       textarea,
+      pen,
       el("div", { class: "row" }, [
         el("span", { class: "hint" }, ["⏎ send · ⇧⏎ new line"]),
         onCancel && first ? el("button", { onclick: () => onCancel() }, ["Cancel"]) : null,
@@ -1427,6 +1702,7 @@ export class HiveComments {
       this.error ? el("div", { class: "error" }, [this.error]) : null,
       this.composeBox({
         role: "draft",
+        glyph: draft.glyph,
         placeholder: `Comment on ${draft.glyph}…`,
         submitLabel: this.busy ? "Sending…" : "Comment",
         onSubmit: (text) => this.submitDraft(text),
@@ -1504,6 +1780,7 @@ export class HiveComments {
       this.can.comment
         ? this.composeBox({
             role: "reply",
+            glyph: issue.glyph,
             placeholder: "Reply…",
             submitLabel: "Reply",
             onSubmit: (text) => this.reply(issue.number, text),
@@ -1734,17 +2011,22 @@ export class HiveComments {
     const body = isEditing
       ? this.composeBox({
           role: `edit-${message.id}`,
+          glyph: issue.glyph,
+          strokes: message.sketch?.strokes || [],
           placeholder: "Edit your message…",
           submitLabel: "Save",
           onSubmit: (text) => this.editMessage(issue.number, message.id, text),
           onCancel: () => {
             this.editing = null;
+            if (this.sketch?.role === `edit-${message.id}`) this.dropSketch();
             this.changed();
           },
           first: true,
           initial: message.text,
         })
-      : el("div", { class: "text" }, [message.text]);
+      : message.text
+        ? el("div", { class: "text" }, [message.text])
+        : null;
     return el("div", { class: "message", dataset: { id: message.id } }, [
       el("div", { class: "meta" }, [
         el("span", {
@@ -1753,6 +2035,9 @@ export class HiveComments {
           title: author.username || "",
         }, [initials(author)]),
         el("span", { class: "who" }, [author.name || author.username || "?"]),
+        message.sketch
+          ? el("span", { class: "sketch-mark", title: "With a sketch on the glyph" }, [icon("pencil")])
+          : null,
         el("span", { class: "when", title: message.created || "" }, [
           relativeTime(message.created),
           message.edited
@@ -1856,11 +2141,49 @@ export class HiveComments {
       const rect = canvas.getBoundingClientRect();
       return { x: event.clientX - rect.left, y: event.clientY - rect.top };
     };
+    // The red pen: pointer events (mouse, stylus, finger). preventDefault on
+    // pointerdown also cancels the mouse events Fontra listens to.
+    container.addEventListener(
+      "pointerdown",
+      (event) => {
+        if (!this.sketch?.active || event.target !== canvas || event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (!this.startStroke(local(event))) return;
+        const pointerId = event.pointerId;
+        try {
+          canvas.setPointerCapture?.(pointerId);
+        } catch (error) {
+          // synthetic events have no active pointer
+        }
+        const onMove = (e) => {
+          if (e.pointerId === pointerId) this.continueStroke(local(e));
+        };
+        const onUp = (e) => {
+          if (e.pointerId !== pointerId) return;
+          window.removeEventListener("pointermove", onMove, true);
+          window.removeEventListener("pointerup", onUp, true);
+          window.removeEventListener("pointercancel", onUp, true);
+          this.continueStroke(local(e));
+          this.endStroke();
+        };
+        window.addEventListener("pointermove", onMove, true);
+        window.addEventListener("pointerup", onUp, true);
+        window.addEventListener("pointercancel", onUp, true);
+      },
+      true
+    );
     // Capture: runs before Fontra's own listener on the canvas.
     container.addEventListener(
       "mousedown",
       (event) => {
         if (event.target !== canvas || event.button !== 0) return;
+        if (this.sketch?.active) {
+          // The pen is on: the canvas is for drawing, not for Fontra's tools.
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
         if (!this.layerVisible()) return;
         const hit = this.pinAt(local(event));
         if (!hit) return;
@@ -1879,6 +2202,7 @@ export class HiveComments {
         if (this.openNumber === null && !this.draft) return;
         if (this.overlayHost && event.composedPath().includes(this.overlayHost)) return;
         if (event.target === canvas) {
+          if (this.sketch?.active) return;
           if (this.editor.sceneController?.selectedTool === this.tool) return;
           if (this.layerVisible() && this.pinAt(local(event))) return;
         }
@@ -1891,6 +2215,10 @@ export class HiveComments {
       true
     );
     container.addEventListener("mousemove", (event) => {
+      if (event.target === canvas && this.sketch?.active) {
+        canvas.style.cursor = "crosshair";
+        return;
+      }
       if (event.target !== canvas || this.drag || !this.layerVisible()) return;
       if (this.pinAt(local(event))) canvas.style.cursor = "pointer";
     });

@@ -713,3 +713,84 @@ def test_the_summary_never_creates_a_repository(tmp_path, fixture_fontra):
         await manager.aclose()
 
     run(go())
+
+
+# --- step C: sketches ---------------------------------------------------------------
+
+
+def test_sketches_are_cleaned():
+    from fontra_hive.comments import clean_sketch
+
+    assert clean_sketch(None) is None
+    assert clean_sketch({"strokes": []}) is None
+    assert clean_sketch({"strokes": [[[1.234, 2], [3, 4.56789]]]}) == {
+        "strokes": [[[1.23, 2], [3, 4.57]]]
+    }
+    for bad in [
+        [],
+        {"strokes": "x"},
+        {"strokes": [[[1, 2]]]},  # one point
+        {"strokes": [[[1, 2], [3]]]},
+        {"strokes": [[[1, 2], ["a", 3]]]},
+        {"strokes": [[[1, 2], [3, 4]]] * 101},
+        {"strokes": [[[i, i] for i in range(2600)]] * 2},
+    ]:
+        with pytest.raises(CommentError):
+            clean_sketch(bad)
+
+
+def test_messages_carry_sketches(comments):
+    stroke = [[0, 0], [10, 20], [30, 5]]
+    issue = new(comments, text="", sketch={"strokes": [stroke]})
+    assert issue["messages"][0] == {
+        **issue["messages"][0],
+        "text": "",
+        "sketch": {"strokes": [stroke]},
+    }
+    with pytest.raises(CommentError):  # neither text nor sketch
+        comments.reply(1, "", by=BOB)
+    issue = comments.reply(1, "like this", by=BOB, sketch={"strokes": [stroke]})
+    assert issue["messages"][1]["sketch"] == {"strokes": [stroke]}
+    # Editing the text keeps the sketch; a sketch None removes it.
+    issue = comments.edit_message(1, 2, "like that")
+    assert issue["messages"][1]["sketch"] == {"strokes": [stroke]}
+    issue = comments.edit_message(1, 2, "no drawing", sketch=None)
+    assert "sketch" not in issue["messages"][1]
+    # A sketch-only message may keep an empty text; one without, not.
+    issue = comments.edit_message(1, 1, "")
+    assert issue["messages"][0]["text"] == ""
+    with pytest.raises(CommentError):
+        comments.edit_message(1, 2, "")
+
+
+def test_sketch_routes(team):
+    async def go():
+        sketch = {"strokes": [[[0, 0], [5, 5]]]}
+        created = await answer(
+            await team.createCommentHandler(
+                request("ria", body={**NEW, "text": "", "sketch": sketch})
+            )
+        )
+        assert created["issue"]["messages"][0]["sketch"] == sketch
+        replied = await answer(
+            await team.replyCommentHandler(
+                request("rex", body={"text": "ok", "sketch": sketch}, number=1)
+            )
+        )
+        assert replied["issue"]["messages"][1]["sketch"] == sketch
+        edited = await answer(
+            await team.editMessageHandler(
+                request("rex", body={"text": "ok", "sketch": None}, number=1, message=2)
+            )
+        )
+        assert "sketch" not in edited["issue"]["messages"][1]
+        with pytest.raises(web.HTTPBadRequest):
+            await team.replyCommentHandler(
+                request(
+                    "rex",
+                    body={"text": "x", "sketch": {"strokes": [[[1, 2]]]}},
+                    number=1,
+                )
+            )
+
+    run(go())

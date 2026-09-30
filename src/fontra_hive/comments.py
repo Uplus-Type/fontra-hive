@@ -64,6 +64,8 @@ MAX_MESSAGES = 500  # per topic
 MAX_LABELS = 10  # per topic
 MAX_LABEL = 40
 MAX_TITLE = 200
+MAX_STROKES = 100  # per message
+MAX_SKETCH_POINTS = 5000  # per message, all strokes together
 MAX_NAME = 200
 MAX_COORDINATE = 1_000_000
 MAX_LOCATION_AXES = 64
@@ -154,6 +156,48 @@ def clean_source(source: Any) -> dict:
             for axis, value in sorted(location.items())
         },
     }
+
+
+def clean_sketch(sketch: Any) -> dict | None:
+    """Freehand strokes drawn over the glyph ("red pen"), in glyph units:
+    ``{"strokes": [[[x, y], ...], ...]}``; None or no stroke: no sketch."""
+    if sketch is None:
+        return None
+    if not isinstance(sketch, dict) or not isinstance(sketch.get("strokes"), list):
+        raise CommentError("a sketch is {strokes: [[[x, y], ...], ...]}")
+    strokes = []
+    total = 0
+    for stroke in sketch["strokes"]:
+        if not isinstance(stroke, list) or len(stroke) < 2:
+            raise CommentError("a stroke has at least two points")
+        points = []
+        for point in stroke:
+            if not isinstance(point, list) or len(point) != 2:
+                raise CommentError("a point of a stroke is [x, y]")
+            points.append([clean_number(point[0], "x"), clean_number(point[1], "y")])
+        total += len(points)
+        strokes.append(points)
+    if len(strokes) > MAX_STROKES:
+        raise CommentError(f"at most {MAX_STROKES} strokes")
+    if total > MAX_SKETCH_POINTS:
+        raise CommentError(f"a sketch has at most {MAX_SKETCH_POINTS} points")
+    return {"strokes": strokes} if strokes else None
+
+
+def clean_content(text: Any, sketch: Any) -> tuple[str, dict | None]:
+    """A message: text, a sketch, or both (a sketch may speak for itself)."""
+    sketch = clean_sketch(sketch)
+    if sketch is not None and (
+        text is None or (isinstance(text, str) and not text.strip())
+    ):
+        return "", sketch
+    return clean_text(text), sketch
+
+
+def with_sketch(message: dict, sketch: dict | None) -> dict:
+    if sketch is not None:
+        message["sketch"] = sketch
+    return message
 
 
 def clean_labels(labels: Any) -> list[str]:
@@ -405,12 +449,13 @@ class CommentStore:
         branch: str,
         commit: str | None,
         by: dict,
+        sketch: dict | None = None,
         author: Signature = SERVER_SIGNATURE,
     ) -> dict:
         glyph = clean_name(glyph, "glyph")
         source = clean_source(source)
         point = clean_point(point)
-        text = clean_text(text)
+        text, sketch = clean_content(text, sketch)
         branch = clean_name(branch, "branch")
 
         def apply(files, read):
@@ -437,13 +482,16 @@ class CommentStore:
                 "assignee": None,
                 "labels": [],
                 "messages": [
-                    {
-                        "id": 1,
-                        "author": by,
-                        "created": created,
-                        "edited": None,
-                        "text": text,
-                    }
+                    with_sketch(
+                        {
+                            "id": 1,
+                            "author": by,
+                            "created": created,
+                            "edited": None,
+                            "text": text,
+                        },
+                        sketch,
+                    )
                 ],
             }
             message = f"Comment #{number} on {glyph}\n\nHive-Comment: {number}\n"
@@ -475,9 +523,15 @@ class CommentStore:
         return self._change(apply, author)
 
     def reply(
-        self, number: int, text: str, *, by: dict, author: Signature = SERVER_SIGNATURE
+        self,
+        number: int,
+        text: str,
+        *,
+        by: dict,
+        sketch: dict | None = None,
+        author: Signature = SERVER_SIGNATURE,
     ) -> dict:
-        text = clean_text(text)
+        text, sketch = clean_content(text, sketch)
 
         def edit(issue):
             if len(issue["messages"]) >= MAX_MESSAGES:
@@ -486,13 +540,16 @@ class CommentStore:
                 )
             ids = [m.get("id", 0) for m in issue["messages"]]
             issue["messages"].append(
-                {
-                    "id": max(ids, default=0) + 1,
-                    "author": by,
-                    "created": now_iso(),
-                    "edited": None,
-                    "text": text,
-                }
+                with_sketch(
+                    {
+                        "id": max(ids, default=0) + 1,
+                        "author": by,
+                        "created": now_iso(),
+                        "edited": None,
+                        "text": text,
+                    },
+                    sketch,
+                )
             )
             return f"Reply to #{number}"
 
@@ -610,16 +667,30 @@ class CommentStore:
         message_id: int,
         text: str,
         *,
+        sketch: dict | None | object = ...,
         check: Callable[[dict, dict], None] | None = None,
         author: Signature = SERVER_SIGNATURE,
     ) -> dict:
-        text = clean_text(text)
+        """New text; ``sketch``: new strokes, None to remove them, ``...``
+        (the default) to keep them."""
+        if sketch is ...:
+            # Text alone: it may be empty if the message keeps a sketch.
+            if not isinstance(text, str):
+                raise CommentError("text is required")
+            text = clean_text(text) if text.strip() else ""
+        else:
+            text, sketch = clean_content(text, sketch)
 
         def edit(issue):
             message = _message(issue, message_id)
             if check is not None:
                 check(issue, message)
+            if sketch is ... and not text and not message.get("sketch"):
+                raise CommentError("text is required")
             message["text"] = text
+            if sketch is not ...:
+                message.pop("sketch", None)
+                with_sketch(message, sketch)
             message["edited"] = now_iso()
             return f"Edit a message of #{number}"
 

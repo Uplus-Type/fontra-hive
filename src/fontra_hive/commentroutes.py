@@ -249,6 +249,7 @@ class CommentRoutesMixin:
                 branch=branch,
                 commit=store.head(branch),
                 by=who,
+                sketch=body.get("sketch"),
                 author=_signature(access, self.author),
             )
 
@@ -263,6 +264,7 @@ class CommentRoutesMixin:
                 number,
                 body.get("text"),
                 by=who,
+                sketch=body.get("sketch"),
                 author=_signature(access, self.author),
             )
 
@@ -368,6 +370,7 @@ class CommentRoutesMixin:
                 number,
                 messageId,
                 body.get("text"),
+                sketch=body["sketch"] if "sketch" in body else ...,
                 check=check,
                 author=_signature(access, self.author),
             )

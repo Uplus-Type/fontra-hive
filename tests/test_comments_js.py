@@ -86,7 +86,8 @@ async ({ you, can, issues }) => {
         source: body.source, point: body.point, branch: body.branch, commit: "c",
         state: "open", author: person, created: now, resolved: null,
         assignee: null, labels: [],
-        messages: [{ id: 1, author: person, created: now, edited: null, text: body.text }] };
+        messages: [{ id: 1, author: person, created: now, edited: null, text: body.text,
+                     ...(body.sketch ? { sketch: body.sketch } : {}) }] };
       server.issues.push(issue);
       return json({ head: bump(), issue });
     }
@@ -107,7 +108,8 @@ async ({ you, can, issues }) => {
     if (server.refuse) return new Response(server.refuse, { status: 403 });
     if (method === "POST" && m[2]) {
       issue.messages.push({ id: issue.messages.length + 1, author: person,
-        created: now, edited: null, text: body.text });
+        created: now, edited: null, text: body.text,
+        ...(body.sketch ? { sketch: body.sketch } : {}) });
     } else if (method === "PATCH" && !m[2]) {
       if (body.point) issue.point = body.point;
       if ("assignee" in body) {
@@ -124,6 +126,10 @@ async ({ you, can, issues }) => {
     } else if (method === "PATCH") {
       const message = issue.messages.find((x) => x.id === +m[3]);
       message.text = body.text; message.edited = now;
+      if ("sketch" in body) {
+        if (body.sketch) message.sketch = body.sketch;
+        else delete message.sketch;
+      }
     } else if (method === "DELETE" && m[3]) {
       issue.messages = issue.messages.filter((x) => x.id !== +m[3]);
     } else if (method === "DELETE") {
@@ -928,3 +934,146 @@ def test_managers_see_and_restore_deleted_topics(page):
     p = page(you=ANA, can=REVIEWER, issues=[topic(1)])
     p.evaluate("panel.render()")
     assert not any(r["path"] == "/deleted" for r in requests(p, "GET"))
+
+
+# --- step C: the red pen -------------------------------------------------------------
+
+DRAW = """(points) => {
+  const canvas = editor.canvasController.canvas;
+  const rect = canvas.getBoundingClientRect();
+  const event = (type, [x, y]) => new PointerEvent(type, {
+    bubbles: true, cancelable: true, composed: true, pointerId: 7, button: 0,
+    clientX: rect.left + x, clientY: rect.top + y });
+  canvas.dispatchEvent(event("pointerdown", points[0]));
+  for (const p of points.slice(1)) window.dispatchEvent(event("pointermove", p));
+  window.dispatchEvent(event("pointerup", points.at(-1)));
+}"""
+
+
+def test_simplify_a_stroke(page):
+    p = page()
+    straight = [[i, 0] for i in range(10)] + [[9, 9]]
+    assert p.evaluate("(pts) => module.simplifyStroke(pts, 0.5)", straight) == [
+        [0, 0],
+        [9, 0],
+        [9, 9],
+    ]
+    assert p.evaluate("module.simplifyStroke([[0, 0], [1, 1]], 1)") == [[0, 0], [1, 1]]
+
+
+def test_a_new_comment_can_be_a_drawing(page):
+    p = page(you=ANA, can=REVIEWER)
+    p.evaluate("useTool(120, 450)")
+    p.evaluate("frame()")
+    p.evaluate("card().querySelector('.pen').click()")
+    p.evaluate("frame()")
+    assert "Drawing" in p.evaluate("card().querySelector('.pen').textContent")
+    # Screen (300, 200) is glyph (200, 300): the canvas origin is (100, 500).
+    p.evaluate(DRAW, [[300, 200], [310, 190], [320, 200], [340, 240]])
+    p.evaluate("frame()")
+    strokes = p.evaluate("comments.sketch.strokes")
+    assert (
+        len(strokes) == 1
+        and strokes[0][0] == [200, 300]
+        and strokes[0][-1] == [240, 260]
+    )
+    assert "1 stroke" in p.evaluate("cardText()")
+    # The pen does not reach Fontra's tools nor close the post-it.
+    assert p.evaluate("window.pointerToolUsed") is None
+    assert p.evaluate("comments.draft") is not None
+    # No text needed: Comment is enabled by the drawing.
+    assert p.evaluate("card().querySelector('button.primary').disabled") is False
+    p.evaluate("card().querySelector('button.primary').click()")
+    p.wait_for_function("server.issues.length === 1")
+    posted = requests(p, "POST")[-1]["body"]
+    assert posted["text"] == "" and posted["sketch"] == {"strokes": strokes}
+    p.wait_for_function("comments.sketch === null && comments.openNumber === 1")
+    assert p.evaluate("card().querySelector('.sketch-mark')") is not None
+
+
+def test_undo_clear_and_draw_in_a_reply(page):
+    p = page(issues=[topic(1)])
+    p.evaluate("comments.open(1)")
+    p.evaluate("frame()")
+    p.evaluate("card().querySelector('.pen').click()")
+    p.evaluate(DRAW, [[300, 200], [340, 240]])
+    p.evaluate(DRAW, [[300, 240], [340, 200]])
+    assert p.evaluate("comments.sketch.strokes.length") == 2
+    p.evaluate("frame()")
+    p.evaluate(
+        "[...card().querySelectorAll('.pen-row .link')].find(b => b.textContent === 'Undo').click()"
+    )
+    assert p.evaluate("comments.sketch.strokes.length") == 1
+    p.evaluate("frame()")
+    p.evaluate("textarea('reply').focus()")
+    p.keyboard.type("like this")
+    p.keyboard.press("Enter")
+    p.wait_for_function("comments.issue(1).messages.length === 2")
+    body = requests(p, "POST")[-1]["body"]
+    assert body["text"] == "like this" and len(body["sketch"]["strokes"]) == 1
+
+
+def test_sketches_on_the_canvas(page):
+    drawn = {
+        **topic(1),
+        "messages": [
+            {**topic(1)["messages"][0], "sketch": {"strokes": [[[0, 0], [10, 10]]]}}
+        ],
+    }
+    p = page(issues=[drawn])
+
+    def strokes(layer):
+        log = p.evaluate(f"drawn('{layer}').log")
+        alphas = [e[2] for e in log if e[:2] == ["set", "globalAlpha"]]
+        return [e for e in log if e == ["lineTo", 10, 10]], alphas  # not the pin's
+
+    lines, alphas = strokes("Bold")  # closed post-it, its own source: pale
+    assert len(lines) == 1 and 0.3 in alphas
+    lines, _ = strokes("Light")  # another source: not drawn
+    assert lines == []
+    p.evaluate("comments.open(1)")
+    lines, alphas = strokes("Light")  # open: drawn, full
+    assert len(lines) == 1 and 1 in alphas
+
+
+def test_editing_a_message_keeps_its_strokes_unless_redrawn(page):
+    mine = {
+        **topic(1, author=ANA),
+        "messages": [
+            {
+                **topic(1)["messages"][0],
+                "author": ANA,
+                "sketch": {"strokes": [[[0, 0], [9, 9]]]},
+            }
+        ],
+    }
+    p = page(you=ANA, can=REVIEWER, issues=[mine])
+    p.evaluate("comments.open(1)")
+    p.evaluate("frame()")
+    edit = "[...card().querySelectorAll('.message .link')].find(b => b.textContent === 'Edit')"
+    p.evaluate(f"{edit}.click()")
+    p.evaluate("frame()")
+    p.evaluate("textarea('edit-1').focus()")
+    p.keyboard.press("End")
+    p.keyboard.type("!")
+    p.keyboard.press("Enter")
+    p.wait_for_function("server.requests.some(r => r.method === 'PATCH')")
+    assert "sketch" not in requests(p, "PATCH")[-1]["body"]
+    # With the pen: the strokes are sent (here, cleared).
+    p.wait_for_function("comments.editing === null")
+    p.evaluate("frame()")
+    p.evaluate(f"{edit}.click()")
+    p.evaluate("frame()")
+    p.evaluate("card().querySelector('.pen').click()")
+    assert p.evaluate("comments.sketch.strokes") == [[[0, 0], [9, 9]]]
+    p.evaluate("frame()")
+    p.evaluate(
+        "[...card().querySelectorAll('.pen-row .link')]"
+        ".find(b => b.textContent === 'Clear').click()"
+    )
+    p.evaluate("frame()")
+    p.evaluate("card().querySelector('.compose .primary').click()")
+    p.wait_for_function(
+        "server.requests.filter(r => r.method === 'PATCH').length === 2"
+    )
+    assert requests(p, "PATCH")[-1]["body"]["sketch"] is None

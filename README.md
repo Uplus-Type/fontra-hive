@@ -414,6 +414,15 @@ thread of replies, open or resolved.
   comments", `#project/<owner>/<name>/comments`): every topic, filtered by
   state, glyph, person (wrote in it or assigned), label, branch and text,
   each with a link to open it in the editor.
+- **The red pen.** "Draw" under a message being written (a new comment, a
+  reply, an edit) turns the canvas into a sheet: freehand strokes over the
+  glyph, in glyph units (they follow the zoom), simplified to stay light,
+  with Undo and Clear; the post-it steps aside to the top right while the
+  pen is on. Mouse, stylus or finger (pointer events). A message can be a
+  drawing alone. The strokes of an open post-it are drawn in red; those of
+  closed ones, pale, on their own source. Kept in the message
+  (`"sketch": {"strokes": [[[x, y], …], …]}`, 100 strokes and 5,000 points
+  at most).
 - **Nothing is lost.** "edited" next to a message shows what it said
   before; managers see the deleted topics at the bottom of the Comments
   panel and restore them. Both are read from the commits of
