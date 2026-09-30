@@ -27,7 +27,7 @@ import os
 import time
 from functools import partial
 from html import escape as html_escape
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 import pathlib
 import re
 import shutil
@@ -229,9 +229,22 @@ class DevHiveProjectManager(CommentRoutesMixin):
     async def viewHandler(self, request: web.Request, *, view: str) -> web.Response:
         """Fontra's own view page, with the Hive script added. With accounts,
         a visitor who is not signed in goes to the sign-in page first and
-        comes back here afterwards."""
+        comes back here afterwards.
+
+        With a site of its own for Try Fontra ($HIVE_TRY_URL), its pages are
+        served there only, and the real projects never there: two origins,
+        so that nothing opened in Try (files from anyone, run in the page)
+        comes near the accounts' cookies and data."""
+        onTry = _onTryHost(request)
         if _isTryRequest(request, view):
+            if tryURL() and not onTry:
+                raise web.HTTPFound(tryURL() + _pathQs(request, view))
             return await self.tryViewHandler(request, view=view)
+        if onTry:
+            main = os.environ.get("HIVE_PUBLIC_URL", "").rstrip("/")
+            if not main:
+                raise web.HTTPNotFound()
+            raise web.HTTPFound(main + _pathQs(request, view))
         if self.directory is not None and await self.authorize(request) is None:
             ref = quote(str(getattr(request, "path_qs", f"/{view}.html")), safe="")
             raise web.HTTPFound(f"/?ref={ref}")
@@ -310,7 +323,10 @@ class DevHiveProjectManager(CommentRoutesMixin):
         )
 
     async def tryHandler(self, request: web.Request) -> web.Response:
-        """/try: the demo editor, with a line of text to start from."""
+        """/try: the demo editor, with a line of text to start from (on Try's
+        own site when there is one)."""
+        if tryURL() and not _onTryHost(request):
+            raise web.HTTPFound(tryURL() + TRY_START)
         raise web.HTTPFound(TRY_START)
 
     async def devLoginHandler(self, request: web.Request) -> web.Response:
@@ -1735,6 +1751,24 @@ PYODIDE_CONTENT_TYPES = {
     ".json": "application/json",
     ".whl": "application/zip",  # pyclipper, for path operations
 }
+
+
+def tryURL() -> str | None:
+    """Try Fontra's own site ($HIVE_TRY_URL, e.g. https://try.fontrahive.com),
+    or None: then it is served here, at /try."""
+    return os.environ.get("HIVE_TRY_URL", "").rstrip("/") or None
+
+
+def _onTryHost(request) -> bool:
+    url = tryURL()
+    if not url:
+        return False
+    host = (getattr(request, "host", "") or "").split(":")[0].lower()
+    return host == (urlsplit(url).hostname or "").lower()
+
+
+def _pathQs(request, view: str) -> str:
+    return str(getattr(request, "path_qs", None) or f"/{view}.html")
 
 
 @functools.lru_cache(maxsize=1)

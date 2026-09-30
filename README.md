@@ -515,6 +515,14 @@ fontra-glyphs are installed (`pip install "glyphsLib>=6.14" fontra-glyphs`);
 without them it answers 404 and the page says Glyphs files cannot be read
 there.
 
+On a site of its own: with `HIVE_TRY_URL=https://try.example.com`, the
+server sends `/try` and the demo's pages there, and a real project asked
+there back to the main site (`HIVE_PUBLIC_URL`). Try then has an origin of
+its own: what it opens (files from anyone, read by code in the page) never
+shares one with the accounts' cookies, and its fonts and settings in the
+browser stay apart from the product's. hive-api's Caddyfile serves
+`try.<domain>` so, with only Try's pages and their files.
+
 Pyodide itself comes from the jsDelivr CDN by default. To host it here
 (recommended: no third party sees the visitors, and it works behind a strict
 Content-Security-Policy), unpack a `pyodide-core` release (314.0.7, from

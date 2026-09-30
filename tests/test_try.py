@@ -281,3 +281,37 @@ def test_fontc_is_served_here(manager, tmp_path, monkeypatch):  # noqa: F811
         assert f'name="hive-try-version" content="{tryVersion()}"' in page
 
     asyncio.run(go())
+
+
+def test_try_has_a_site_of_its_own(manager, monkeypatch):  # noqa: F811
+    """$HIVE_TRY_URL: Try's pages there only, the real projects never there."""
+
+    def on(host, project=None, path="/editor.html"):
+        r = request(project, path_qs=path + (f"?project={project}" if project else ""))
+        r.host = host
+        return r
+
+    async def go():
+        monkeypatch.setenv("HIVE_TRY_URL", "https://try.fontrahive.com/")
+        monkeypatch.setenv("HIVE_PUBLIC_URL", "https://fontrahive.com")
+        # /try and the demo on the main site: to Try's site.
+        with pytest.raises(web.HTTPFound) as found:
+            await manager.tryHandler(on("fontrahive.com"))
+        assert unquote(str(found.value.location)) == unquote(
+            "https://try.fontrahive.com" + TRY_START
+        )
+        with pytest.raises(web.HTTPFound) as found:
+            await manager.viewHandler(on("fontrahive.com", TRY_PROJECT), view="editor")
+        assert str(found.value.location).startswith("https://try.fontrahive.com/editor.html")
+        # On Try's site: the demo is served, /try stays there.
+        page = await manager.viewHandler(on("try.fontrahive.com", TRY_PROJECT), view="editor")
+        assert "try-engine.js" in page.text
+        with pytest.raises(web.HTTPFound) as found:
+            await manager.tryHandler(on("try.fontrahive.com"))
+        assert unquote(str(found.value.location)) == unquote(TRY_START)
+        # A real project asked on Try's site: to the main site.
+        with pytest.raises(web.HTTPFound) as found:
+            await manager.viewHandler(on("try.fontrahive.com", "MyFont"), view="editor")
+        assert str(found.value.location) == "https://fontrahive.com/editor.html?project=MyFont"
+
+    asyncio.run(go())
