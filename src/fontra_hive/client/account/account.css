@@ -200,7 +200,7 @@ body:not([data-page="home"]) a:hover { color: var(--fontra-red-color, #f11759); 
 @media (prefers-reduced-motion: reduce) { .glance a { transition: none; } }
 
 /* Legal pages (/legal, /terms: served by the deployment, not by this plug-in),
-   French first (it prevails), then English. */
+   English first, then French (which prevails). */
 body[data-page="legal"] .logo.small { width: 72px; height: 72px; margin: 2em 0 0.5em; }
 .lang { display: flex; gap: 1.5em; font-size: 0.9em; margin-bottom: 1em; }
 .legal { max-width: 44rem; width: 100%; line-height: 1.55; margin: 1rem 0 2rem; scroll-margin-top: 1rem; }
