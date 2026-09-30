@@ -149,7 +149,16 @@ async ({ you, can, issues }) => {
     projectIdentifier: "Mutator",
     canvasController,
     tools,
-    addEditTool(tool) { tools[tool.identifier] = tool; window.tool = tool; },
+    selectedToolIdentifier: "pointer-tool",
+    addEditTool(tool) {
+      tools[tool.identifier] = tool;
+      window.tool = tool;
+      // Like Fontra: the new button is created "selected".
+      const button = document.createElement("div");
+      button.className = "tool-button selected";
+      button.dataset.tool = tool.identifier;
+      document.body.append(button);
+    },
     sceneController: {
       sceneSettings,
       sceneModel: {
@@ -272,6 +281,11 @@ def test_installs_a_tool_a_layer_and_a_panel(page):
     p = page()
     assert p.evaluate("window.tool.identifier") == "hive-comment-tool"
     assert p.evaluate("window.tool.iconPath") == "/hive/plugin/comment-tool.svg"
+    # Not shown as selected: the pointer tool is.
+    assert (
+        p.evaluate("document.querySelector('[data-tool=hive-comment-tool]').className")
+        == "tool-button"
+    )
     layer = p.evaluate(
         "editor.visualizationLayers.definitions.map(d => [d.identifier, d.userSwitchable])"
     )

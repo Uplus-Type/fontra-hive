@@ -1300,7 +1300,13 @@ export class HiveComments {
     this.tool = new HiveCommentTool(this);
     this.editor.addEditTool(this.tool);
     const button = document.querySelector(`[data-tool="${TOOL_ID}"]`);
-    if (button) button.title = "Comment (Fontra Hive): click in the glyph to pin a comment";
+    if (button) {
+      button.title = "Comment (Fontra Hive): click in the glyph to pin a comment";
+      // Fontra creates tool buttons "selected" and relies on the
+      // setSelectedTool() that follows its own initTools(); a tool added
+      // later must clear it, or it looks selected next to the real one.
+      button.classList.toggle("selected", this.editor.selectedToolIdentifier === TOOL_ID);
+    }
   }
 
   // A click with the Comment tool, in canvas coordinates (glyph space of the scene).
