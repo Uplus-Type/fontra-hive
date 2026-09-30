@@ -1,80 +1,295 @@
-// Fontra Hive: the "Try Fontra" notice, at the bottom of the demo editor.
-// Says that the font lives in the browser and is not saved, and links to
-// Hive. Loaded at the end of <body> (see try-engine.js for the engine).
+// Fontra Hive, "Try Fontra": the bar at the bottom of the editor, and the
+// "Your fonts" panel: open a .fontra package (zipped, or a folder), keep it
+// in this browser, download it, delete it; or go back to the demo font.
+// Loaded at the end of <body>; the engine is try-engine.js.
 //
 // Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
 
 const STYLE = `
+.hive-try, .hive-try-panel {
+  font: 13px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  color: #f4f1ea; box-sizing: border-box;
+}
 .hive-try {
-  position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
-  z-index: 1000; display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; white-space: nowrap;
-  justify-content: center; max-width: calc(100vw - 32px); box-sizing: border-box;
-  padding: 7px 8px 7px 14px; border-radius: 999px;
-  background: #222; color: #f4f1ea; box-shadow: 0 4px 18px rgba(0,0,0,.25);
-  font: 13px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 1000;
+  display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; white-space: nowrap;
+  max-width: calc(100vw - 32px); padding: 6px 7px 6px 12px; border-radius: 999px;
+  background: #222; box-shadow: 0 4px 18px rgba(0,0,0,.25);
 }
 .hive-try img { width: 20px; height: 20px; }
-.hive-try b { font-weight: 600; }
-.hive-try .muted { color: #b9b3a8; }
-.hive-try a, .hive-try button {
+.hive-try .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; max-width: 22ch; }
+.hive-try .status { color: #b9b3a8; }
+.hive-try .status.error { color: #ff8a80; }
+.hive-try a, .hive-try button, .hive-try-panel button, .hive-try-panel a.button {
   font: inherit; color: #222; background: #f3c744; border: 0; border-radius: 999px;
   padding: 5px 11px; cursor: pointer; text-decoration: none; white-space: nowrap;
 }
-.hive-try button.plain { background: transparent; color: #f4f1ea; border: 1px solid #555; }
+.hive-try button.plain, .hive-try-panel button.plain {
+  background: transparent; color: #f4f1ea; border: 1px solid #555;
+}
 .hive-try .close { background: transparent; color: #b9b3a8; padding: 5px 7px; }
-.hive-try.small .muted, .hive-try.small .extra { display: none; }
-@media (max-width: 700px) { .hive-try .muted, .hive-try .extra { display: none; } }
+.hive-try.small .extra, .hive-try.small .status { display: none; }
+@media (max-width: 760px) { .hive-try .extra, .hive-try .status { display: none; } }
+.hive-try-backdrop {
+  position: fixed; inset: 0; z-index: 1001; background: rgba(0,0,0,.35);
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+.hive-try-panel {
+  width: min(560px, 100%); max-height: calc(100vh - 32px); overflow: auto;
+  background: #222; border-radius: 14px; padding: 20px 22px; box-shadow: 0 10px 40px rgba(0,0,0,.4);
+}
+.hive-try-panel h2 { font-size: 17px; margin: 0 0 4px; font-weight: 600; }
+.hive-try-panel p { margin: 6px 0; color: #cfc9bd; }
+.hive-try-panel .note { font-size: 12px; color: #a9a397; }
+.hive-try-panel ul { list-style: none; padding: 0; margin: 14px 0; }
+.hive-try-panel li {
+  display: flex; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid #3a3a3a;
+}
+.hive-try-panel li:last-child { border-bottom: 1px solid #3a3a3a; }
+.hive-try-panel li .what { flex: 1; min-width: 0; }
+.hive-try-panel li .what b { display: block; overflow: hidden; text-overflow: ellipsis; }
+.hive-try-panel li .what span { font-size: 12px; color: #a9a397; }
+.hive-try-panel li.current b::after { content: " · open"; font-weight: 400; color: #f3c744; }
+.hive-try-panel .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 6px; }
+.hive-try-panel .error { color: #ff8a80; min-height: 1.2em; }
+.hive-try-panel .top { display: flex; justify-content: space-between; align-items: start; gap: 8px; }
 `;
+
+const DEMO_URL = "/editor.html?project=demo%3AMutatorSans&text=%22HAMBURGEFONSTIV%22";
 
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs)) {
-    if (key === "onclick") node.addEventListener("click", value);
+    if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
     else node.setAttribute(key, value);
   }
-  node.append(...children);
+  node.append(...children.filter((child) => child !== null && child !== undefined));
   return node;
+}
+
+function editorURL(id, text) {
+  const url = new URL("/editor.html", location.href);
+  url.searchParams.set("project", "local:" + id);
+  if (text) url.searchParams.set("text", JSON.stringify(text));
+  return url.pathname + url.search;
+}
+
+// Something to show on the canvas: the font's own letters.
+export function sampleText(glyphMap) {
+  const chars = new Set();
+  for (const codePoints of Object.values(glyphMap)) {
+    for (const cp of codePoints) chars.add(String.fromCodePoint(cp));
+  }
+  for (const word of ["Hamburgefonstiv", "HAMBURGEFONSTIV", "hamburgefonstiv"]) {
+    if ([...word].every((c) => chars.has(c))) return word;
+  }
+  const letters = [...chars].filter((c) => /\p{L}|\p{N}/u.test(c)).sort();
+  return letters.slice(0, 16).join("");
+}
+
+function when(iso) {
+  try {
+    return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  } catch (error) {
+    return "";
+  }
+}
+
+// Files the visitor picked: a .zip, or the files of a folder.
+async function filesFromPick(fileList) {
+  const Format = window.HiveTryFormat;
+  const picked = [...fileList];
+  if (picked.length === 1 && /\.zip$/i.test(picked[0].name)) {
+    return { files: await Format.unzip(picked[0]), label: picked[0].name.replace(/\.zip$/i, "") };
+  }
+  const files = new Map();
+  for (const file of picked) files.set(file.webkitRelativePath || file.name, file);
+  return { files, label: "" };
+}
+
+function packageName(files, label) {
+  const root = window.HiveTryFormat.findRoot([...files.keys()]);
+  const folder = root.replace(/\/$/, "").split("/").pop() || label || "Font";
+  return folder.replace(/\.fontra$/i, "").replace(/\.fontra$/i, "") || "Font";
+}
+
+export async function importPicked(fileList) {
+  const Format = window.HiveTryFormat;
+  const { files, label } = await filesFromPick(fileList);
+  const { font, images } = await Format.readPackage(files);
+  const name = (font.fontInfo && font.fontInfo.familyName) || packageName(files, label);
+  const normalized = Format.writePackage(font);
+  images.forEach((blob, fileName) => normalized.set(Format.IMAGES_DIR + fileName, blob));
+  const id = await window.HiveTryStore.create(name, normalized);
+  return { id, text: sampleText(font.glyphMap) };
+}
+
+function openPanel() {
+  const Store = window.HiveTryStore;
+  const current = window.hiveTry?.localId;
+  const error = el("p", { class: "error", role: "alert" });
+  const list = el("ul");
+  const fileInput = el("input", { type: "file", accept: ".zip,application/zip", hidden: "" });
+  const folderInput = el("input", { type: "file", webkitdirectory: "", hidden: "" });
+
+  const close = () => backdrop.remove();
+  const go = (url) => {
+    if (window.hiveTry) window.hiveTry.TryFont.edited = false;
+    location.href = url;
+  };
+
+  async function onPick(input) {
+    if (!input.files.length) return;
+    error.textContent = "Opening…";
+    try {
+      const { id, text } = await importPicked(input.files);
+      go(editorURL(id, text));
+    } catch (e) {
+      console.error(e);
+      error.textContent = e.message || String(e);
+    } finally {
+      input.value = "";
+    }
+  }
+  fileInput.addEventListener("change", () => onPick(fileInput));
+  folderInput.addEventListener("change", () => onPick(folderInput));
+
+  async function fill() {
+    list.replaceChildren();
+    const projects = Store.available() ? await Store.list() : [];
+    if (!projects.length) {
+      list.append(el("li", {}, el("span", { class: "what" }, el("span", {}, "No fonts in this browser yet."))));
+    }
+    for (const project of projects) {
+      list.append(
+        el(
+          "li",
+          { class: project.id === current ? "current" : "" },
+          el("span", { class: "what" }, el("b", {}, project.name), el("span", {}, "Changed " + when(project.modified))),
+          project.id === current
+            ? null
+            : el("button", { type: "button", onclick: () => go(editorURL(project.id)) }, "Open"),
+          el(
+            "button",
+            {
+              type: "button",
+              class: "plain",
+              title: "Delete from this browser",
+              onclick: async () => {
+                if (!confirm(`Delete “${project.name}” from this browser? Download it first to keep it.`)) return;
+                await Store.removeProject(project.id);
+                if (project.id === current) go(DEMO_URL);
+                else fill();
+              },
+            },
+            "Delete"
+          )
+        )
+      );
+    }
+  }
+
+  const backdrop = el(
+    "div",
+    { class: "hive-try-backdrop", onclick: (event) => event.target === backdrop && close() },
+    el(
+      "div",
+      { class: "hive-try-panel", role: "dialog", "aria-label": "Your fonts" },
+      el(
+        "div",
+        { class: "top" },
+        el("h2", {}, "Your fonts in this browser"),
+        el("button", { type: "button", class: "plain", onclick: close }, "Close")
+      ),
+      el("p", {}, "Open a font in Fontra's format (.fontra), work on it, download it when you like. It never leaves your computer."),
+      list,
+      el(
+        "div",
+        { class: "actions" },
+        el("button", { type: "button", onclick: () => fileInput.click() }, "Open a .fontra.zip…"),
+        el("button", { type: "button", class: "plain", onclick: () => folderInput.click() }, "Open a .fontra folder…"),
+        el("button", { type: "button", class: "plain", onclick: () => go(DEMO_URL) }, "Demo font")
+      ),
+      error,
+      el(
+        "p",
+        { class: "note" },
+        "Fonts are kept by this browser only: clearing this site's data deletes them. Download a copy to keep it. " +
+          "Other formats (UFO, Glyphs, designspace) come next."
+      ),
+      fileInput,
+      folderInput
+    )
+  );
+  document.body.append(backdrop);
+  if (!Store.available()) {
+    error.textContent = "This browser cannot keep files for this site (private window?).";
+  }
+  fill();
 }
 
 function start() {
   document.head.append(el("style", {}, STYLE));
-  const edited = el("span", { class: "muted" });
+  const tryAPI = window.hiveTry;
+  const isLocal = !!tryAPI?.localId;
+  const name = el("span", { class: "name" }, isLocal ? "…" : "Try Fontra");
+  const status = el("span", { class: "status" }, isLocal ? "kept in this browser" : "demo · nothing is saved");
+  const keep = el(
+    "button",
+    {
+      type: "button",
+      class: "plain extra",
+      title: "Keep this font, with your edits, in this browser",
+      onclick: async () => {
+        const id = await tryAPI.saveCopy("MutatorSans");
+        tryAPI.TryFont.edited = false;
+        location.href = editorURL(id, "HAMBURGEFONSTIV");
+      },
+    },
+    "Keep a copy"
+  );
   const bar = el(
     "div",
-    { class: "hive-try", role: "note" },
+    { class: "hive-try", role: "region", "aria-label": "Try Fontra" },
     el("img", { src: "/hive/icons/hive-icon.svg", alt: "" }),
-    el("span", {}, el("b", {}, "Try Fontra"), " in your browser · nothing is saved"),
-    edited,
-    el(
-      "button",
-      {
-        class: "plain extra",
-        type: "button",
-        title: "Reload the demo font",
-        onclick: () => {
-          if (!window.hiveTry?.TryFont.edited || confirm("Start over? Your edits will be lost.")) {
-            window.hiveTry && (window.hiveTry.TryFont.edited = false);
-            location.reload();
-          }
-        },
-      },
-      "Start over"
-    ),
+    name,
+    status,
+    el("button", { type: "button", class: "plain", onclick: openPanel }, "Your fonts"),
+    el("button", { type: "button", class: "plain extra", onclick: () => tryAPI.download() }, "Download"),
+    isLocal ? null : keep,
     el("a", { href: "/", class: "extra" }, "Fontra Hive for teams"),
     el(
       "button",
-      {
-        class: "close",
-        type: "button",
-        title: "Hide",
-        "aria-label": "Hide",
-        onclick: () => bar.classList.toggle("small"),
-      },
+      { class: "close", type: "button", title: "Hide", "aria-label": "Hide", onclick: () => bar.classList.toggle("small") },
       "–"
     )
   );
+  if (isLocal) {
+    tryAPI
+      .font()
+      .then(() => {
+        name.textContent = tryAPI.projectName();
+      })
+      .catch(() => {
+        name.textContent = "Font not found";
+        status.textContent = "not in this browser";
+        status.classList.add("error");
+        openPanel();
+      });
+  }
   window.addEventListener("hive-try-edit", () => {
-    edited.textContent = "(a reload starts over)";
+    if (!isLocal) status.textContent = "demo · a reload starts over";
+  });
+  window.addEventListener("hive-try-saving", () => {
+    status.classList.remove("error");
+    status.textContent = "saving…";
+  });
+  window.addEventListener("hive-try-saved", () => {
+    status.textContent = "saved in this browser";
+  });
+  window.addEventListener("hive-try-save-error", () => {
+    status.classList.add("error");
+    status.textContent = "could not save: download a copy";
   });
   document.body.append(bar);
 }

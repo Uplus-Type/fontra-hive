@@ -460,24 +460,39 @@ GET    /api/hive/projects/<name>/comments/summary        {open, resolved}; never
 
 ## "Try Fontra" without a server
 
-`/try` opens Fontra's editor on a demo font, for anyone, with no account:
-the font never reaches the server. `client/try/try-engine.js`, loaded first
-on Fontra's pages for the project `demo:MutatorSans` (editor, font overview,
-font info), replaces the editor's WebSocket by an object that answers the
-same calls (`getGlyph`, `getAxes`, `editFinal`…) in the browser, from
-`client/try/demo-font.json` (MutatorSans, BSD licence, see
-`MUTATORSANS-LICENSE.txt`). Edits stay in the tab; a reload starts over.
-After an edit, the engine reads the edited data back from the page's
-`FontController`, so it needs no copy of Fontra's path operations. The Hive
-plug-in is hidden there (it needs a Hive project), and a notice at the
-bottom (`try-banner.js`) says what the page is and links to Hive. Nothing in
-Fontra is changed or rebuilt: the page is Fontra's own `editor.html`.
+`/try` opens Fontra's editor for anyone, with no account, and the font never
+reaches the server. On Fontra's pages (editor, font overview, font info) for
+the project `demo:MutatorSans` or `local:<id>`, Hive adds three classic
+scripts at the start of `<head>` and a notice at the end of `<body>`
+(`client/try/`):
 
-Limits: each window has its own copy of the font (an edit in the editor does
-not show in a font overview opened next to it); what Fontra asks its server
-over HTTP (`/api/unionPath` and the other path operations, `parseClipboard`)
-is not answered, so Remove overlap and pasting from other apps fail; no
-export.
+- `try-engine.js` replaces the editor's WebSocket by an object that answers
+  the same calls (`getGlyph`, `getAxes`, `editFinal`…) in the browser. After
+  an edit it reads the edited data back from the page's `FontController`,
+  so it needs no copy of Fontra's path operations.
+- `fontra-format.js` reads and writes the `.fontra` format as Fontra's
+  Python backend does, byte for byte (glyph file names, CSV, JSON layout,
+  contours ↔ packed paths), and zips and unzips (`CompressionStream`).
+- `try-store.js` keeps fonts in the browser's private file system (OPFS),
+  one `.fontra` package per font, written through `try-opfs-worker.js`
+  (Safari only writes there from a worker).
+- `try-banner.js`: the bar at the bottom (name, save state, "Your fonts",
+  "Download", "Keep a copy" of the demo) and the "Your fonts" panel: open a
+  `.fontra.zip` or a `.fontra` folder, open, delete.
+
+The demo (`demo-font.json`: MutatorSans, BSD licence, see
+`MUTATORSANS-LICENSE.txt`) is not saved; a reload starts over. A font the
+visitor opens (`local:<id>`) is written back a moment after each edit and
+downloads as `<name>.fontra.zip`, the same layout as Hive's export. The Hive
+plug-in is hidden on these pages (it needs a Hive project). Nothing in
+Fontra is changed or rebuilt: the pages are Fontra's own.
+
+Limits for now: two windows on the same font do not see each other's edits
+live (the last write wins, file by file); what Fontra asks its server over
+HTTP (`/api/unionPath` and the other path operations, `parseClipboard`) is
+not answered, so Remove overlap and pasting from other apps fail; only the
+`.fontra` format (UFO, Glyphs, designspace and compiled fonts come next,
+through Pyodide and fontc).
 
 To change the demo font: convert a font to `.fontra` with Fontra
 (`fontra-copy`), then write the JSON with the same calls as the engine

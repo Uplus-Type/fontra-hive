@@ -41,12 +41,18 @@ def test_inject_try_scripts():
     page = injectTryScripts(
         "<html><HEAD><title>x</title></HEAD><body><p>x</p></BODY></html>"
     )
+    assert page.index('src="/hive/try/fontra-format.js"') < page.index(
+        'src="/hive/try/try-store.js"'
+    )
+    assert page.index('src="/hive/try/try-store.js"') < page.index(
+        'src="/hive/try/try-engine.js"'
+    )
     assert page.index('src="/hive/try/try-engine.js"') < page.index("<title>")
     assert page.index('src="/hive/try/try-banner.js"') > page.index("<p>x</p>")
     assert page.index('href="/hive/icons/hive-icon.svg"') < page.index("<title>")
     assert "register.js" not in page and "hive-views.js" not in page
     assert injectTryScripts("<p>x</p>").startswith(
-        '<script src="/hive/try/try-engine.js">'
+        '<script src="/hive/try/fontra-format.js">'
     )
 
 
@@ -57,6 +63,11 @@ def test_only_the_demo_project_is_a_try_request():
     assert not _isTryRequest(request(TRY_PROJECT), "applicationsettings")
     assert not _isTryRequest(request("jeremie/Demo"), "editor")
     assert not _isTryRequest(request(), "editor")
+    # Fonts kept in the visitor's browser.
+    assert _isTryRequest(request("local:0123456789ab"), "editor")
+    assert _isTryRequest(request("local:0123456789ab"), "fontinfo")
+    assert not _isTryRequest(request("local:../x"), "editor")
+    assert not _isTryRequest(request("local:0123456789AB"), "editor")
 
 
 def test_try_pages_need_no_session(manager):  # noqa: F811

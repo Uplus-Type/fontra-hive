@@ -1,12 +1,18 @@
 """"Try Fontra" in a headless browser: the engine (client/try/try-engine.js)
-answers Fontra's WebSocket calls from the demo font; and, when Fontra's built
-client is installed, the real editor opens the demo and an edit reaches the
-engine's copy. Skipped without Playwright."""
+answers Fontra's WebSocket calls from the demo font; the .fontra reader and
+writer (fontra-format.js) give back Fontra's own files; and, when Fontra's
+built client is installed, the real editor opens the demo, and a .fontra.zip
+opened in the browser is edited, kept across a reload and downloaded.
+Skipped without Playwright."""
 
-import functools
+import base64
 import http.server
+import io
+import json
 import pathlib
 import threading
+import urllib.parse
+import zipfile
 from importlib import resources
 
 import pytest
@@ -14,10 +20,14 @@ import pytest
 playwright_sync = pytest.importorskip("playwright.sync_api")
 
 CLIENT_DIR = pathlib.Path(__file__).parent.parent / "src" / "fontra_hive" / "client"
+DATA_DIR = pathlib.Path(__file__).parent / "data"
+FIXTURE = DATA_DIR / "MutatorSansLocationBase.fontra"
 CHROMIUM = "/opt/pw-browsers/chromium"
 TRY_PAGE_QUERY = "project=demo%3AMutatorSans&text=%22HAMBURGEFONSTIV%22"
 
 BARE_PAGE = """<!doctype html><html><head>
+<script src="/hive/try/fontra-format.js"></script>
+<script src="/hive/try/try-store.js"></script>
 <script src="/hive/try/try-engine.js"></script>
 </head><body></body></html>"""
 
@@ -59,6 +69,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._send(injectTryScripts(html).encode(), "text/html")
         if path.startswith("/hive/"):
             file = CLIENT_DIR / path[len("/hive/") :]
+        elif path.startswith("/testdata/"):
+            file = DATA_DIR / urllib.parse.unquote(path[len("/testdata/") :])
         elif self.fontraClient:
             file = self.fontraClient / path.lstrip("/")
         else:
@@ -191,3 +203,151 @@ def test_the_real_editor_opens_and_edits_the_demo(server, browser):
     assert after == client  # the engine's copy follows the editor's
     assert not errors
     page.close()
+
+
+READ_WRITE = """async ([base, paths]) => {
+  const F = window.HiveTryFormat;
+  const files = new Map();
+  for (const path of paths) {
+    const url = base + path.split("/").map(encodeURIComponent).join("/");
+    const response = await fetch(url);
+    files.set("Font.fontra/" + path, await response.blob());
+  }
+  const { font } = await F.readPackage(files);
+  const written = Object.fromEntries(F.writePackage(font));
+  const zipped = await F.zip(new Map(Object.entries(written)));
+  const again = await F.readPackage(await F.unzip(zipped));
+  const bytes = new Uint8Array(await zipped.arrayBuffer());
+  let binary = "";
+  bytes.forEach((b) => (binary += String.fromCharCode(b)));
+  return {
+    written,
+    glyphs: Object.keys(font.glyphs),
+    firstPath: font.glyphs.A,
+    roundTrip: JSON.stringify(again.font) === JSON.stringify(font),
+    zip: btoa(binary),
+  };
+}"""
+
+
+def test_format_writes_fontras_own_files(server, browser):
+    page = browser.new_page()
+    page.goto(server + "/bare.html")
+    paths = sorted(
+        p.relative_to(FIXTURE).as_posix() for p in FIXTURE.rglob("*") if p.is_file()
+    )
+    result = page.evaluate(
+        READ_WRITE, [f"/testdata/{FIXTURE.name}/", [p for p in paths]]
+    )
+    # Fontra's files come back byte for byte (glyph names ↔ file names, CSV,
+    # JSON layout, contours ↔ packed paths).
+    for path in paths:
+        # Fontra writes CSV with "\r\n" (Python's csv); the fixture may have "\n".
+        original = (FIXTURE / path).read_text("utf-8")
+        if path.endswith(".csv"):
+            original = original.replace("\r\n", "\n").replace("\n", "\r\n")
+        assert result["written"][path] == original, path
+    assert set(result["written"]) == set(paths)
+    layer = next(iter(result["firstPath"]["layers"].values()))["glyph"]
+    assert set(layer["path"]) >= {"coordinates", "pointTypes", "contourInfo"}
+    assert result["roundTrip"]
+    # Python reads the browser's zip.
+    archive = zipfile.ZipFile(io.BytesIO(base64.b64decode(result["zip"])))
+    assert archive.testzip() is None
+    assert sorted(archive.namelist()) == paths
+    fontData = archive.read("font-data.json").decode()
+    assert fontData == result["written"]["font-data.json"]
+    page.close()
+
+
+def test_glyph_file_names_match_fontras(server, browser):
+    """The JS file names against Fontra's Python ones, when Fontra is here."""
+    filenames = pytest.importorskip("fontra.backends.filenames")
+    names = ["A", "a", "A.alt", "con", "CON.alt", ".notdef", "a/b", "Ab^C", "ÉÈ"]
+    names.append("x" * 12)
+    expected = {name: filenames.stringToFileName(name) for name in names}
+    page = browser.new_page()
+    page.goto(server + "/bare.html")
+    got = page.evaluate(
+        "names => Object.fromEntries(names.map(n => "
+        "[n, HiveTryFormat.stringToFileName(n)]))",
+        names,
+    )
+    back = page.evaluate(
+        "stems => stems.map(s => HiveTryFormat.fileNameToString(s))",
+        list(expected.values()),
+    )
+    page.close()
+    assert got == expected
+    assert back == names
+
+
+def test_a_local_font_is_kept_edited_and_downloaded(server, browser, tmp_path):
+    if Handler.fontraClient is None:
+        pytest.skip("Fontra's built client is not installed")
+    archive = tmp_path / "Mutator.fontra.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
+        for path in sorted(FIXTURE.rglob("*")):
+            if path.is_file():
+                z.write(path, "Mutator.fontra/" + path.relative_to(FIXTURE).as_posix())
+    context = browser.new_context(
+        viewport={"width": 1400, "height": 850}, accept_downloads=True
+    )
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.on("dialog", lambda dialog: dialog.accept())
+    page.goto(f"{server}/editor.html?{TRY_PAGE_QUERY}")
+    page.get_by_role("button", name="Your fonts").click()
+    page.locator(".hive-try-panel input[accept]").set_input_files(str(archive))
+    page.wait_for_url("**project=local*", timeout=15000)
+    page.wait_for_function("window.editorController?.fontController?.glyphMap?.A")
+    page.wait_for_function(
+        "document.querySelector('.hive-try .name').textContent === 'Mutator'"
+    )
+
+    before = page.evaluate("hiveTry.font().then(f => JSON.stringify(f.glyphs.A))")
+    # An edit as the editor makes one: applied to Fontra's copy, then sent.
+    page.evaluate(
+        """async () => {
+          const fc = editorController.fontController;
+          const glyph = (await fc.getGlyph("A")).glyph;
+          const layer = Object.keys(glyph.layers)[0];
+          const path = glyph.layers[layer].glyph.path;
+          const [x, y] = [path.coordinates[0], path.coordinates[1]];
+          const p = ["glyphs", "A", "layers", layer, "glyph", "path"];
+          const change = { p, f: "=xy", a: [0, x, y + 10] };
+          const rollback = { p, f: "=xy", a: [0, x, y] };
+          await fc.applyChange(change);
+          await fc.editFinal(change, rollback, "test", true);
+        }"""
+    )
+    page.wait_for_function(
+        "document.querySelector('.hive-try .status').textContent"
+        " === 'saved in this browser'",
+        timeout=5000,
+    )
+    edited = page.evaluate(
+        "editorController.fontController.getGlyph('A')"
+        ".then(g => JSON.stringify(g.glyph.layers))"
+    )
+    page.reload()
+    page.wait_for_function("window.editorController?.fontController?.glyphMap?.A")
+    kept = page.evaluate(
+        "editorController.fontController.getGlyph('A')"
+        ".then(g => JSON.stringify(g.glyph.layers))"
+    )
+    assert kept == edited
+    assert json.loads(before)["layers"] != json.loads(kept)
+
+    with page.expect_download() as info:
+        page.get_by_role("button", name="Download").click()
+    download = info.value
+    assert download.suggested_filename == "Mutator.fontra.zip"
+    with zipfile.ZipFile(download.path()) as z:
+        names = z.namelist()
+        assert "Mutator.fontra/font-data.json" in names
+        glyph = json.loads(z.read("Mutator.fontra/glyphs/A^1.json"))
+        assert "contours" in next(iter(glyph["layers"].values()))["glyph"]["path"]
+    assert not errors
+    context.close()

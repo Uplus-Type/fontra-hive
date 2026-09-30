@@ -4,9 +4,15 @@
 // Fontra's modules. Fontra's client talks to its Python server over a
 // WebSocket (fontra-core/src/remote.js: JSON messages with "client-call-id",
 // "method-name", "arguments"). Here the WebSocket to /websocket is replaced
-// by an object that answers the same calls in the browser, from a demo font
-// loaded as one JSON file (demo-font.json, made from a .fontra project).
-// Nothing is sent anywhere and nothing is saved: a reload starts over.
+// by an object that answers the same calls in the browser. Nothing is sent
+// anywhere.
+//
+// Two kinds of project (the "project" in the page's address):
+// - "demo:MutatorSans": the demo font, one JSON file (demo-font.json, made
+//   from a .fontra package); edits stay in the tab, a reload starts over.
+// - "local:<id>": a .fontra package the visitor opened, kept in this browser
+//   (try-store.js); each edit is written back to its files (fontra-format.js)
+//   a moment later.
 //
 // Edits: Fontra applies each change to its own copy first, then sends it
 // ("editFinal"). This engine keeps its copy in step by reading the edited
@@ -39,15 +45,173 @@
     // no localStorage: nothing to hide
   }
 
+  var Format = window.HiveTryFormat;
+  var Store = window.HiveTryStore;
+
+  var project = new URL(location.href).searchParams.get("project") || "";
+  var LOCAL_PREFIX = "local:";
+  var localId = project.startsWith(LOCAL_PREFIX) ? project.slice(LOCAL_PREFIX.length) : null;
+  var projectName = localId ? null : "MutatorSans (demo)";
+  var images = new Map(); // "<id>.<ext>" → Blob
+
   var fontPromise = null;
   function loadFont() {
     if (!fontPromise) {
-      fontPromise = fetch(FONT_URL).then(function (response) {
-        if (!response.ok) throw new Error("demo font: HTTP " + response.status);
-        return response.json();
-      });
+      fontPromise = localId ? loadLocal(localId) : loadDemo();
     }
     return fontPromise;
+  }
+
+  function loadDemo() {
+    return fetch(FONT_URL).then(function (response) {
+      if (!response.ok) throw new Error("demo font: HTTP " + response.status);
+      return response.json();
+    });
+  }
+
+  async function loadLocal(id) {
+    var info = await Store.info(id);
+    projectName = info.name;
+    var result = await Format.readPackage(await Store.readFiles(id));
+    images = result.images;
+    Store.persist();
+    return result.font;
+  }
+
+  // ---- writing a local project back, a moment after each edit ----
+
+  var dirty = { glyphs: new Set(), keys: new Set(), images: new Set() };
+  var saveTimer = null;
+  var saving = Promise.resolve();
+  var SAVE_DELAY = 300;
+
+  function scheduleSave() {
+    if (!localId) return;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(flush, SAVE_DELAY);
+    window.dispatchEvent(new CustomEvent("hive-try-saving"));
+  }
+
+  var FONT_DATA_KEYS = {
+    axes: true,
+    sources: true,
+    unitsPerEm: true,
+    fontInfo: true,
+    customData: true,
+    conditionalSubstitutions: true,
+  };
+
+  function flush() {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    if (!localId) return saving;
+    var glyphs = Array.from(dirty.glyphs);
+    var keys = Array.from(dirty.keys);
+    var newImages = Array.from(dirty.images);
+    dirty = { glyphs: new Set(), keys: new Set(), images: new Set() };
+    if (!glyphs.length && !keys.length && !newImages.length) return saving;
+    saving = saving.then(async function () {
+      var font = await loadFont();
+      var writes = [];
+      glyphs.forEach(function (name) {
+        var rel = Format.glyphFileName(name);
+        writes.push(
+          font.glyphs[name]
+            ? Store.write(localId, rel, Format.glyphJSON(font, name))
+            : Store.remove(localId, rel)
+        );
+      });
+      var needFontData = false;
+      keys.forEach(function (key) {
+        if (FONT_DATA_KEYS[key]) needFontData = true;
+        if (key === "glyphMap" || key === "glyphInfos") {
+          writes.push(
+            Store.write(
+              localId,
+              Format.GLYPH_INFO,
+              Format.writeGlyphInfo(font.glyphMap, font.glyphInfos)
+            )
+          );
+        }
+        if (key === "kerning") {
+          var kerning = Format.writeKerning(font.kerning);
+          writes.push(
+            kerning
+              ? Store.write(localId, Format.KERNING, kerning)
+              : Store.remove(localId, Format.KERNING)
+          );
+        }
+        if (key === "features") {
+          needFontData = true;
+          var text = font.features && font.features.language === "fea" && font.features.text;
+          writes.push(
+            text
+              ? Store.write(localId, Format.FEATURES, text)
+              : Store.remove(localId, Format.FEATURES)
+          );
+        }
+      });
+      if (needFontData) {
+        writes.push(Store.write(localId, Format.FONT_DATA, Format.fontDataJSON(font)));
+      }
+      newImages.forEach(function (fileName) {
+        writes.push(Store.write(localId, Format.IMAGES_DIR + fileName, images.get(fileName)));
+      });
+      await Promise.all(writes);
+      await Store.touch(localId);
+      window.dispatchEvent(new CustomEvent("hive-try-saved"));
+    });
+    saving = saving.catch(function (error) {
+      console.error(error);
+      window.dispatchEvent(new CustomEvent("hive-try-save-error", { detail: String(error) }));
+    });
+    return saving;
+  }
+
+  // The font as a .fontra package, zipped (after pending writes).
+  async function download() {
+    await flush();
+    var font = await loadFont();
+    var name = (projectName || "font").replace(/ \(demo\)$/, "");
+    var stem = name.replace(/[\\/:*?"<>|]/g, "_") || "font";
+    var files = new Map();
+    Format.writePackage(font).forEach(function (data, rel) {
+      files.set(stem + ".fontra/" + rel, data);
+    });
+    images.forEach(function (blob, fileName) {
+      files.set(stem + ".fontra/" + Format.IMAGES_DIR + fileName, blob);
+    });
+    var blob = await Format.zip(files);
+    var link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = stem + ".fontra.zip";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(function () {
+      URL.revokeObjectURL(link.href);
+    }, 10000);
+  }
+
+  // Keep the current font (the demo, edits included) in this browser.
+  async function saveCopy(name) {
+    var font = await loadFont();
+    var files = Format.writePackage(font);
+    images.forEach(function (blob, fileName) {
+      files.set(Format.IMAGES_DIR + fileName, blob);
+    });
+    return Store.create(name, files);
+  }
+
+  function base64(blob) {
+    return blob.arrayBuffer().then(function (buffer) {
+      var bytes = new Uint8Array(buffer);
+      var text = "";
+      for (var i = 0; i < bytes.length; i += 0x8000) {
+        text += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+      }
+      return btoa(text);
+    });
   }
 
   function copy(value) {
@@ -170,6 +334,22 @@
         var id = key === "glyphs" ? "glyphs/" + (leaf.path[1] || leaf.a[0]) : key;
         if (!synced[id]) applyPlain(font, leaf);
       });
+      what.glyphs.forEach(function (name) {
+        dirty.glyphs.add(name);
+      });
+      what.keys.forEach(function (key) {
+        dirty.keys.add(key);
+        // A glyph added or removed through the glyph map only.
+        if (key === "glyphMap") {
+          Object.keys(font.glyphs).forEach(function (name) {
+            if (!(name in font.glyphMap)) {
+              delete font.glyphs[name];
+              dirty.glyphs.add(name);
+            }
+          });
+        }
+      });
+      scheduleSave();
     },
   };
 
@@ -180,7 +360,7 @@
     getBackEndInfo: function () {
       return {
         name: "FontraHiveTry",
-        features: {},
+        features: { "background-image": true, "find-glyphs-that-use-glyph": true },
         projectManagerFeatures: {},
       };
     },
@@ -215,18 +395,32 @@
       return font.features || { language: "fea", text: "" };
     },
     getConditionalSubstitutions: function (font) {
-      return font.conditionalSubstitutions || null;
+      return font.conditionalSubstitutions || { featureTags: ["rclt"], rules: [] };
     },
-    getMetaInfo: function (font) {
-      return font.metaInfo || { projectName: "MutatorSans (demo)" };
+    getMetaInfo: function () {
+      return { projectName: projectName };
     },
-    getBackgroundImage: function () {
-      return null;
+    getBackgroundImage: function (font, identifier) {
+      var fileName = Array.from(images.keys()).find(function (name) {
+        return name.slice(0, name.lastIndexOf(".")) === identifier;
+      });
+      if (!fileName) return null;
+      var type = fileName.slice(fileName.lastIndexOf(".") + 1).toUpperCase();
+      return base64(images.get(fileName)).then(function (data) {
+        return { type: type === "JPG" ? "JPEG" : type, data: data };
+      });
     },
     getShaperFontData: function () {
       return null;
     },
-    putBackgroundImage: function () {
+    putBackgroundImage: function (font, identifier, image) {
+      var bytes = Uint8Array.from(atob(image.data), function (c) {
+        return c.charCodeAt(0);
+      });
+      var fileName = identifier + "." + String(image.type).toLowerCase();
+      images.set(fileName, new Blob([bytes]));
+      dirty.images.add(fileName);
+      scheduleSave();
       return null;
     },
     findGlyphsThatUseGlyph: function (font, name) {
@@ -324,15 +518,32 @@
   window.WebSocket.CLOSING = 2;
   window.WebSocket.CLOSED = 3;
 
-  // Leaving with edits: say they will be lost.
+  // Leaving with edits that would be lost: the demo's, or writes not done.
   window.addEventListener("beforeunload", function (event) {
-    if (TryFont.edited) {
+    if ((!localId && TryFont.edited) || (localId && saveTimer !== null)) {
+      if (localId) flush();
       event.preventDefault();
       event.returnValue = "";
     }
   });
+  window.addEventListener("pagehide", function () {
+    if (localId) flush();
+  });
 
-  window.hiveTry = { font: loadFont, touched: touched, TryFont: TryFont };
+  window.hiveTry = {
+    font: loadFont,
+    touched: touched,
+    TryFont: TryFont,
+    localId: localId,
+    projectName: function () {
+      return projectName;
+    },
+    flush: flush,
+    download: download,
+    saveCopy: saveCopy,
+    format: Format,
+    store: Store,
+  };
 
   loadFont().catch(function (error) {
     console.error(error);

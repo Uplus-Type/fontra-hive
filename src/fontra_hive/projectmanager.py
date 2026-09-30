@@ -1636,22 +1636,32 @@ def injectHiveScripts(html: str) -> str:
     return html
 
 
-# "Try Fontra" (client/try): the demo project's identifier, never a Hive
-# project (those are "owner/name") nor a project of the dev server.
+# "Try Fontra" (client/try): the demo project's identifier, and the prefix of
+# fonts kept in the visitor's browser ("local:<id>"); never a Hive project
+# (those are "owner/name") nor a project of the dev server.
 TRY_PROJECT = "demo:MutatorSans"
+TRY_LOCAL_PREFIX = "local:"
 TRY_VIEWS = ("editor", "fontoverview", "fontinfo")
 TRY_START = (
     "/editor.html?project="
     + quote(TRY_PROJECT, safe="")
     + "&text=%22HAMBURGEFONSTIV%22"
 )
-TRY_HEAD_SCRIPT = '<script src="/hive/try/try-engine.js"></script>'
+TRY_HEAD_SCRIPT = (
+    '<script src="/hive/try/fontra-format.js"></script>'
+    '<script src="/hive/try/try-store.js"></script>'
+    '<script src="/hive/try/try-engine.js"></script>'
+)
 TRY_BODY_SCRIPT = '<script type="module" src="/hive/try/try-banner.js"></script>'
 
 
 def _isTryRequest(request, view: str) -> bool:
     query = getattr(request, "query", None) or {}
-    return view in TRY_VIEWS and query.get("project") == TRY_PROJECT
+    project = query.get("project") or ""
+    return view in TRY_VIEWS and (
+        project == TRY_PROJECT
+        or re.fullmatch(re.escape(TRY_LOCAL_PREFIX) + "[0-9a-f]{12}", project) is not None
+    )
 
 
 def injectTryScripts(html: str) -> str:
