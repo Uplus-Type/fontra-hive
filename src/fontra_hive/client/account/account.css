@@ -196,3 +196,25 @@ body:not([data-page="home"]) a:hover { color: var(--fontra-red-color, #f11759); 
   .glance { grid-template-columns: minmax(0, 1fr); }
 }
 @media (prefers-reduced-motion: reduce) { .glance a { transition: none; } }
+
+/* Legal pages (/legal, /terms: served by the deployment, not by this plug-in),
+   French first (it prevails), then English. */
+body[data-page="legal"] .logo.small { width: 72px; height: 72px; margin: 2em 0 0.5em; }
+.lang { display: flex; gap: 1.5em; font-size: 0.9em; margin-bottom: 1em; }
+.legal { max-width: 44rem; width: 100%; line-height: 1.55; margin: 1rem 0 2rem; scroll-margin-top: 1rem; }
+.legal + .legal { border-top: 1px solid #ffffff22; padding-top: 2rem; }
+body:not([data-page="home"]) .legal h1 { font-size: 2rem; margin: 0 0 0.2em; }
+.legal h2 { font-size: 1.2rem; font-weight: normal; color: #e9b02a; margin: 2em 0 0.5em; }
+.legal .updated { opacity: 0.65; font-size: 0.9em; margin-top: 0; }
+.legal p, .legal li { opacity: 0.9; }
+.legal ul { padding-left: 1.2em; }
+.legal table { width: 100%; border-collapse: collapse; font-size: 0.85em; display: block; overflow-x: auto; }
+.legal th, .legal td { text-align: left; vertical-align: top; padding: 0.5em 0.6em; border-bottom: 1px solid #ffffff22; }
+.legal th { font-weight: normal; color: #e9b02a; }
+.legal code { font-size: 0.9em; background: #ffffff14; padding: 0.1em 0.35em; border-radius: 0.3em; }
+.legal a { text-decoration: underline; }
+
+/* Footer with the legal link, on the landing and the home page. */
+.site-footer { font-size: 0.85em; opacity: 0.65; margin: 0 0 2em; text-align: center; }
+.site-footer a { color: inherit; }
+body[data-page="home"] .site-footer { margin: 0 auto 2em; }

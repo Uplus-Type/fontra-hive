@@ -30,3 +30,11 @@ def test_landing_images_exist_and_are_served_with_their_type():
     for name in images:
         assert name.rsplit(".", 1)[-1] in CLIENT_CONTENT_TYPES, name
     assert CLIENT_CONTENT_TYPES["webp"] == "image/webp"
+
+
+def test_landing_and_home_link_the_legal_pages():
+    # /legal and /terms are served by the deployment (hive-api/deploy/site,
+    # through Caddy), not by this plug-in: they are U+ TYPE's, not the plug-in's.
+    for page in ("login.html", "home.html", "invitation.html"):
+        html = (ACCOUNT / page).read_text(encoding="utf-8")
+        assert 'href="/terms' in html and 'href="/legal' in html, page
