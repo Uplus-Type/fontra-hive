@@ -33,13 +33,13 @@ const PALE_ALPHA = 0.35;
 const TOAST_MS = 3500;
 
 const COLORS = {
-  light: { open: "#c89222", resolved: "#8a8a8a", text: "#ffffff", ring: "#1c1c1c" },
+  light: { open: "#e9b02a", resolved: "#8a8a8a", text: "#1c1c1c", ring: "#1c1c1c" },
   dark: { open: "#e6be5a", resolved: "#9a9a9a", text: "#1c1c1c", ring: "#ffffff" },
 };
 
 const CARD_STYLES = `
   :host {
-    --hive-accent: #c89222;
+    --hive-accent: #e9b02a;
     --card-bg: #fffdf5;
     --card-fg: #1c1c1c;
     --card-muted: rgba(0, 0, 0, 0.55);
@@ -64,7 +64,7 @@ const CARD_STYLES = `
     }
   }
   :host-context(.light-theme) {
-    --hive-accent: #c89222;
+    --hive-accent: #e9b02a;
     --card-bg: #fffdf5;
     --card-fg: #1c1c1c;
     --card-muted: rgba(0, 0, 0, 0.55);
@@ -132,9 +132,13 @@ const CARD_STYLES = `
     background: var(--card-line);
   }
   button.primary {
-    background: var(--hive-accent);
-    border-color: var(--hive-accent);
+    background: #f3c744; /* a light honey: Hive's #e9b02a, brighter */
+    border-color: #f3c744;
     color: #1c1c1c;
+  }
+  button.primary:hover:not(:disabled) {
+    background: #f6d266;
+    border-color: #f6d266;
   }
   button:disabled {
     opacity: 0.45;
@@ -229,7 +233,7 @@ const CARD_STYLES = `
     gap: 2px;
     padding: 0 7px;
     border-radius: 9px;
-    background: rgba(200, 146, 34, 0.18);
+    background: rgba(233, 176, 42, 0.22);
     line-height: 18px;
   }
   .chip-remove {
@@ -360,7 +364,7 @@ const CARD_STYLES = `
 
 const PANEL_STYLES = `
   :host {
-    --hive-accent: #c89222;
+    --hive-accent: #e9b02a;
     display: block;
     height: 100%;
     font-family: fontra-ui-regular, sans-serif;
@@ -369,7 +373,7 @@ const PANEL_STYLES = `
   @media (prefers-color-scheme: dark) {
     :host { --hive-accent: #e6be5a; }
   }
-  :host-context(.light-theme) { --hive-accent: #c89222; }
+  :host-context(.light-theme) { --hive-accent: #e9b02a; }
   :host-context(.dark-theme) { --hive-accent: #e6be5a; }
   .panel {
     display: flex;
