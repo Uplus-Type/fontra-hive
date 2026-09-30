@@ -707,3 +707,21 @@ def test_snapshots_count_the_comments_they_resolved(page):
     )
     assert counts == ["✓ 1"]  # #3, resolved before the font snapshot "V1"
     assert page.errors == []
+
+
+def test_a_commented_version_is_drawn_on_the_comments_source(page):
+    page.evaluate(SETUP)
+    page.evaluate("wait(300)")
+    page.evaluate(
+        "panel.showExternalVersion(sha('1'), 'A', 'the version commented in #1', 'default')"
+    )
+    page.evaluate("wait(100)")
+    # The canvas shows another source ("Bold"): the comment's layer is drawn.
+    assert page.evaluate("!!panel.previewPathFor('Bold')")
+    assert page.evaluate("panel.pinned.shownLayer") == "default"
+    assert page.evaluate("panel.pinned.layerNote") is None
+    # A row clicked afterwards follows the canvas again.
+    page.evaluate("rowFor('2').click()")
+    page.evaluate("wait(100)")
+    page.evaluate("panel.previewPathFor('Bold')")
+    assert "no layer" in page.evaluate("panel.pinned.layerNote")

@@ -934,9 +934,20 @@ export class HiveComments {
 
   // The version of the glyph the topic was written on, drawn by the history
   // panel's preview (amber), to compare with the current one.
-  showCommentedVersion(issue) {
+  // On the topic's own source: the canvas goes there first (the pin then
+  // is solid), and the preview draws that source's layer of the old version.
+  async showCommentedVersion(issue) {
     if (!issue.commit || !this.history?.showExternalVersion) return;
-    this.history.showExternalVersion(issue.commit, issue.glyph, `the version commented in #${issue.number}`);
+    const selected = this.sceneModel?.getSelectedPositionedGlyph?.();
+    if (selected?.glyphName === issue.glyph && selected.glyph?.layerName !== issue.source?.layer) {
+      await this.goToSourceOf(issue);
+    }
+    this.history.showExternalVersion(
+      issue.commit,
+      issue.glyph,
+      `the version commented in #${issue.number} (${issue.source?.name || issue.source?.layer})`,
+      issue.source?.layer
+    );
   }
 
   // --- permissions (the server has the last word) ---------------------------------
@@ -1900,9 +1911,15 @@ export class HiveComments {
         return;
       }
     }
-    // Go to the source it was written on.
+    await this.goToSourceOf(issue);
+    this.open(issue.number);
+    requestAnimationFrame(() => this.centerOn(issue));
+  }
+
+  // Go to the source a topic was written on (its glyph being the selected one).
+  async goToSourceOf(issue) {
     try {
-      const varGlyph = await model.getSelectedVariableGlyphController?.();
+      const varGlyph = await this.sceneModel?.getSelectedVariableGlyphController?.();
       const index = varGlyph?.sources?.findIndex((s) => s.layerName === issue.source?.layer);
       if (index !== undefined && index >= 0) {
         await this.editor.sceneController.setLocationFromSourceIndex?.(index);
@@ -1910,8 +1927,6 @@ export class HiveComments {
     } catch (error) {
       // the glyph may be gone: show the comment anyway
     }
-    this.open(issue.number);
-    requestAnimationFrame(() => this.centerOn(issue));
   }
 
   // Where a glyph is on the canvas: {lineIndex, glyphIndex}, the last

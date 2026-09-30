@@ -1495,10 +1495,13 @@ class HiveHistoryPanel extends HTMLElement {
   // A version asked for from elsewhere (a comment's "Show"): pinned like a
   // clicked row, with a label saying where it comes from, and kept even
   // though no row of the list stands for it.
-  showExternalVersion(sha, glyphName, label) {
+  // ``layerName``: draw that layer of the version (a comment's source),
+  // whatever source the canvas shows.
+  showExternalVersion(sha, glyphName, label, layerName = null) {
     this.disarmRestore();
     this.pinned = this.getPreview(sha, glyphName);
-    this.externalPin = { preview: this.pinned, label };
+    this.pinned.shownLayer = null;
+    this.externalPin = { preview: this.pinned, label, layerName };
     this.render(this.lastGlyph, null);
     this.requestCanvasUpdate();
     return this.pinned.loaded;
@@ -1658,6 +1661,9 @@ class HiveHistoryPanel extends HTMLElement {
   // Called from the draw callback: must be synchronous and cheap.
   previewPathFor(wantedLayerName) {
     const p = this.activePreview;
+    if (this.isExternalPin(p) && this.externalPin.layerName) {
+      wantedLayerName = this.externalPin.layerName;
+    }
     if (!p?.ready || p.error) return null;
     const main = p.glyphs.get(p.glyphName);
     if (!main) return null;

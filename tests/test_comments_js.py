@@ -722,11 +722,18 @@ def test_show_the_commented_version(page):
     p.evaluate("comments.open(1)")
     p.evaluate("frame()")
     assert "Written on version abcdef1 of main" in p.evaluate("cardText()")
+    # The canvas is on another source: it goes to the comment's first.
+    p.evaluate(
+        "positioned.glyph = { ...positioned.glyph, layerName: 'Light', sourceIndex: 0 }"
+    )
     p.evaluate("card().querySelector('.show-version').click()")
+    p.wait_for_function("window.shownVersion")
+    assert p.evaluate("window.wentToSource") == 1
     assert p.evaluate("window.shownVersion") == [
         "abcdef1234",
         "H",
-        "the version commented in #1",
+        "the version commented in #1 (Bold)",
+        "Bold",
     ]
 
 
