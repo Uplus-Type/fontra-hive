@@ -171,7 +171,7 @@ export async function importPicked(fileList, onProgress) {
   const name = (font.fontInfo && font.fontInfo.familyName) || packageName(files, label);
   const normalized = Format.writePackage(font);
   images.forEach((blob, fileName) => normalized.set(Format.IMAGES_DIR + fileName, blob));
-  const id = await window.HiveTryStore.create(name, normalized);
+  const id = await window.hiveTry.createLocal(name, normalized, onProgress);
   return { id, text: sampleText(font.glyphMap) };
 }
 
@@ -237,7 +237,7 @@ function openPanel() {
               title: "Delete from this browser",
               onclick: async () => {
                 if (!confirm(`Delete “${project.name}” from this browser? Download it first to keep it.`)) return;
-                await Store.removeProject(project.id);
+                await window.hiveTry.deleteLocal(project.id);
                 if (project.id === current) go(DEMO_URL);
                 else fill();
               },
@@ -337,7 +337,11 @@ function start() {
   const tryAPI = window.hiveTry;
   const isLocal = !!tryAPI?.localId;
   const name = el("span", { class: "name" }, isLocal ? "…" : "Try Fontra");
-  const status = el("span", { class: "status" }, isLocal ? "kept in this browser" : "demo · nothing is saved");
+  const status = el(
+    "span",
+    { class: "status", role: "status" },
+    isLocal ? "loading…" : "demo · nothing is saved"
+  );
   const keep = el(
     "button",
     {
@@ -345,9 +349,15 @@ function start() {
       class: "plain extra",
       title: "Keep this font, with your edits, in this browser",
       onclick: async () => {
-        const id = await tryAPI.saveCopy("MutatorSans");
-        tryAPI.TryFont.edited = false;
-        location.href = editorURL(id, "HAMBURGEFONSTIV");
+        try {
+          const id = await tryAPI.saveCopy("MutatorSans", (text) => (status.textContent = text));
+          tryAPI.TryFont.edited = false;
+          location.href = editorURL(id, "HAMBURGEFONSTIV");
+        } catch (e) {
+          console.error(e);
+          status.classList.add("error");
+          status.textContent = "could not keep it: " + (e.message || e);
+        }
       },
     },
     "Keep a copy"
@@ -370,9 +380,9 @@ function start() {
   );
   if (isLocal) {
     tryAPI
-      .font()
-      .then(() => {
-        name.textContent = tryAPI.projectName();
+      .localInfo()
+      .then((info) => {
+        name.textContent = info.name;
       })
       .catch(() => {
         name.textContent = "Font not found";
@@ -384,16 +394,16 @@ function start() {
   window.addEventListener("hive-try-edit", () => {
     if (!isLocal) status.textContent = "demo · a reload starts over";
   });
-  window.addEventListener("hive-try-saving", () => {
-    status.classList.remove("error");
-    status.textContent = "saving…";
+  // A font kept here: loading Python, then saving to the browser's storage.
+  window.addEventListener("hive-try-progress", (event) => {
+    if (event.detail) status.textContent = event.detail.replace(/…$/, "") + "…";
+    else if (isLocal) status.textContent = "kept in this browser";
   });
-  window.addEventListener("hive-try-saved", () => {
-    status.textContent = "saved in this browser";
-  });
-  window.addEventListener("hive-try-save-error", () => {
-    status.classList.add("error");
-    status.textContent = "could not save: download a copy";
+  window.addEventListener("hive-try-status", (event) => {
+    const { text } = event.detail;
+    status.classList.toggle("error", text === "error");
+    status.textContent =
+      text === "saving" ? "saving…" : text === "saved" ? "saved in this browser" : "could not save: download a copy";
   });
   document.body.append(bar);
 }

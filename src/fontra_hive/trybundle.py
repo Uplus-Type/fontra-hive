@@ -7,11 +7,13 @@ module zips, once per server process, the pure-Python packages they need,
 taken from this server's own environment (so the browser runs the same
 versions), plus:
 
-- small stand-ins for what the backends import but these conversions do not
-  use (``aiohttp``, ``watchfiles``, part of ``ufo2ft``);
+- small stand-ins for what the backends import but does not run here
+  (``watchfiles``, part of ``ufo2ft``);
 - an ``entry_points.txt`` listing only the backends that work in the browser,
   so that Fontra's ``getFileSystemBackend`` finds them there too;
-- ``hive_try_convert.py`` (``client/try/py``), what the worker calls.
+- ``hive_try_convert.py`` and ``hive_try_server.py`` (``client/try/py``),
+  what the worker calls: conversions, and Hive's server (git history,
+  snapshots, comments) for the fonts kept in the browser.
 
 Served at ``/hive/try/python.zip``; unpacked by ``try-python-worker.js``.
 
@@ -39,6 +41,17 @@ PACKAGES = [
     "attr",
     "attrs",
     "typing_extensions",
+    # Hive's server in the browser (hive_try_server.py): aiohttp and what it
+    # needs, in their pure-Python versions, and dulwich for git.
+    "aiohttp",
+    "multidict",
+    "yarl",
+    "propcache",
+    "frozenlist",
+    "aiosignal",
+    "aiohappyeyeballs",
+    "idna",
+    "dulwich",
 ]
 
 # Never shipped: compiled code (it would not run in the browser), caches,
@@ -60,29 +73,6 @@ BACKENDS = {
 }
 
 STUBS = {
-    # fontra.core.protocols imports aiohttp.web for type hints only.
-    "aiohttp/__init__.py": '''"""Stand-in for aiohttp in the browser (type hints)."""
-
-
-class _Anything:
-    def __getattr__(self, name):
-        return _Anything()
-
-    def __call__(self, *args, **kwargs):
-        return _Anything()
-
-    def __mro_entries__(self, bases):
-        return (object,)
-
-    def __getitem__(self, key):
-        return _Anything()
-
-
-web = _Anything()
-ClientSession = _Anything()
-''',
-    "aiohttp/web.py": "from . import _Anything\n\n\ndef __getattr__(name):\n"
-    "    return _Anything()\n",
     # The file watcher of Fontra's backends: nothing to watch here.
     "watchfiles/__init__.py": '''"""Stand-in for watchfiles in the browser."""
 
@@ -186,8 +176,9 @@ def buildBundle() -> bytes:
             "Metadata-Version: 2.1\nName: hive-try-backends\nVersion: 0\n",
         )
         z.writestr(f"{DIST_INFO}/entry_points.txt", _entryPoints())
-        convert = resources.files("fontra_hive") / "client" / "try" / "py"
-        z.writestr("hive_try_convert.py", (convert / "hive_try_convert.py").read_text())
+        py = resources.files("fontra_hive") / "client" / "try" / "py"
+        for name in ("hive_try_convert.py", "hive_try_server.py"):
+            z.writestr(name, (py / name).read_text())
     return buffer.getvalue()
 
 

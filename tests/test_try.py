@@ -122,14 +122,17 @@ def test_python_bundle_for_the_browser():
     from fontra_hive import trybundle
 
     data = trybundle.buildBundle()
-    assert len(data) < 8 * 1024 * 1024
+    assert len(data) < 6 * 1024 * 1024
     archive = zipfile.ZipFile(io.BytesIO(data))
     names = set(archive.namelist())
-    assert "hive_try_convert.py" in names
+    assert "hive_try_convert.py" in names and "hive_try_server.py" in names
+    # Hive's server in the browser: aiohttp and dulwich, pure Python.
+    assert "aiohttp/web.py" in names and "dulwich/repo.py" in names
+    assert "multidict/__init__.py" in names and "yarl/__init__.py" in names
     assert "fontra/backends/designspace.py" in names
     assert "fontra_hive/importer.py" in names and "fontra_hive/export.py" in names
     assert "fontTools/ufoLib/__init__.py" in names and "ufoLib2/__init__.py" in names
-    assert "aiohttp/__init__.py" in names and "watchfiles/__init__.py" in names
+    assert "watchfiles/__init__.py" in names  # a stand-in
     assert not any(n.endswith((".so", ".pyd", ".pyc")) for n in names)
     clients = ("fontra/client/", "fontra_hive/client/")
     assert not any(n.startswith(clients) for n in names)

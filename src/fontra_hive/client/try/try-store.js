@@ -1,10 +1,10 @@
 // Fontra Hive, "Try Fontra": fonts kept in this browser.
 //
-// Each font is a .fontra package in the browser's private file system (OPFS):
+// What this browser keeps of each font, in its private file system (OPFS):
 //   fontra-hive-try/projects/<id>/project.json   {name, created, modified}
-//   fontra-hive-try/projects/<id>/font/…          the package's files
-// Nothing leaves the browser. Reads happen here; writes go through
-// try-opfs-worker.js, in order.
+// The font itself is a git repository kept by try-python-worker.js (in
+// IndexedDB). Nothing leaves the browser. Reads happen here; writes go
+// through try-opfs-worker.js, in order.
 //
 // A classic script: sets window.HiveTryStore.
 //
@@ -98,12 +98,12 @@
       return info;
     },
 
-    // files: Map of package-relative path → string | Blob.
+    // files (optional): Map of path → string | Blob, kept under font/.
     async create(name, files) {
       var id = newId();
       var base = projectPath(id);
       var writes = [];
-      files.forEach(function (data, rel) {
+      (files || new Map()).forEach(function (data, rel) {
         writes.push(send({ op: "write", path: base.concat(["font"], rel.split("/")), data: data }));
       });
       await Promise.all(writes);

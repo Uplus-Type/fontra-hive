@@ -9,16 +9,16 @@
 //
 // Two kinds of project (the "project" in the page's address):
 // - "demo:MutatorSans": the demo font, one JSON file (demo-font.json, made
-//   from a .fontra package); edits stay in the tab, a reload starts over.
-// - "local:<id>": a .fontra package the visitor opened, kept in this browser
-//   (try-store.js); each edit is written back to its files (fontra-format.js)
-//   a moment later.
-//
-// Edits: Fontra applies each change to its own copy first, then sends it
-// ("editFinal"). This engine keeps its copy in step by reading the edited
-// data back from the page's FontController when it can (so path edits need
-// no reimplementation here), and otherwise applies the plain changes
-// ("=", "d", "+", "-", ":") itself.
+//   from a .fontra package), answered here in JavaScript; edits stay in the
+//   tab, a reload starts over. Fontra applies each change to its own copy
+//   first, then sends it ("editFinal"); this engine keeps its copy in step by
+//   reading the edited data back from the page's FontController when it can,
+//   and otherwise applies the plain changes ("=", "d", "+", "-", ":").
+// - "local:<id>": a font the visitor opened, kept in this browser as a git
+//   repository, and served by Hive's own server code running in Python
+//   (try-python-worker.js, hive_try_server.py): the WebSocket messages go
+//   there, and so do the Hive plug-in's /api/hive/* requests (history,
+//   restore, snapshots, comments). The project's name is in try-store.js.
 //
 // Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
 (function () {
@@ -28,13 +28,20 @@
   var PLUGINS_KEY = "fontra.pluginsplugins";
   var NativeWebSocket = window.WebSocket;
 
-  // No editor plug-ins here: the Hive plug-in (history, comments) needs a
-  // Hive project. Fontra's list is left untouched for the real editor.
+  var project = new URL(location.href).searchParams.get("project") || "";
+  var LOCAL_PREFIX = "local:";
+  var localName = project.startsWith(LOCAL_PREFIX) ? project.split("@")[0] : null;
+  var localId = localName ? localName.slice(LOCAL_PREFIX.length) : null;
+
+  // The editor's plug-ins: none on the demo; on a font kept here, the Hive
+  // plug-in (history, snapshots, comments), served by Python in the browser.
+  // Fontra's own list is left untouched for the real editor.
+  var PLUGINS = localId ? JSON.stringify([{ address: "/hive/plugin" }]) : "[]";
   try {
     var getItem = Storage.prototype.getItem;
     var setItem = Storage.prototype.setItem;
     Storage.prototype.getItem = function (key) {
-      if (this === window.localStorage && key === PLUGINS_KEY) return "[]";
+      if (this === window.localStorage && key === PLUGINS_KEY) return PLUGINS;
       return getItem.apply(this, arguments);
     };
     Storage.prototype.setItem = function (key) {
@@ -48,18 +55,27 @@
   var Format = window.HiveTryFormat;
   var Store = window.HiveTryStore;
 
-  var project = new URL(location.href).searchParams.get("project") || "";
-  var LOCAL_PREFIX = "local:";
-  var localId = project.startsWith(LOCAL_PREFIX) ? project.slice(LOCAL_PREFIX.length) : null;
   var projectName = localId ? null : "MutatorSans (demo)";
-  var images = new Map(); // "<id>.<ext>" → Blob
+  var images = new Map(); // "<id>.<ext>" → Blob (the demo's: none)
 
+  // The demo font (a local font lives in Python: see python() below).
   var fontPromise = null;
   function loadFont() {
-    if (!fontPromise) {
-      fontPromise = localId ? loadLocal(localId) : loadDemo();
-    }
+    if (!fontPromise) fontPromise = loadDemo();
     return fontPromise;
+  }
+
+  // A local font's name (and a check that it is kept here).
+  var infoPromise = null;
+  function localInfo() {
+    if (!infoPromise) {
+      infoPromise = Store.info(localId).then(function (info) {
+        projectName = info.name;
+        Store.persist();
+        return info;
+      });
+    }
+    return infoPromise;
   }
 
   function loadDemo() {
@@ -69,106 +85,7 @@
     });
   }
 
-  async function loadLocal(id) {
-    var info = await Store.info(id);
-    projectName = info.name;
-    var result = await Format.readPackage(await Store.readFiles(id));
-    images = result.images;
-    Store.persist();
-    return result.font;
-  }
-
-  // ---- writing a local project back, a moment after each edit ----
-
-  var dirty = { glyphs: new Set(), keys: new Set(), images: new Set() };
-  var saveTimer = null;
-  var saving = Promise.resolve();
-  var SAVE_DELAY = 300;
-
-  function scheduleSave() {
-    if (!localId) return;
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(flush, SAVE_DELAY);
-    window.dispatchEvent(new CustomEvent("hive-try-saving"));
-  }
-
-  var FONT_DATA_KEYS = {
-    axes: true,
-    sources: true,
-    unitsPerEm: true,
-    fontInfo: true,
-    customData: true,
-    conditionalSubstitutions: true,
-  };
-
-  function flush() {
-    clearTimeout(saveTimer);
-    saveTimer = null;
-    if (!localId) return saving;
-    var glyphs = Array.from(dirty.glyphs);
-    var keys = Array.from(dirty.keys);
-    var newImages = Array.from(dirty.images);
-    dirty = { glyphs: new Set(), keys: new Set(), images: new Set() };
-    if (!glyphs.length && !keys.length && !newImages.length) return saving;
-    saving = saving.then(async function () {
-      var font = await loadFont();
-      var writes = [];
-      glyphs.forEach(function (name) {
-        var rel = Format.glyphFileName(name);
-        writes.push(
-          font.glyphs[name]
-            ? Store.write(localId, rel, Format.glyphJSON(font, name))
-            : Store.remove(localId, rel)
-        );
-      });
-      var needFontData = false;
-      keys.forEach(function (key) {
-        if (FONT_DATA_KEYS[key]) needFontData = true;
-        if (key === "glyphMap" || key === "glyphInfos") {
-          writes.push(
-            Store.write(
-              localId,
-              Format.GLYPH_INFO,
-              Format.writeGlyphInfo(font.glyphMap, font.glyphInfos)
-            )
-          );
-        }
-        if (key === "kerning") {
-          var kerning = Format.writeKerning(font.kerning);
-          writes.push(
-            kerning
-              ? Store.write(localId, Format.KERNING, kerning)
-              : Store.remove(localId, Format.KERNING)
-          );
-        }
-        if (key === "features") {
-          needFontData = true;
-          var text = font.features && font.features.language === "fea" && font.features.text;
-          writes.push(
-            text
-              ? Store.write(localId, Format.FEATURES, text)
-              : Store.remove(localId, Format.FEATURES)
-          );
-        }
-      });
-      if (needFontData) {
-        writes.push(Store.write(localId, Format.FONT_DATA, Format.fontDataJSON(font)));
-      }
-      newImages.forEach(function (fileName) {
-        writes.push(Store.write(localId, Format.IMAGES_DIR + fileName, images.get(fileName)));
-      });
-      await Promise.all(writes);
-      await Store.touch(localId);
-      window.dispatchEvent(new CustomEvent("hive-try-saved"));
-    });
-    saving = saving.catch(function (error) {
-      console.error(error);
-      window.dispatchEvent(new CustomEvent("hive-try-save-error", { detail: String(error) }));
-    });
-    return saving;
-  }
-
-  // The font as a .fontra package, zipped (after pending writes).
+  // The font as a .fontra package, zipped.
   function download() {
     return downloadAs("fontra");
   }
@@ -186,12 +103,27 @@
     return new URL(base.endsWith("/") ? base : base + "/", location.href).href;
   }
 
-  // op: "toFontra" | "toDesignspaceZip"; onProgress(text) is optional.
-  function python(op, payload, transfer, onProgress) {
+  var sockets = {}; // id → PythonWebSocket
+  var status = { text: "", detail: "" };
+
+  function worker() {
     if (!pythonWorker) {
       pythonWorker = new Worker("/hive/try/try-python-worker.js", { type: "module" });
       pythonWorker.onmessage = function (event) {
         var reply = event.data;
+        if (reply.op === "ws") {
+          if (sockets[reply.socket]) sockets[reply.socket].deliver(reply.text);
+          return;
+        }
+        if (reply.op === "ws-closed") {
+          if (sockets[reply.socket]) sockets[reply.socket].closed();
+          return;
+        }
+        if (reply.op === "status") {
+          status = { text: reply.text, detail: reply.detail || "" };
+          window.dispatchEvent(new CustomEvent("hive-try-status", { detail: status }));
+          return;
+        }
         var call = pythonCalls[reply.id];
         if (!call) return;
         if (reply.progress) {
@@ -203,12 +135,63 @@
         else call.resolve(reply);
       };
     }
+    return pythonWorker;
+  }
+
+  // A request to the worker; onProgress(text) is optional.
+  function python(op, payload, transfer, onProgress) {
+    var w = worker();
     return new Promise(function (resolve, reject) {
       var id = pythonId++;
       pythonCalls[id] = { resolve: resolve, reject: reject, onProgress: onProgress };
       var message = Object.assign({ id: id, op: op, base: pyodideBase() }, payload);
-      pythonWorker.postMessage(message, transfer || []);
+      w.postMessage(message, transfer || []);
     });
+  }
+
+  // A message to the worker that needs no answer.
+  function tell(op, payload) {
+    worker().postMessage(Object.assign({ op: op, base: pyodideBase() }, payload));
+  }
+
+  function progress(text) {
+    window.dispatchEvent(new CustomEvent("hive-try-progress", { detail: text }));
+  }
+
+  // ---- fonts kept in this browser ----
+
+  async function toBuffers(files) {
+    var entries = [];
+    for (var [path, data] of files) {
+      var blob = typeof data === "string" ? new Blob([data]) : data;
+      entries.push([path, await blob.arrayBuffer()]);
+    }
+    return entries;
+  }
+
+  // files: a .fontra package (Map of path → string | Blob). Returns the id.
+  async function createLocal(name, files, onProgress) {
+    var id = await Store.create(name);
+    var entries = await toBuffers(files);
+    try {
+      await python(
+        "createProject",
+        { name: LOCAL_PREFIX + id, files: entries },
+        entries.map(function (e) {
+          return e[1];
+        }),
+        onProgress
+      );
+    } catch (error) {
+      await Store.removeProject(id);
+      throw error;
+    }
+    return id;
+  }
+
+  async function deleteLocal(id) {
+    await python("deleteProject", { name: LOCAL_PREFIX + id });
+    await Store.removeProject(id);
   }
 
   // A picked file (or a zip made of a picked folder) as .fontra files.
@@ -239,8 +222,15 @@
     }, 10000);
   }
 
-  async function packageFiles() {
-    await flush();
+  async function packageFiles(onProgress) {
+    if (localId) {
+      var reply = await python("exportFontra", { name: localName }, [], onProgress);
+      return new Map(
+        reply.files.map(function (entry) {
+          return [entry[0], new Blob([entry[1]])];
+        })
+      );
+    }
     var font = await loadFont();
     var files = Format.writePackage(font);
     images.forEach(function (blob, fileName) {
@@ -251,8 +241,14 @@
 
   // format: "fontra" (zipped package) | "designspace" (zipped, with UFOs).
   async function downloadAs(format, onProgress) {
+    if (localId) await localInfo();
     var stem = fileStem();
-    var files = await packageFiles();
+    if (format === "designspace" && localId) {
+      var result = await python("exportDesignspace", { name: localName, stem: stem }, [], onProgress);
+      saveBlob(new Blob([result.data], { type: "application/zip" }), stem + ".designspace.zip");
+      return;
+    }
+    var files = await packageFiles(onProgress);
     if (format === "designspace") {
       var entries = [];
       var transfer = [];
@@ -281,13 +277,13 @@
   }
 
   // Keep the current font (the demo, edits included) in this browser.
-  async function saveCopy(name) {
+  async function saveCopy(name, onProgress) {
     var font = await loadFont();
     var files = Format.writePackage(font);
     images.forEach(function (blob, fileName) {
       files.set(Format.IMAGES_DIR + fileName, blob);
     });
-    return Store.create(name, files);
+    return createLocal(name, files, onProgress);
   }
 
   function base64(blob) {
@@ -421,22 +417,12 @@
         var id = key === "glyphs" ? "glyphs/" + (leaf.path[1] || leaf.a[0]) : key;
         if (!synced[id]) applyPlain(font, leaf);
       });
-      what.glyphs.forEach(function (name) {
-        dirty.glyphs.add(name);
-      });
-      what.keys.forEach(function (key) {
-        dirty.keys.add(key);
-        // A glyph added or removed through the glyph map only.
-        if (key === "glyphMap") {
-          Object.keys(font.glyphs).forEach(function (name) {
-            if (!(name in font.glyphMap)) {
-              delete font.glyphs[name];
-              dirty.glyphs.add(name);
-            }
-          });
-        }
-      });
-      scheduleSave();
+      // A glyph removed through the glyph map only.
+      if (what.keys.indexOf("glyphMap") !== -1) {
+        Object.keys(font.glyphs).forEach(function (name) {
+          if (!(name in font.glyphMap)) delete font.glyphs[name];
+        });
+      }
     },
   };
 
@@ -506,8 +492,6 @@
       });
       var fileName = identifier + "." + String(image.type).toLowerCase();
       images.set(fileName, new Blob([bytes]));
-      dirty.images.add(fileName);
-      scheduleSave();
       return null;
     },
     findGlyphsThatUseGlyph: function (font, name) {
@@ -592,9 +576,63 @@
     this.readyState = 3;
   };
 
+  // For a font kept here: the same WebSocket protocol, served by Hive's
+  // server in Python (try-python-worker.js).
+  var nextSocket = 1;
+  function PythonWebSocket(url) {
+    this.url = String(url);
+    this.readyState = 0;
+    this.onopen = null;
+    this.onmessage = null;
+    this.onclose = null;
+    this.onerror = null;
+    this.id = nextSocket++;
+    sockets[this.id] = this;
+    var self = this;
+    var projectId = new URL(this.url, location.href).searchParams.get("project");
+    localInfo()
+      .catch(function () {
+        return {};
+      })
+      .then(function (info) {
+        return python("wsOpen", { socket: self.id, project: projectId, label: info.name }, [], progress);
+      })
+      .then(
+      function () {
+        self.readyState = 1;
+        progress("");
+        if (self.onopen) self.onopen({ type: "open", target: self });
+      },
+      function (error) {
+        console.error(error);
+        progress("");
+        self.deliver(JSON.stringify({ "initialization-error": String(error.message || error) }));
+      }
+    );
+  }
+  PythonWebSocket.prototype.send = function (text) {
+    // The handshake remote.js sends on opening: the server side has made its
+    // own (hive_try_server.openSocket).
+    if (/^\{\s*"client-uuid"/.test(text)) return;
+    tell("wsSend", { socket: this.id, text: text });
+  };
+  PythonWebSocket.prototype.deliver = function (text) {
+    if (this.onmessage) this.onmessage({ data: text });
+  };
+  PythonWebSocket.prototype.closed = function () {
+    if (this.readyState === 3) return;
+    this.readyState = 3;
+    delete sockets[this.id];
+    if (this.onclose) this.onclose({ type: "close", code: 1000 });
+  };
+  PythonWebSocket.prototype.close = function () {
+    tell("wsClose", { socket: this.id });
+    this.closed();
+  };
+
   window.WebSocket = function (url, protocols) {
     if (new URL(url, location.href).pathname === "/websocket") {
-      return new TryWebSocket(url);
+      return localId ? new PythonWebSocket(url) : new TryWebSocket(url);
     }
     return protocols === undefined
       ? new NativeWebSocket(url)
@@ -605,16 +643,41 @@
   window.WebSocket.CLOSING = 2;
   window.WebSocket.CLOSED = 3;
 
-  // Leaving with edits that would be lost: the demo's, or writes not done.
+  // The Hive plug-in's requests, for a font kept here: served by Python.
+  if (localId) {
+    var nativeFetch = window.fetch.bind(window);
+    window.fetch = function (input, init) {
+      var url = new URL(typeof input === "string" || input instanceof URL ? input : input.url, location.href);
+      if (url.origin !== location.origin || !url.pathname.startsWith("/api/hive/")) {
+        return nativeFetch(input, init);
+      }
+      var method = ((init && init.method) || (input && input.method) || "GET").toUpperCase();
+      var body = init && init.body !== undefined ? String(init.body) : null;
+      return python("http", { method: method, url: url.pathname + url.search, body: body }).then(
+        function (reply) {
+          var r = reply.response;
+          var headers = Object.assign({ "Content-Type": r.contentType || "text/plain" }, r.headers || {});
+          var noBody = r.status === 204 || r.status === 304;
+          return new Response(noBody ? null : r.body, { status: r.status, headers: headers });
+        }
+      );
+    };
+  }
+
+  // Leaving: the demo's edits would be lost; a local font's last edits are
+  // written to the browser's storage now.
   window.addEventListener("beforeunload", function (event) {
-    if ((!localId && TryFont.edited) || (localId && saveTimer !== null)) {
-      if (localId) flush();
+    if (!localId && TryFont.edited) {
+      event.preventDefault();
+      event.returnValue = "";
+    } else if (localId && status.text === "saving") {
+      tell("flush", {});
       event.preventDefault();
       event.returnValue = "";
     }
   });
   window.addEventListener("pagehide", function () {
-    if (localId) flush();
+    if (localId && pythonWorker) tell("flush", {});
   });
 
   window.hiveTry = {
@@ -622,10 +685,19 @@
     touched: touched,
     TryFont: TryFont,
     localId: localId,
+    localName: localName,
+    localInfo: localInfo,
     projectName: function () {
       return projectName;
     },
-    flush: flush,
+    createLocal: createLocal,
+    deleteLocal: deleteLocal,
+    flush: function () {
+      return localId ? python("flush", {}) : Promise.resolve();
+    },
+    status: function () {
+      return status;
+    },
     download: download,
     downloadAs: downloadAs,
     convertToFontra: convertToFontra,
@@ -635,7 +707,13 @@
     store: Store,
   };
 
-  loadFont().catch(function (error) {
-    console.error(error);
-  });
+  if (localId) {
+    localInfo().catch(function (error) {
+      console.error(error);
+    });
+  } else {
+    loadFont().catch(function (error) {
+      console.error(error);
+    });
+  }
 })();

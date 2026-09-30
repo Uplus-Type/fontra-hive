@@ -464,52 +464,59 @@ GET    /api/hive/projects/<name>/comments/summary        {open, resolved}; never
 reaches the server. On Fontra's pages (editor, font overview, font info) for
 the project `demo:MutatorSans` or `local:<id>`, Hive adds three classic
 scripts at the start of `<head>` and a notice at the end of `<body>`
-(`client/try/`):
+(`client/try/`). Nothing in Fontra is changed or rebuilt: the pages are
+Fontra's own.
 
-- `try-engine.js` replaces the editor's WebSocket by an object that answers
-  the same calls (`getGlyph`, `getAxes`, `editFinal`…) in the browser. After
-  an edit it reads the edited data back from the page's `FontController`,
-  so it needs no copy of Fontra's path operations.
-- `fontra-format.js` reads and writes the `.fontra` format as Fontra's
-  Python backend does, byte for byte (glyph file names, CSV, JSON layout,
-  contours ↔ packed paths), and zips and unzips (`CompressionStream`).
-- `try-store.js` keeps fonts in the browser's private file system (OPFS),
-  one `.fontra` package per font, written through `try-opfs-worker.js`
-  (Safari only writes there from a worker).
+- **The demo** (`demo:MutatorSans`, `demo-font.json`: MutatorSans, BSD
+  licence, see `MUTATORSANS-LICENSE.txt`): `try-engine.js` replaces the
+  editor's WebSocket by an object that answers the same calls (`getGlyph`,
+  `getAxes`, `editFinal`…) in JavaScript, instantly. Not saved: a reload
+  starts over, "Keep a copy" makes it a font kept in the browser.
+- **A font kept in the browser** (`local:<id>`): Hive solo. The font is a
+  bare git repository (`/repos/local:<id>.git`) in the browser's IndexedDB
+  (Emscripten's IDBFS), and it is served by the same code as fontrahive.com,
+  in Python (Pyodide) in a worker (`try-python-worker.js`,
+  `py/hive_try_server.py`): Fontra's `FontHandler` over Hive's git backend,
+  and Hive's routes through `DevHiveProjectManager` without accounts (one
+  author, "You"). The editor's WebSocket messages and the Hive plug-in's
+  `/api/hive/*` requests go to the worker instead of the network; so the
+  history panel, restore, snapshots and comments work as online. Each edit
+  is a commit (after 1 s), saved to IndexedDB (after 2.5 s, and when the
+  page closes). The font's name is kept in the browser's private file
+  system (`try-store.js`, `try-opfs-worker.js`).
+- **Formats**: `fontra-format.js` reads and writes `.fontra` as Fontra's
+  Python backend does, byte for byte, and zips (`CompressionStream`); every
+  other format goes through Python too (`py/hive_try_convert.py`, Fontra's
+  backends and Hive's `importer` and `export`): UFO, designspace with its
+  UFOs, TrueType/OpenType/WOFF/TTX in; `.fontra` or designspace + UFOs out.
 - `try-banner.js`: the bar at the bottom (name, save state, "Your fonts",
-  "Download" as `.fontra` or designspace + UFOs, "Keep a copy" of the demo)
-  and the "Your fonts" panel: open a file or a folder, open, delete.
-- `try-python-worker.js`: Python in the browser (Pyodide), loaded on first
-  use, for every format but `.fontra`: UFO, designspace with its UFOs,
-  TrueType/OpenType/WOFF/TTX in; designspace + UFOs out. It runs the same
-  code as the server: Fontra's backends and Hive's `importer` and `export`,
-  sent as `/hive/try/python.zip` (`fontra_hive/trybundle.py`: the pure-Python
-  packages of this server's environment, stand-ins for `aiohttp`,
-  `watchfiles` and two functions of `ufo2ft`, and an `entry_points.txt` of the
-  backends that work in the browser; `client/try/py/hive_try_convert.py`).
+  "Download", "Keep a copy") and the "Your fonts" panel (open a file or a
+  folder, open, delete).
+
+The Python comes as `/hive/try/python.zip` (`fontra_hive/trybundle.py`),
+built once from this server's environment: the pure-Python packages
+(Fontra, Hive, fontTools, ufoLib2, cattrs, attrs, aiohttp with multidict,
+yarl and co. in their pure versions, dulwich…), stand-ins for `watchfiles`
+and two functions of `ufo2ft`, and an `entry_points.txt` of the backends
+that work in the browser. About 2 MB.
 
 Pyodide itself comes from the jsDelivr CDN by default. To host it here
 (recommended: no third party sees the visitors, and it works behind a strict
 Content-Security-Policy), unpack a `pyodide-core` release (314.0.7, from
 <https://github.com/pyodide/pyodide/releases>) and set
 `HIVE_PYODIDE_DIR=/path/to/pyodide`: the server then serves it at
-`/hive/pyodide/` and tells the page so. `HIVE_PYODIDE_URL` points the page
-elsewhere. Only the core is needed: every package comes in `python.zip`.
+`/hive/pyodide/` and tells the page so (hive-api's `install.sh` does this).
+`HIVE_PYODIDE_URL` points the page elsewhere. Only the core is needed.
 
-The demo (`demo-font.json`: MutatorSans, BSD licence, see
-`MUTATORSANS-LICENSE.txt`) is not saved; a reload starts over. A font the
-visitor opens (`local:<id>`) is written back a moment after each edit and
-downloads as `<name>.fontra.zip`, the same layout as Hive's export. The Hive
-plug-in is hidden on these pages (it needs a Hive project). Nothing in
-Fontra is changed or rebuilt: the pages are Fontra's own.
-
-Limits for now: two windows on the same font do not see each other's edits
-live (the last write wins, file by file); what Fontra asks its server over
-HTTP (`/api/unionPath` and the other path operations, `parseClipboard`) is
-not answered, so Remove overlap and pasting from other apps fail; Glyphs files are not
-read (glyphsLib needs openstep_plist, compiled code), and there is no
-compiled font download (fontc in WebAssembly, later). The first conversion
-loads about 15 MB (Pyodide and `python.zip`), cached by the browser after.
+Limits for now: no branches in the browser (the branch menu belongs to
+Hive's page script, which needs accounts); two windows on the same font
+share one server in each window's worker, not live with each other; what
+Fontra asks its server over HTTP (`/api/unionPath` and the other path
+operations, `parseClipboard`) is not answered, so Remove overlap and
+pasting from other apps fail; Glyphs files are not read (glyphsLib needs
+openstep_plist, compiled code); no compiled font download (fontc in
+WebAssembly, later). Opening a font kept in the browser loads about 15 MB
+the first time (Pyodide and `python.zip`), cached by the browser after.
 
 To change the demo font: convert a font to `.fontra` with Fontra
 (`fontra-copy`), then write the JSON with the same calls as the engine
@@ -543,9 +550,11 @@ routes and the Python bundle; the engine, the `.fontra` reader and writer
 (byte for byte against the fixture and Fontra's file names), and, with
 Fontra's built client installed, the real editor on the demo and on a font
 opened, edited, reloaded and downloaded. With
-`HIVE_TEST_PYODIDE_DIR=/path/to/pyodide` (an unpacked `pyodide-core`), a
-designspace and a TrueType font are converted in the browser and a font is
-downloaded as designspace + UFOs.
+`HIVE_TEST_PYODIDE_DIR=/path/to/pyodide` (an unpacked `pyodide-core`): a
+font opened in the browser is a git repository served by Hive's code there
+(commits, kept across a reload, history, restore, comments, snapshot,
+download, delete), the demo is kept with its edits, a designspace and a
+TrueType font are converted, and a font is downloaded as designspace + UFOs.
 
 `tests/test_account_js.py` runs the sign-in and invitation pages and the
 hive-api Share dialog in a headless Chromium, like the next one.

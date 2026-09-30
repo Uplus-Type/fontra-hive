@@ -667,7 +667,11 @@ class HiveHistoryPanel extends HTMLElement {
     const { name, branch } = parseProjectIdentifier(editor.projectIdentifier || "");
     this.projectName = name;
     this.branch = branch;
-    this.branchElement.textContent = `${name} · ${branch}`;
+    // The project's label from the server when it is not its identifier
+    // (a font kept in the browser by "Try Fontra" is "local:<id>").
+    const label = editor.fontController?.metaInfo?.projectName || "";
+    const shown = label && !label.startsWith(name) ? label.split(" · ")[0] : name;
+    this.branchElement.textContent = `${shown} · ${branch}`;
 
     const settings = editor.sceneController?.sceneSettingsController;
     if (settings) {

@@ -300,9 +300,45 @@ def test_glyph_file_names_match_fontras(server, browser):
     assert back == names
 
 
-def test_a_local_font_is_kept_edited_and_downloaded(server, browser, tmp_path):
+EDIT_A = """async (dy) => {
+  const fc = editorController.fontController;
+  const glyph = (await fc.getGlyph("A")).glyph;
+  const layer = Object.keys(glyph.layers)[0];
+  const path = glyph.layers[layer].glyph.path;
+  const [x, y] = [path.coordinates[0], path.coordinates[1]];
+  const p = ["glyphs", "A", "layers", layer, "glyph", "path"];
+  const change = { p, f: "=xy", a: [0, x, y + dy] };
+  const rollback = { p, f: "=xy", a: [0, x, y] };
+  await fc.applyChange(change);
+  await fc.editFinal(change, rollback, "test", true);
+}"""
+
+LAYERS_A = (
+    "editorController.fontController.getGlyph('A')"
+    ".then(g => JSON.stringify(g.glyph.layers))"
+)
+
+API = """async ([method, route, body]) => {
+  const url = '/api/hive/projects/' + encodeURIComponent(hiveTry.localName) + route;
+  const init = { method };
+  if (body !== null) init.body = JSON.stringify(body);
+  const r = await fetch(url, init);
+  return [r.status, await r.text()];
+}"""
+
+
+def _needsHiveInTheBrowser():
     if Handler.fontraClient is None:
         pytest.skip("Fontra's built client is not installed")
+    if not PYODIDE_DIR:
+        pytest.skip("$HIVE_TEST_PYODIDE_DIR is not set (an unpacked pyodide-core)")
+
+
+def test_a_local_font_has_hive_in_the_browser(server, browser, tmp_path):
+    """A font opened in Try Fontra is a git repository in the browser, served
+    by Hive's own code: edits are commits, kept across a reload; the history
+    panel's routes, restore and comments work; download and delete."""
+    _needsHiveInTheBrowser()
     archive = tmp_path / "Mutator.fontra.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
         for path in sorted(FIXTURE.rglob("*")):
@@ -318,48 +354,67 @@ def test_a_local_font_is_kept_edited_and_downloaded(server, browser, tmp_path):
     page.goto(f"{server}/editor.html?{TRY_PAGE_QUERY}")
     page.get_by_role("button", name="Your fonts").click()
     page.locator(".hive-try-panel input[accept]").set_input_files(str(archive))
-    page.wait_for_url("**project=local*", timeout=15000)
-    page.wait_for_function("window.editorController?.fontController?.glyphMap?.A")
+    page.wait_for_url("**project=local*", timeout=90000)
+    page.wait_for_function(
+        "window.editorController?.fontController?.glyphMap?.A", timeout=90000
+    )
     page.wait_for_function(
         "document.querySelector('.hive-try .name').textContent === 'Mutator'"
     )
+    assert page.title().endswith("Mutator")  # the font's name, not local:<id>
+    before = page.evaluate(LAYERS_A)
 
-    before = page.evaluate("hiveTry.font().then(f => JSON.stringify(f.glyphs.A))")
-    # An edit as the editor makes one: applied to Fontra's copy, then sent.
-    page.evaluate(
-        """async () => {
-          const fc = editorController.fontController;
-          const glyph = (await fc.getGlyph("A")).glyph;
-          const layer = Object.keys(glyph.layers)[0];
-          const path = glyph.layers[layer].glyph.path;
-          const [x, y] = [path.coordinates[0], path.coordinates[1]];
-          const p = ["glyphs", "A", "layers", layer, "glyph", "path"];
-          const change = { p, f: "=xy", a: [0, x, y + 10] };
-          const rollback = { p, f: "=xy", a: [0, x, y] };
-          await fc.applyChange(change);
-          await fc.editFinal(change, rollback, "test", true);
-        }"""
-    )
+    # An edit as the editor makes one: a commit, then saved in IndexedDB.
+    page.evaluate(EDIT_A, 10)
     page.wait_for_function(
         "document.querySelector('.hive-try .status').textContent"
         " === 'saved in this browser'",
-        timeout=5000,
+        timeout=20000,
     )
-    edited = page.evaluate(
-        "editorController.fontController.getGlyph('A')"
-        ".then(g => JSON.stringify(g.glyph.layers))"
-    )
-    page.reload()
-    page.wait_for_function("window.editorController?.fontController?.glyphMap?.A")
-    kept = page.evaluate(
-        "editorController.fontController.getGlyph('A')"
-        ".then(g => JSON.stringify(g.glyph.layers))"
-    )
-    assert kept == edited
-    assert json.loads(before)["layers"] != json.loads(kept)
+    edited = page.evaluate(LAYERS_A)
+    status, body = page.evaluate(API, ["GET", "/log?glyph=A", None])
+    assert status == 200
+    commits = json.loads(body)["commits"]
+    assert [c["message"].split("\n")[0] for c in commits] == [
+        "Edit A",
+        "Opened in Try Fontra",
+    ]
+    assert commits[0]["author"] == "You"
 
+    # Kept across a reload.
+    page.reload()
+    page.wait_for_function(
+        "window.editorController?.fontController?.glyphMap?.A", timeout=90000
+    )
+    assert page.evaluate(LAYERS_A) == edited != before
+
+    # Restore the first version: a new commit, and the editor reloads A.
+    first = commits[-1]["sha"]
+    status, body = page.evaluate(API, ["POST", f"/restore?glyph=A&ref={first}", None])
+    assert status == 200 and json.loads(body)["changed"] is True
+    page.wait_for_function(f"({LAYERS_A}).then(l => l === {json.dumps(before)})")
+
+    # A comment, and a snapshot.
+    layer = next(iter(json.loads(before)))
+    comment = {
+        "glyph": "A",
+        "source": {"layer": layer, "name": layer, "location": {}},
+        "point": {"x": 100, "y": 200},
+        "text": "Tighter apex?",
+        "branch": "main",
+    }
+    status, body = page.evaluate(API, ["POST", "/comments", comment])
+    assert status == 200, body
+    status, body = page.evaluate(API, ["GET", "/comments?glyph=A", None])
+    assert [i["messages"][0]["text"] for i in json.loads(body)["issues"]] == [
+        "Tighter apex?"
+    ]
+    status, body = page.evaluate(API, ["POST", "/snapshot?name=First+draft", None])
+    assert status == 200, body
+
+    # Downloaded as the repository's latest state.
     page.get_by_role("button", name="Download").click()
-    with page.expect_download() as info:
+    with page.expect_download(timeout=60000) as info:
         page.get_by_role("menuitem", name=".fontra (zipped)").click()
     download = info.value
     assert download.suggested_filename == "Mutator.fontra.zip"
@@ -368,6 +423,17 @@ def test_a_local_font_is_kept_edited_and_downloaded(server, browser, tmp_path):
         assert "Mutator.fontra/font-data.json" in names
         glyph = json.loads(z.read("Mutator.fontra/glyphs/A^1.json"))
         assert "contours" in next(iter(glyph["layers"].values()))["glyph"]["path"]
+
+    # Deleted: gone from the list, and its storage with it.
+    page.get_by_role("button", name="Your fonts").click()
+    page.locator(".hive-try-panel li", has_text="Mutator").get_by_role(
+        "button", name="Delete"
+    ).click()
+    page.wait_for_url("**project=demo*", timeout=30000)
+    page.get_by_role("button", name="Your fonts").click()
+    page.wait_for_function(
+        "document.querySelector('.hive-try-panel ul').textContent.includes('No fonts')"
+    )
     assert not errors
     context.close()
 
@@ -480,5 +546,26 @@ def test_other_formats_are_converted_in_the_browser(server, browser, tmp_path):
         timeout=30000,
     )
     assert "No font found" in page.locator(".hive-try-panel .error").inner_text()
+    assert not errors
+    context.close()
+
+
+def test_the_demo_is_kept_with_its_edits(server, browser):
+    _needsHiveInTheBrowser()
+    context = browser.new_context(viewport={"width": 1400, "height": 850})
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.goto(f"{server}/editor.html?{TRY_PAGE_QUERY}")
+    page.wait_for_function("window.editorController?.fontController?.glyphMap?.A")
+    page.evaluate(EDIT_A, 40)
+    edited = page.evaluate(LAYERS_A)
+    page.get_by_role("button", name="Keep a copy").click()
+    page.wait_for_url("**project=local*", timeout=90000)
+    page.wait_for_function(
+        "window.editorController?.fontController?.glyphMap?.A", timeout=90000
+    )
+    assert page.evaluate(LAYERS_A) == edited
+    assert page.locator(".hive-try .name").inner_text() == "MutatorSans"
     assert not errors
     context.close()
