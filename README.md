@@ -125,6 +125,18 @@ list), which Hive serves with its own script added (Fontra is not modified):
   5 s; someone disappears 20 s after their last one;
 - a **Read only · observer** badge when your role cannot edit (next to
   Fontra's own lock icon);
+- **the branch pill** (`⎇ main ▾`) next to the project name, tinted amber
+  off the default branch: the project's branches, each with how it compares
+  with the default branch ("2 ahead · 1 behind main"), its latest change and
+  who is on it; a click opens the same view on that branch (only the
+  `project` parameter of the URL changes, so the editor keeps its glyph and
+  text). *New branch…* (designers and up) starts from the current branch,
+  the default one or a snapshot, and includes edits not yet committed. The
+  × of a branch deletes it (managers and admins, or whoever made it; never
+  the default branch, nor a branch someone has open): a branch whose
+  changes are not all in the default branch is kept as an `archive/<name>`
+  tag. The project page of the home page lists the branches too (open,
+  delete, new branch) and downloads from any of them;
 - **File › Share…**: the members of the project and where their role comes
   from (owner, organization, collaborator). Managers and admins can add
   people, change or remove collaborators; in development this writes
@@ -270,7 +282,9 @@ Routes used by the panel (also handy from the command line):
 GET  /api/hive/projects/<name>/head?branch=main
 GET  /api/hive/projects/<name>/log?branch=main&glyph=A&limit=50
 GET  /api/hive/projects/<name>/glyph?glyph=A&ref=<sha|branch|tag>
-GET  /api/hive/projects/<name>/branches
+GET    /api/hive/projects/<name>/branches
+POST   /api/hive/projects/<name>/branches?name=bold&from=<branch|snapshot/<name>|sha>
+DELETE /api/hive/projects/<name>/branches?branch=bold
 POST /api/hive/projects/<name>/restore?branch=main&glyph=A&ref=<sha|tag>
 GET  /api/hive/projects/<name>/snapshots?branch=main
 POST /api/hive/projects/<name>/snapshot?branch=main&name=Proofs%20sent
@@ -284,6 +298,18 @@ number of commits a new snapshot would group (`pending`). `snapshot` answers
 409 when nothing changed since the last snapshot or the name is taken, 403
 on a read-only server; with the project open, pending edits are committed
 first.
+
+`branches` lists the branches, the default one first (`default` names it:
+hive-api's `defaultBranch`, `main` in development), each with its head, its
+latest change, `ahead`/`behind` counts against the default branch (cached
+per pair of commits), `merged` (nothing the default branch lacks), `open`
+(someone has it in the editor), and who made it, when and from what; plus
+what the requester may do (`can`: create, delete any, merge). That
+information is kept in git but outside the font: a commit chain on
+`refs/hive/meta` (`branches.json`), which backups carry (bundles of all
+refs) and a plain `git clone` does not fetch. Branch names follow git's
+rules within hive-api's characters (letters, digits, `.`, `_`, `-`, `/`),
+and cannot start with `snapshot/`, `glyph-snapshot/` or `archive/`.
 
 The panel polls `head` every 1.5 s (a few bytes) and reloads the list only
 when the branch moved. Per-glyph history is answered from the `Hive-Glyphs:`

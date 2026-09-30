@@ -371,3 +371,112 @@ def test_empty_the_trash(browser_and_url):  # noqa: F811
     ]
     assert page.errors == []
     page.close()
+
+
+BRANCHES = {
+    "default": "main",
+    "you": "jeremie",
+    "can": {"create": True, "delete": True, "merge": True},
+    "branches": [
+        {
+            "name": "main",
+            "isDefault": True,
+            "ahead": 0,
+            "behind": 0,
+            "time": 1,
+            "author": "Fabio Rossi",
+            "createdBy": None,
+            "open": False,
+        },
+        {
+            "name": "bold",
+            "isDefault": False,
+            "ahead": 2,
+            "behind": 0,
+            "time": 1,
+            "author": "Ana López",
+            "createdBy": "ana",
+            "createdByName": "Ana López",
+            "open": False,
+        },
+        {
+            "name": "wide",
+            "isDefault": False,
+            "ahead": 0,
+            "behind": 1,
+            "time": 1,
+            "author": "Zoé",
+            "createdBy": "zoe",
+            "open": True,
+        },
+    ],
+}
+
+
+def test_project_branches(browser_and_url):  # noqa: F811
+    hive = "/api/hive/projects/uplustype%2FMutator"
+    page = open_home(
+        browser_and_url,
+        "#project/uplustype/Mutator",
+        {
+            "GET /api/projects/uplustype/Mutator": [
+                200,
+                {"project": project("uplustype", "Mutator", "admin")},
+            ],
+            f"GET {hive}/repository": [200, {"exists": True}],
+            f"GET {hive}/branches": [200, BRANCHES],
+            f"POST {hive}/branches": [200, {"branch": {"name": "x"}}],
+            f"DELETE {hive}/branches": [200, {"deleted": "bold"}],
+            "GET /api/hive/export-formats": [
+                200,
+                {"formats": [{"format": "fontra", "label": "Fontra package"}]},
+            ],
+            f"GET {hive}/export": [200, {"zip": 1}],
+        },
+    )
+    page.on("dialog", lambda dialog: dialog.accept())
+    page.wait_for_selector("table.branches tr")
+    rows = page.eval_on_selector_all(
+        "table.branches tr",
+        """rows => rows.map(r => [r.dataset.branch, r.querySelector('small').textContent,
+                 r.querySelector('a').getAttribute('href'),
+                 r.querySelector('.danger') ? !r.querySelector('.danger').disabled : null])""",
+    )
+    assert [r[0] for r in rows] == ["main", "bold", "wide"]
+    assert rows[1][1].startswith("2 ahead of main · changed ")
+    assert rows[1][1].endswith("by Ana López · made by Ana López")
+    assert [r[2] for r in rows] == [
+        "/fontoverview.html?project=uplustype%2FMutator",
+        "/fontoverview.html?project=uplustype%2FMutator%40bold",
+        "/fontoverview.html?project=uplustype%2FMutator%40wide",
+    ]
+    # Not the default branch, not one someone has open.
+    assert [r[3] for r in rows] == [None, True, False]
+
+    page.click("tr[data-branch='bold'] .danger")
+    page.wait_for_function("calls.some(c => c.method === 'DELETE')")
+    deleted = page.evaluate("calls.find(c => c.method === 'DELETE')")
+    assert deleted["query"] == "?branch=bold"
+
+    # A new branch, from the branch chosen.
+    page.wait_for_selector("table.branches tr")
+    page.fill("input[placeholder='e.g. bold-extension']", "ana/italic")
+    page.select_option("select:not([aria-label])", "bold")
+    page.click("text=Create")
+    page.wait_for_function(
+        "calls.some(c => c.method === 'POST' && c.path.endsWith('/branches'))"
+    )
+    post = page.evaluate(
+        "calls.find(c => c.method === 'POST' && c.path.endsWith('/branches'))"
+    )
+    assert post["query"] == "?name=ana%2Fitalic&from=bold"
+
+    # Download: from the branch chosen.
+    page.wait_for_selector("select[aria-label='Branch to download']")
+    page.select_option("select[aria-label='Branch to download']", "wide")
+    page.click("text=Fontra package")
+    page.wait_for_function("calls.some(c => c.path.endsWith('/export'))")
+    export = page.evaluate("calls.find(c => c.path.endsWith('/export'))")
+    assert export["query"] == "?format=fontra&branch=wide"
+    assert page.errors == []
+    page.close()

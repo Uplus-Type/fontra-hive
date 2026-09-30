@@ -11,7 +11,15 @@
 // Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
 
 import { call } from "./account.js";
-import { avatar, exportDownload, hiveApiProjectPath, openShareDialog } from "../views/hive-views.js";
+import {
+  avatar,
+  branchNameProblem,
+  compareWithDefault,
+  exportDownload,
+  hiveApiProjectPath,
+  openShareDialog,
+  timeAgo,
+} from "../views/hive-views.js";
 
 const ROLES = ["observer", "reviewer", "designer", "manager", "admin"];
 const main = () => document.getElementById("main");
@@ -36,7 +44,8 @@ export function el(tag, attrs = {}, children = []) {
 }
 
 const get = (path) => call(path, undefined, "GET");
-const openURL = (projectId) => `/fontoverview.html?project=${encodeURIComponent(projectId)}`;
+const openURL = (projectId, branch) =>
+  `/fontoverview.html?project=${encodeURIComponent(branch ? `${projectId}@${branch}` : projectId)}`;
 const projectHash = (projectId) => "#project/" + projectId.split("/").map(encodeURIComponent).join("/");
 
 function form(fields, submitLabel, onSubmit) {
@@ -289,6 +298,79 @@ async function newProjectSection() {
   name.focus();
 }
 
+// The Fontra server's routes answer errors in plain text.
+async function hiveCall(path, method = "GET") {
+  const response = await fetch(path, { method, credentials: "same-origin" });
+  if (!response.ok) throw new Error((await response.text()) || `Error ${response.status}`);
+  return response.json();
+}
+
+// The project's branches: open one, delete one (managers, or its maker),
+// make one. Switching branch from the editor is the pill next to the name.
+function branchesPanel(project, data) {
+  const path = `/api/hive/projects/${encodeURIComponent(project.id)}/branches`;
+  const error = el("div", { class: "error" });
+  const rows = data.branches.map((b) => {
+    const mayDelete = !b.isDefault && (data.can.delete || (data.can.create && b.createdBy === data.you));
+    const madeBy = b.createdByName ? ` · made by ${b.createdByName}` : "";
+    return el("tr", { "data-branch": b.name }, [
+      el("td", {}, [
+        el("b", {}, [b.name]),
+        el("small", {}, [
+          `${compareWithDefault(b, data.default)} · changed ${timeAgo(b.time)} by ${b.author}${madeBy}`,
+        ]),
+      ]),
+      el("td", {}, [el("a", { href: openURL(project.id, b.isDefault ? null : b.name) }, [
+        el("button", { class: "secondary" }, ["Open"]),
+      ])]),
+      el("td", {}, [
+        mayDelete
+          ? el("button", {
+              class: "danger",
+              disabled: b.open,
+              title: b.open ? "Someone has this branch open" : "",
+              onclick: async () => {
+                const kept = b.ahead
+                  ? ` Its ${b.ahead} changes not in ${data.default} stay in the history, as “archive/${b.name}”.`
+                  : "";
+                if (!confirm(`Delete the branch “${b.name}”?${kept}`)) return;
+                try {
+                  await hiveCall(`${path}?${new URLSearchParams({ branch: b.name })}`, "DELETE");
+                  route();
+                } catch (e) {
+                  error.textContent = e.message;
+                }
+              },
+            }, ["Delete"])
+          : null,
+      ]),
+    ]);
+  });
+  const panel = el("div", { class: "panel" }, [
+    el("h3", { style: "margin-top:0" }, ["Branches"]),
+    el("p", { class: "note" }, [
+      `Copies of the font to try things out without changing ${data.default}; their changes can be merged back later.`,
+    ]),
+    el("table", { class: "people branches" }, rows),
+    error,
+  ]);
+  if (data.can.create) {
+    const name = el("input", { maxlength: 100, placeholder: "e.g. bold-extension", autocomplete: "off" });
+    const from = el("select", {}, data.branches.map((b) => el("option", { value: b.name }, [b.name])));
+    panel.append(
+      el("h3", {}, ["New branch"]),
+      form([field("Name", name), field("Start from", from)], "Create", async () => {
+        const problem = branchNameProblem(name.value.trim());
+        if (problem) throw new Error(problem);
+        const query = new URLSearchParams({ name: name.value.trim(), from: from.value });
+        await hiveCall(`${path}?${query}`, "POST");
+        route();
+      })
+    );
+  }
+  return panel;
+}
+
 // Whether the project has its font yet (a repository on the Fontra server).
 // When the server cannot say, assume it does: opening then works as before.
 async function hasFont(projectId) {
@@ -348,6 +430,16 @@ async function projectSection(projectId) {
     ])
   );
 
+  let branches = null;
+  if (withFont && !project.trashed) {
+    try {
+      branches = await hiveCall(`/api/hive/projects/${encodeURIComponent(project.id)}/branches`);
+    } catch (error) {
+      branches = null;
+    }
+    if (branches) content.push(branchesPanel(project, branches));
+  }
+
   // Download: the sources, or fonts built on the server (managers, admins).
   if (withFont && !project.trashed && project.capabilities.includes("export")) {
     let formats = [];
@@ -356,18 +448,26 @@ async function projectSection(projectId) {
     } catch (error) {
       formats = [];
     }
+    const defaultBranch = branches?.default || project.defaultBranch || "main";
+    const branchChoice = branches && branches.branches.length > 1
+      ? el("select", { "aria-label": "Branch to download" }, branches.branches.map((b) =>
+          el("option", { value: b.name }, [b.name])))
+      : null;
     if (formats.length) {
       content.push(
         el("div", { class: "panel" }, [
           el("h3", { style: "margin-top:0" }, ["Download"]),
-          el("p", { class: "note" }, ["The latest version of the main branch."]),
+          branchChoice
+            ? el("div", { class: "row" }, [el("span", {}, ["The latest version of the branch"]), branchChoice])
+            : el("p", { class: "note" }, [`The latest version of the ${defaultBranch} branch.`]),
           el("div", { class: "row downloads" }, formats.map(({ format, label }) =>
             el("button", {
               class: "secondary",
               onclick: async (event) => {
                 event.target.disabled = true;
                 try {
-                  await exportDownload({ name: project.id, branch: "main" }, format);
+                  const branch = branchChoice ? branchChoice.value : defaultBranch;
+                  await exportDownload({ name: project.id, branch }, format);
                 } finally {
                   event.target.disabled = false;
                 }

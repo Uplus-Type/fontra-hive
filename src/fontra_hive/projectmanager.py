@@ -43,6 +43,7 @@ from .backend_git import GitFontraBackend
 from .fonthandler import HiveFontHandler
 from .glyphdiff import changed_sources, font_source_names
 from .gitstore import (
+    ARCHIVE_TAG_PREFIX,
     DEFAULT_BRANCH,
     SERVER_SIGNATURE,
     GitRepoStore,
@@ -495,6 +496,8 @@ class DevHiveProjectManager:
             web.get("/api/hive/projects/{name}/members", self.membersHandler),
             web.post("/api/hive/projects/{name}/members", self.setMemberHandler),
             web.get("/api/hive/projects/{name}/branches", self.branchesHandler),
+            web.post("/api/hive/projects/{name}/branches", self.createBranchHandler),
+            web.delete("/api/hive/projects/{name}/branches", self.deleteBranchHandler),
             web.get("/api/hive/projects/{name}/log", self.logHandler),
             web.get("/api/hive/projects/{name}/glyph", self.glyphHandler),
             web.get("/api/hive/projects/{name}/head", self.headHandler),
@@ -717,14 +720,196 @@ class DevHiveProjectManager:
             raise web.HTTPNotFound()
         return web.json_response({"branch": branch, "head": head})
 
+    # --- branches -------------------------------------------------------------
+
+    async def _defaultBranch(self, request: web.Request, name: str) -> str:
+        """The project's default branch (hive-api knows it; "main" here)."""
+        return DEFAULT_BRANCH
+
+    def _aheadBehind(self, store: GitRepoStore, head: str, base: str):
+        """``store.ahead_behind``, cached by pair of commits (the answer for
+        two given commits never changes)."""
+        cache = self.__dict__.setdefault("_aheadBehindCache", {})
+        if len(cache) > 5000:
+            cache.clear()
+        key = (head, base)
+        if key not in cache:
+            cache[key] = store.ahead_behind(head, base)
+        return cache[key]
+
+    def _branchJSON(
+        self, store: GitRepoStore, branch: str, default: str, info: dict
+    ) -> dict:
+        head = store.head(branch)
+        commit = store.commit_info(head)
+        defaultHead = store.head(default)
+        if branch == default or defaultHead is None:
+            ahead, behind = 0, 0
+        else:
+            ahead, behind = self._aheadBehind(store, head, defaultHead)
+        meta = info.get(branch) or {}
+        return {
+            "name": branch,
+            "head": head,
+            "isDefault": branch == default,
+            # The latest change: when, by whom, what.
+            "time": commit.time,
+            "author": commit.author,
+            "message": commit.message.split("\n", 1)[0],
+            # Compared with the default branch.
+            "ahead": ahead,
+            "behind": behind,
+            "merged": branch != default and ahead == 0,
+            "createdBy": meta.get("createdBy"),
+            "createdByName": meta.get("createdByName"),
+            "created": meta.get("created"),
+            "from": meta.get("from"),
+            # Someone has it open in the editor (on this server).
+            "open": any(
+                key == self._handlerKey(store.path, branch) for key in self.fontHandlers
+            ),
+        }
+
     async def branchesHandler(self, request: web.Request) -> web.Response:
-        repoPath, _ = await self._project(request, request.match_info["name"], "read")
+        """The branches of a project, the default one first, then the most
+        recently changed; each compared with the default branch. Also what
+        the requester may do with them."""
+        name = request.match_info["name"]
+        repoPath, access = await self._project(request, name, "read")
+        default = await self._defaultBranch(request, name)
         store = GitRepoStore.open(repoPath)
         try:
-            data = {b: store.head(b) for b in store.branches()}
+            info = store.branch_info()
+            branches = [
+                self._branchJSON(store, b, default, info) for b in store.branches()
+            ]
         finally:
             store.close()
-        return web.json_response({"branches": data, "tags": []})
+        branches.sort(key=lambda b: (not b["isDefault"], -b["time"], b["name"]))
+        can = (lambda cap: access.can(cap)) if access is not None else (lambda _: True)
+        return web.json_response(
+            {
+                "default": default,
+                "branches": branches,
+                "you": access.user.username if access is not None else None,
+                "can": {
+                    "create": can("branch") and not self.readOnly,
+                    # Delete any branch (else only those one made), merge.
+                    "delete": can("merge") and not self.readOnly,
+                    "merge": can("merge") and not self.readOnly,
+                },
+            }
+        )
+
+    async def createBranchHandler(self, request: web.Request) -> web.Response:
+        """A new branch ``name``, starting at ``from`` (a branch, a snapshot
+        tag or a commit; the default branch if not given). Pending edits of
+        the branch it starts from are committed first: the new branch starts
+        from what people see."""
+        name = request.match_info["name"]
+        branch = (request.query.get("name") or "").strip()
+        repoPath, access = await self._project(request, name, "branch")
+        if self.readOnly:
+            raise web.HTTPForbidden(text="read-only server")
+        default = await self._defaultBranch(request, name)
+        fromRef = (request.query.get("from") or "").strip() or default
+
+        fontHandler = self.fontHandlers.get(self._handlerKey(repoPath, fromRef))
+        backend = fontHandler.backend if fontHandler is not None else None
+        store = backend.store if backend is not None else GitRepoStore.open(repoPath)
+        try:
+            if branch in store.branches():
+                raise web.HTTPConflict(text=f"There is already a branch {branch!r}.")
+            error = store.branch_name_error(branch)
+            if error:
+                raise web.HTTPBadRequest(text=error)
+            if backend is not None:
+                backend.flush()
+            try:
+                sha = store.resolve(fromRef)
+            except KeyError:
+                raise web.HTTPNotFound(
+                    text=f"Nothing called {fromRef!r} to start from."
+                )
+            try:
+                store.create_branch(branch, sha)
+            except ValueError as error:
+                raise web.HTTPConflict(text=str(error))
+            user = access.user if access is not None else None
+            store.set_branch_info(
+                branch,
+                {
+                    "createdBy": user.username if user else None,
+                    "createdByName": user.name if user else None,
+                    "created": int(time.time()),
+                    "from": fromRef,
+                    "base": sha,
+                },
+                author=_author(access, self.author),
+            )
+            data = self._branchJSON(store, branch, default, store.branch_info())
+        finally:
+            if backend is None:
+                store.close()
+        return web.json_response({"branch": data})
+
+    async def deleteBranchHandler(self, request: web.Request) -> web.Response:
+        """Delete a branch (``branch``): managers and admins, or whoever made
+        it. Never the default branch, nor a branch open in the editor. A
+        branch that was not merged is kept as an ``archive/<name>`` tag, so
+        nothing is lost."""
+        name = request.match_info["name"]
+        branch = request.query.get("branch") or ""
+        repoPath, access = await self._project(request, name, "branch")
+        if self.readOnly:
+            raise web.HTTPForbidden(text="read-only server")
+        default = await self._defaultBranch(request, name)
+        if branch == default:
+            raise web.HTTPConflict(text="The default branch cannot be deleted.")
+        if self._handlerKey(repoPath, branch) in self.fontHandlers:
+            raise web.HTTPConflict(
+                text=f"Someone has {branch} open: it can be deleted once it is closed."
+            )
+        store = GitRepoStore.open(repoPath)
+        try:
+            # Only a listed branch: the name goes into a reference path.
+            if branch not in store.branches():
+                raise web.HTTPNotFound(text=f"No branch {branch!r}.")
+            head = store.head(branch)
+            meta = store.branch_info().get(branch) or {}
+            if access is not None and not access.can("merge"):
+                if meta.get("createdBy") != access.user.username:
+                    raise web.HTTPForbidden(
+                        text="Only managers, admins and whoever made a branch can delete it."
+                    )
+            defaultHead = store.head(default)
+            merged = (
+                defaultHead is not None
+                and self._aheadBehind(store, head, defaultHead)[0] == 0
+            )
+            archived = None
+            if not merged:
+                who = access.user.name if access is not None else "someone"
+                existing = set(store.tags())
+                tag = f"{ARCHIVE_TAG_PREFIX}{branch}"
+                n = 2
+                while tag in existing:
+                    tag = f"{ARCHIVE_TAG_PREFIX}{branch}-{n}"
+                    n += 1
+                store.create_tag(
+                    tag,
+                    head,
+                    message=f"Branch {branch}, deleted by {who} before being merged",
+                    tagger=_author(access, self.author),
+                )
+                archived = tag
+            store.delete_branch(branch, default)
+            store.set_branch_info(branch, None, author=_author(access, self.author))
+        finally:
+            store.close()
+        return web.json_response(
+            {"deleted": branch, "head": head, "merged": merged, "archived": archived}
+        )
 
     async def logHandler(self, request: web.Request) -> web.Response:
         repoPath, _ = await self._project(request, request.match_info["name"], "read")

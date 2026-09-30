@@ -18,6 +18,7 @@ changes on top of the new head.
 
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import re
@@ -144,6 +145,42 @@ def _tag_ref(tag: str) -> bytes:
 
 SNAPSHOT_TAG_PREFIX = "snapshot/"
 GLYPH_SNAPSHOT_TAG_PREFIX = "glyph-snapshot/"
+ARCHIVE_TAG_PREFIX = "archive/"
+HIVE_META_REF = b"refs/hive/meta"
+BRANCH_INFO_FILE = "branches.json"
+
+# The same characters as hive-api's ``validate_branch_name``.
+_BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,100}$")
+_RESERVED_BRANCH_PREFIXES = (
+    SNAPSHOT_TAG_PREFIX,
+    GLYPH_SNAPSHOT_TAG_PREFIX,
+    ARCHIVE_TAG_PREFIX,
+)
+
+
+def branch_name_error(name: str) -> str | None:
+    """Why ``name`` is not an acceptable branch name, or None. Letters,
+    digits, ``.``, ``_``, ``-`` and ``/``, within git's rules
+    (``git check-ref-format``); not a commit sha, not one of the prefixes
+    Hive uses for its tags (a ``ref=`` would become ambiguous)."""
+    if not name or not _BRANCH_RE.match(name):
+        return "Use letters, digits, “.”, “_”, “-” and “/” (100 at most)."
+    parts = name.split("/")
+    if (
+        any(
+            not part or part.startswith(".") or part.endswith(".lock") for part in parts
+        )
+        or ".." in name
+        or name.endswith(".")
+        or name.startswith("-")
+        or name == "HEAD"
+    ):
+        return f"{name!r} is not a valid branch name."
+    if re.fullmatch(r"[0-9a-f]{40}", name):
+        return "A branch name cannot look like a commit id."
+    if name.startswith(_RESERVED_BRANCH_PREFIXES):
+        return f"Branch names cannot start with {name.split('/')[0]}/."
+    return None
 
 
 def snapshot_slug(title: str) -> str:
@@ -206,10 +243,94 @@ class GitRepoStore:
             raise ValueError(f"branch {name!r} already exists")
         return sha
 
-    def delete_branch(self, name: str) -> None:
-        if name == DEFAULT_BRANCH:
+    def delete_branch(self, name: str, default: str = DEFAULT_BRANCH) -> None:
+        if name == default:
             raise ValueError("the default branch cannot be deleted")
         del self.repo.refs[_branch_ref(name)]
+
+    def branch_name_error(self, name: str) -> str | None:
+        """Why ``name`` cannot be a new branch of this repository (None: it
+        can): a safe subset of git's rules, plus Hive's reserved prefixes,
+        plus git's own constraint that ``a`` and ``a/b`` cannot coexist."""
+        error = branch_name_error(name)
+        if error:
+            return error
+        for existing in self.branches():
+            if existing == name:
+                return f"There is already a branch {name!r}."
+            if name.startswith(existing + "/") or existing.startswith(name + "/"):
+                return f"{name!r} clashes with the branch {existing!r}."
+        return None
+
+    def ahead_behind(self, ref: str, base: str) -> tuple[int, int]:
+        """How many commits ``ref`` has that ``base`` has not (ahead), and the
+        other way round (behind)."""
+        a, b = _b(self.resolve(ref)), _b(self.resolve(base))
+        if a == b:
+            return 0, 0
+        ahead = sum(1 for _ in self.repo.get_walker(include=[a], exclude=[b]))
+        behind = sum(1 for _ in self.repo.get_walker(include=[b], exclude=[a]))
+        return ahead, behind
+
+    # --- branch information (who made a branch, when, from what) -----------
+    #
+    # Kept in git, outside the font's history: a commit chain on
+    # ``refs/hive/meta`` whose tree holds ``branches.json``. It travels with
+    # the repository (backups are bundles of all refs) but a plain clone,
+    # which fetches branches and tags only, does not see it.
+
+    def branch_info(self) -> dict[str, dict]:
+        sha = self.repo.refs.read_ref(HIVE_META_REF)
+        if not sha:
+            return {}
+        try:
+            data = self.read_file(_s(sha), BRANCH_INFO_FILE)
+        except KeyError:
+            return {}
+        try:
+            info = json.loads(data)
+        except ValueError:
+            return {}
+        return info if isinstance(info, dict) else {}
+
+    def set_branch_info(
+        self,
+        name: str,
+        info: dict | None,
+        author: Signature = SERVER_SIGNATURE,
+        _attempts: int = 5,
+    ) -> None:
+        """Record (or forget, with None) what is known about a branch."""
+        for _ in range(_attempts):
+            old = self.repo.refs.read_ref(HIVE_META_REF)
+            everything = self.branch_info()
+            if info is None:
+                if name not in everything:
+                    return
+                everything.pop(name)
+            else:
+                everything[name] = info
+            blob = Blob.from_string(
+                _b(json.dumps(everything, indent=1, sort_keys=True) + "\n")
+            )
+            store = self.repo.object_store
+            store.add_object(blob)
+            tree_id = commit_tree(store, [(_b(BRANCH_INFO_FILE), blob.id, FILE_MODE)])
+            now = int(time.time())
+            c = Commit()
+            c.tree = tree_id
+            c.parents = [old] if old else []
+            c.author = c.committer = author.encode()
+            c.author_time = c.commit_time = now
+            c.author_timezone = c.commit_timezone = 0
+            c.encoding = b"UTF-8"
+            c.message = _b(
+                f"{'Forget' if info is None else 'Describe'} branch {name}\n"
+            )
+            store.add_object(c)
+            if self.repo.refs.set_if_equals(HIVE_META_REF, old, c.id):
+                return
+        raise RefMovedError("refs/hive/meta", None, None)
 
     def tags(self) -> list[str]:
         prefix = b"refs/tags/"

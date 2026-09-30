@@ -204,6 +204,9 @@ class HiveProjectManager(DevHiveProjectManager):
             raise web.HTTPForbidden(text=f"{access.role} cannot {capability}")
         return access
 
+    async def _defaultBranch(self, request: web.Request, name: str) -> str:
+        return (await self._projectAccess(request, name)).defaultBranch
+
     async def _project(self, request: web.Request, name: str, capability: str):
         projectAccess = await self._projectAccess(request, name)
         if not projectAccess.access.can(capability):

@@ -50,11 +50,23 @@ PAGE = """<!doctype html><html><head>
   window.calls = [];
   window.fake = %(fake)s;
   window.fetch = async (url, options = {}) => {
-    const path = new URL(url, location.href).pathname;
+    const parsed = new URL(url, location.href);
+    const path = parsed.pathname;
+    const method = options.method || "GET";
     const body = options.body ? JSON.parse(options.body) : null;
-    window.calls.push({ path, method: options.method || "GET", body });
+    window.calls.push({ path, method, body, query: Object.fromEntries(parsed.searchParams) });
     const json = (data, status = 200) => new Response(JSON.stringify(data), { status });
     if (path === "/api/hive/me") return json(fake.me);
+    if (path.endsWith("/branches") && fake.branches) {
+      if (method === "GET") return json(fake.branches);
+      const name = parsed.searchParams.get("name");
+      if (method === "POST" && name === "taken") {
+        return new Response("There is already a branch 'taken'.", { status: 409 });
+      }
+      if (method === "POST") return json({ branch: { name } });
+      return json({ deleted: parsed.searchParams.get("branch") });
+    }
+    if (path.endsWith("/snapshots")) return json({ snapshots: fake.snapshots || [] });
     if (path.endsWith("/access")) return json(fake.access);
     if (path.endsWith("/presence")) return json({ others: fake.others });
     if (path.endsWith("/members")) {
@@ -135,7 +147,9 @@ def browser_and_url():
         server.shutdown()
 
 
-def open_page(browser_and_url, role="admin", storage=None):
+def open_page(
+    browser_and_url, role="admin", storage=None, project="Mutator", data=None
+):
     browser, base = browser_and_url
     page = browser.new_page()
     errors = []
@@ -143,21 +157,33 @@ def open_page(browser_and_url, role="admin", storage=None):
     page.route(
         "**/editor.html*",
         lambda route: route.fulfill(
-            content_type="text/html", body=PAGE % {"fake": json.dumps(fake(role))}
+            content_type="text/html",
+            body=PAGE % {"fake": json.dumps({**fake(role), **(data or {})})},
         ),
     )
     if storage is not None:
         page.add_init_script(
             f"localStorage.setItem('fontra.pluginsplugins', {json.dumps(json.dumps(storage))})"
         )
-    page.goto(f"{base}/editor.html?project=Mutator")
+    page.goto(f"{base}/editor.html?project={project}")
+    start_hive(page)
+    page.errors = errors
+    return page
+
+
+def start_hive(page, projectName=None):
+    """Run Hive's view script, as at the end of Fontra's page; Fontra would
+    have written ``projectName`` in the top bar."""
+    if projectName:
+        page.evaluate(
+            "document.getElementById('fontra-project-name').textContent = "
+            + json.dumps(projectName)
+        )
     page.evaluate("""async () => {
           const m = await import('/views/hive-views.js');
           window.hiveModule = m;
           window.hive = await m.start();
         }""")
-    page.errors = errors
-    return page
 
 
 def test_the_history_plugin_registers_itself(browser_and_url):
@@ -282,7 +308,8 @@ def test_labels_translated_too_early_are_fixed(browser_and_url):
         "**/lang/fr.js*",
         lambda route: route.fulfill(
             content_type="text/javascript",
-            body='export const strings = {"glyph-organizing.group-by.script": "Système d’écriture"};',
+            body="export const strings = "
+            + '{"glyph-organizing.group-by.script": "Système d’écriture"};',
         ),
     )
     page.route(
@@ -325,4 +352,262 @@ def test_labels_translated_too_early_are_fixed(browser_and_url):
         page.evaluate("document.getElementById('host2').shadowRoot.textContent")
         == "Système d’écriture"
     )
+    page.close()
+
+
+# --- branches -----------------------------------------------------------------------
+
+NOW = 1_790_000_000
+
+
+def branches(can_delete=False):
+    return {
+        "default": "main",
+        "you": "jeremie",
+        "can": {"create": True, "delete": can_delete, "merge": can_delete},
+        "branches": [
+            {
+                "name": "main",
+                "isDefault": True,
+                "ahead": 0,
+                "behind": 0,
+                "author": "Fabio Rossi",
+                "time": NOW - 120,
+                "message": "Edit A",
+                "createdBy": None,
+                "open": True,
+            },
+            {
+                "name": "bold",
+                "isDefault": False,
+                "ahead": 2,
+                "behind": 1,
+                "author": "Ana López",
+                "time": NOW - 7200,
+                "message": "Bolder B",
+                "createdBy": "jeremie",
+                "open": False,
+            },
+            {
+                "name": "zoe/wide",
+                "isDefault": False,
+                "ahead": 0,
+                "behind": 3,
+                "author": "Zoé",
+                "time": NOW - 86400 * 3,
+                "message": "Wide",
+                "createdBy": "zoe",
+                "open": True,
+            },
+        ],
+    }
+
+
+def branch_data(**kwargs):
+    others = fake()["others"] + [
+        {
+            "username": "zoe",
+            "name": "Zoé",
+            "role": "designer",
+            "view": "editor",
+            "branch": "bold",
+            "glyph": "C",
+        },
+    ]
+    return {
+        "branches": branches(**kwargs),
+        "others": others,
+        "snapshots": [
+            {"name": "client-review", "title": "Client review", "time": NOW - 60}
+        ],
+    }
+
+
+def freeze_time(page):
+    page.evaluate(f"Date.now = () => {NOW * 1000}")
+
+
+def menu_rows(page):
+    return page.evaluate("""[...document.querySelectorAll('.branch-row')].map(r => ({
+        name: r.dataset.branch,
+        check: r.querySelector('.check').textContent,
+        text: r.querySelector('small').textContent,
+        faces: [...r.querySelectorAll('.faces .avatar')].map(a => a.textContent),
+        del: r.querySelector('button.delete') ? !r.querySelector('button.delete').disabled : null,
+      }))""")
+
+
+def test_branch_pill_and_menu(browser_and_url):
+    page = open_page(browser_and_url, data=branch_data())
+    freeze_time(page)
+    order = page.evaluate(
+        "[...document.querySelector('.hive-right').children].map(e => e.className || e.id)"
+    )
+    assert order == ["hive-stack", "fontra-project-name", "hive-branch", "hive-chip"]
+    page.wait_for_function("document.querySelector('.hive-branch span:nth-child(2)')")
+    assert page.inner_text(".hive-branch").startswith("main")
+    assert "off-default" not in page.get_attribute(".hive-branch", "class")
+
+    page.click(".hive-branch")
+    page.wait_for_selector(".branch-row")
+    rows = menu_rows(page)
+    assert [r["name"] for r in rows] == ["main", "bold", "zoe/wide"]
+    assert [r["check"] for r in rows] == ["✓", "", ""]
+    assert rows[0]["text"] == "default branch · 2 min ago · Fabio Rossi"
+    assert rows[1]["text"] == "2 ahead · 1 behind main · 2 h ago · Ana López"
+    assert rows[2]["text"] == "nothing new · 3 behind main · 3 days ago · Zoé"
+    # Who is where: Fabio on main, Zoé on bold.
+    assert rows[0]["faces"] == ["FR"] and rows[1]["faces"] == ["ZO"]
+    # A designer deletes the branches they made, not the others'.
+    assert [r["del"] for r in rows] == [None, True, None]
+    # The same pill closes it; the user chip opens its own menu instead.
+    page.click(".hive-branch")
+    assert page.evaluate("document.querySelector('.hive-menu')") is None
+    page.click(".hive-branch")
+    page.wait_for_selector(".branch-row")
+    page.click(".hive-chip")
+    assert page.evaluate("document.querySelector('.branch-row')") is None
+    assert "Sign out" in page.inner_text(".hive-menu")
+    page.mouse.click(5, 300)
+
+    # Another branch: the same page, with only the project changed.
+    page.evaluate("history.replaceState(null, '', location.href + '&text=AB#x')")
+    page.click(".hive-branch")
+    page.wait_for_selector(".branch-row")
+    page.click(".branch-row[data-branch='bold']")
+    page.wait_for_url("**project=Mutator%40bold**")
+    assert page.url.endswith("/editor.html?project=Mutator%40bold&text=AB#x")
+    assert page.errors == []
+    page.close()
+
+
+def test_managers_delete_any_branch_but_not_the_one_open(browser_and_url):
+    page = open_page(browser_and_url, data=branch_data(can_delete=True))
+    page.click(".hive-branch")
+    page.wait_for_selector(".branch-row")
+    # main: never; zoe/wide: someone has it open.
+    assert [r["del"] for r in menu_rows(page)] == [None, True, False]
+    page.close()
+
+
+def test_off_the_default_branch(browser_and_url):
+    page = open_page(browser_and_url, project="Mutator@bold", data=branch_data())
+    start_hive(page, "Mutator · bold")  # what Fontra writes off the default branch
+    page.wait_for_function(
+        "document.querySelectorAll('.hive-branch.off-default').length === 2"
+    )
+    # Fontra's name no longer repeats the branch: the pill says it.
+    names = page.evaluate(
+        "[...document.querySelectorAll('#fontra-project-name')].map(e => e.textContent)"
+    )
+    assert names[-1] == "Mutator"
+    beat = page.evaluate("calls.filter(c => c.path.endsWith('/presence')).pop()")
+    assert beat["body"]["branch"] == "bold"
+    page.close()
+
+
+def test_new_branch_dialog(browser_and_url):
+    page = open_page(browser_and_url, data=branch_data())
+    page.wait_for_function("hive.branches")
+    page.click(".hive-branch")
+    page.wait_for_selector(".branch-row")
+    page.click("text=New branch…")
+    page.wait_for_selector(
+        "select[aria-label='Start from'] option:nth-child(2)", state="attached"
+    )
+    options = page.evaluate(
+        "[...document.querySelectorAll('select[aria-label=\"Start from\"] option')]"
+        ".map(o => [o.value, o.textContent])"
+    )
+    assert options[0] == ["main", "main, as it is now"]
+    assert options[1][0] == "snapshot/client-review"
+    assert options[1][1].startswith("Snapshot “Client review”")
+    create = ".hive-dialog button.blue"
+    assert page.is_disabled(create)
+    page.fill("input[aria-label='Branch name']", "a b")
+    assert page.is_disabled(create)
+    assert "letters" in page.inner_text(".hive-dialog .error")
+    # Keys typed there do not reach Fontra's shortcuts.
+    page.evaluate(
+        "window.keys = 0; window.addEventListener('keydown', () => window.keys++)"
+    )
+    page.fill("input[aria-label='Branch name']", "")
+    page.type("input[aria-label='Branch name']", "taken")
+    assert page.evaluate("window.keys") == 0
+    page.click(create)
+    page.wait_for_function("document.querySelector('.hive-dialog .error').textContent")
+    assert "already a branch" in page.inner_text(".hive-dialog .error")
+    page.fill("input[aria-label='Branch name']", "ana/italic")
+    page.select_option("select[aria-label='Start from']", "snapshot/client-review")
+    page.press("input[aria-label='Branch name']", "Enter")
+    # Made: the page opens on the new branch.
+    page.wait_for_url("**project=Mutator%40ana%2Fitalic**")
+    page.close()
+
+
+def test_new_branch_request(browser_and_url):
+    page = open_page(browser_and_url, data=branch_data())
+    page.wait_for_function("hive.branches")
+    page.evaluate("hive.gotoBranch = (name) => { window.went = name; }")
+    page.evaluate("hive.openNewBranch()")
+    page.fill("input[aria-label='Branch name']", "ana/italic")
+    page.click(".hive-dialog button.blue")
+    page.wait_for_function("window.went")
+    assert page.evaluate("window.went") == "ana/italic"
+    post = page.evaluate(
+        "calls.find(c => c.method === 'POST' && c.path.endsWith('/branches'))"
+    )
+    assert post["query"] == {"name": "ana/italic", "from": "main"}
+    assert page.evaluate("document.querySelector('.hive-dialog')") is None
+    page.close()
+
+
+def test_delete_branch_dialog(browser_and_url):
+    page = open_page(browser_and_url, data=branch_data())
+    page.click(".hive-branch")
+    page.wait_for_selector(".branch-row")
+    page.click(".branch-row[data-branch='bold'] button.delete")
+    text = page.inner_text(".hive-dialog")
+    assert "Delete the branch “bold”?" in text
+    assert "2 of its changes are not in main" in text and "archive/bold" in text
+    page.click(".hive-dialog button.red")
+    page.wait_for_function("!document.querySelector('.hive-dialog')")
+    deleted = page.evaluate("calls.find(c => c.method === 'DELETE')")
+    assert deleted["path"] == "/api/hive/projects/Mutator/branches"
+    assert deleted["query"] == {"branch": "bold"}
+    assert page.errors == []
+    page.close()
+
+
+def test_branch_helpers(browser_and_url):
+    page = open_page(browser_and_url)
+    result = page.evaluate("""() => {
+        const m = window.hiveModule;
+        const now = 1790000000;
+        return {
+          url: [
+            m.branchURL('http://x/editor.html?project=o%2Fp%40old&text=A', 'o/p', 'new', 'main'),
+            m.branchURL('http://x/fontoverview.html?project=o%2Fp%40old', 'o/p', 'main', 'main'),
+          ],
+          times: [5, 600, 3 * 3600, 30 * 3600, 5 * 86400].map((d) => m.timeAgo(now - d, now)),
+          compare: [m.compareWithDefault({isDefault: false, ahead: 3, behind: 0}, 'main'),
+                    m.compareWithDefault({isDefault: false, ahead: 0, behind: 0}, 'main')],
+          names: ['bold', 'ana/italic', '', 'a b', 'a..b', 'archive/x', 'x/']
+            .map(m.branchNameProblem),
+        };
+      }""")
+    assert result["url"] == [
+        "http://x/editor.html?project=o%2Fp%40new&text=A",
+        "http://x/fontoverview.html?project=o%2Fp",
+    ]
+    assert result["times"] == [
+        "just now",
+        "10 min ago",
+        "3 h ago",
+        "yesterday",
+        "5 days ago",
+    ]
+    assert result["compare"] == ["3 ahead of main", "same as main"]
+    names = result["names"]
+    assert names[:2] == [None, None] and all(names[2:])
     page.close()

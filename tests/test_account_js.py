@@ -26,7 +26,7 @@ window.fetch = async (url, options = {}) => {
   const path = parsed.pathname;
   const method = options.method || "GET";
   const body = options.body ? JSON.parse(options.body) : null;
-  window.calls.push({ method, path, body });
+  window.calls.push({ method, path, body, query: parsed.search });
   const [status, data] = window.answers[`${method} ${path}${parsed.search}`] ||
     window.answers[`${method} ${path}`] || [404, { detail: "Not found." }];
   return new Response(data === null ? null : JSON.stringify(data), { status });
