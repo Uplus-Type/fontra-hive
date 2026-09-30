@@ -2,11 +2,15 @@
 answers Fontra's WebSocket calls from the demo font; the .fontra reader and
 writer (fontra-format.js) give back Fontra's own files; and, when Fontra's
 built client is installed, the real editor opens the demo, and a .fontra.zip
-opened in the browser is edited, kept across a reload and downloaded.
-Skipped without Playwright."""
+opened in the browser is edited, kept across a reload and downloaded. With
+Pyodide too ($HIVE_TEST_PYODIDE_DIR: an unpacked pyodide-core release), a
+designspace and a TrueType font are converted in the browser, and a font is
+downloaded as designspace + UFOs. Skipped without Playwright."""
 
+import asyncio
 import base64
 import http.server
+import os
 import io
 import json
 import pathlib
@@ -42,6 +46,9 @@ def _fontraClient():
     return None
 
 
+PYODIDE_DIR = os.environ.get("HIVE_TEST_PYODIDE_DIR")
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     """/hive/… from Hive's client folder; Fontra's pages with the try scripts
     (as tryViewHandler serves them); the rest from Fontra's client, if any."""
@@ -66,8 +73,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._send(BARE_PAGE.encode(), "text/html")
         if path == "/editor.html" and self.fontraClient:
             html = (self.fontraClient / "editor.html").read_text(encoding="utf-8")
-            return self._send(injectTryScripts(html).encode(), "text/html")
-        if path.startswith("/hive/"):
+            pyodide = "/hive/pyodide/" if PYODIDE_DIR else None
+            return self._send(injectTryScripts(html, pyodide).encode(), "text/html")
+        if path == "/hive/try/python.zip":
+            from fontra_hive import trybundle
+
+            return self._send(trybundle.bundle()[0], "application/zip")
+        if path.startswith("/hive/pyodide/") and PYODIDE_DIR:
+            file = pathlib.Path(PYODIDE_DIR) / path[len("/hive/pyodide/") :]
+        elif path.startswith("/hive/"):
             file = CLIENT_DIR / path[len("/hive/") :]
         elif path.startswith("/testdata/"):
             file = DATA_DIR / urllib.parse.unquote(path[len("/testdata/") :])
@@ -78,7 +92,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if file is None or not file.is_file():
             self.send_error(404)
             return
-        types = {".js": "text/javascript", ".wasm": "application/wasm"}
+        types = {
+            ".js": "text/javascript",
+            ".mjs": "text/javascript",
+            ".wasm": "application/wasm",
+        }
         contentType = types.get(file.suffix) or self.guess_type(str(file))
         self._send(file.read_bytes(), contentType)
 
@@ -340,8 +358,9 @@ def test_a_local_font_is_kept_edited_and_downloaded(server, browser, tmp_path):
     assert kept == edited
     assert json.loads(before)["layers"] != json.loads(kept)
 
+    page.get_by_role("button", name="Download").click()
     with page.expect_download() as info:
-        page.get_by_role("button", name="Download").click()
+        page.get_by_role("menuitem", name=".fontra (zipped)").click()
     download = info.value
     assert download.suggested_filename == "Mutator.fontra.zip"
     with zipfile.ZipFile(download.path()) as z:
@@ -349,5 +368,117 @@ def test_a_local_font_is_kept_edited_and_downloaded(server, browser, tmp_path):
         assert "Mutator.fontra/font-data.json" in names
         glyph = json.loads(z.read("Mutator.fontra/glyphs/A^1.json"))
         assert "contours" in next(iter(glyph["layers"].values()))["glyph"]["path"]
+    assert not errors
+    context.close()
+
+
+def _designspaceZip(tmp_path) -> pathlib.Path:
+    """The fixture as a designspace with its UFOs, zipped, made by Fontra."""
+    backends = pytest.importorskip("fontra.backends.designspace")
+    from contextlib import aclosing
+
+    from fontra.backends.copy import copyFont
+    from fontra.backends.fontra import FontraBackend
+
+    folder = tmp_path / "Mutator"
+    folder.mkdir()
+
+    async def convert():
+        source = FontraBackend.fromPath(FIXTURE)
+        path = folder / "Mutator.designspace"
+        dest = backends.DesignspaceBackend.createFromPath(path)
+        async with aclosing(source), aclosing(dest):
+            await copyFont(source, dest)
+
+    # In a thread: Playwright's sync API keeps an event loop in this one.
+    worker = threading.Thread(target=asyncio.run, args=(convert(),))
+    worker.start()
+    worker.join()
+    archive = tmp_path / "Mutator.zip"
+    with zipfile.ZipFile(archive, "w") as z:
+        for path in sorted(folder.rglob("*")):
+            if path.is_file():
+                z.write(path, path.relative_to(tmp_path).as_posix())
+    return archive
+
+
+def _smallTTF(tmp_path) -> pathlib.Path:
+    from fontTools.fontBuilder import FontBuilder
+    from fontTools.pens.ttGlyphPen import TTGlyphPen
+
+    fb = FontBuilder(1000, isTTF=True)
+    fb.setupGlyphOrder([".notdef", "O"])
+    fb.setupCharacterMap({ord("O"): "O"})
+    pen = TTGlyphPen(None)
+    pen.moveTo((100, 0))
+    pen.lineTo((500, 0))
+    pen.lineTo((500, 700))
+    pen.lineTo((100, 700))
+    pen.closePath()
+    fb.setupGlyf({".notdef": TTGlyphPen(None).glyph(), "O": pen.glyph()})
+    fb.setupHorizontalMetrics({".notdef": (600, 0), "O": (600, 100)})
+    fb.setupHorizontalHeader(ascent=800, descent=-200)
+    fb.setupNameTable({"familyName": "Tiny", "styleName": "Regular"})
+    fb.setupOS2()
+    fb.setupPost()
+    path = tmp_path / "Tiny.ttf"
+    fb.save(str(path))
+    return path
+
+
+def test_other_formats_are_converted_in_the_browser(server, browser, tmp_path):
+    if Handler.fontraClient is None:
+        pytest.skip("Fontra's built client is not installed")
+    if not PYODIDE_DIR:
+        pytest.skip("$HIVE_TEST_PYODIDE_DIR is not set (an unpacked pyodide-core)")
+    designspace = _designspaceZip(tmp_path)
+    context = browser.new_context(
+        viewport={"width": 1400, "height": 850}, accept_downloads=True
+    )
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.goto(f"{server}/editor.html?{TRY_PAGE_QUERY}")
+
+    # A designspace with its UFOs, zipped: converted by Fontra in Pyodide.
+    page.get_by_role("button", name="Your fonts").click()
+    page.locator(".hive-try-panel input[accept]").set_input_files(str(designspace))
+    page.wait_for_url("**project=local*", timeout=90000)
+    page.wait_for_function("window.editorController?.fontController?.glyphMap?.A")
+    glyphs = page.evaluate("Object.keys(editorController.fontController.glyphMap)")
+    assert set(glyphs) == {"A", "A.alt", "B"}
+
+    # Downloaded as designspace + UFOs, converted back in Pyodide.
+    page.get_by_role("button", name="Download").click()
+    with page.expect_download(timeout=60000) as info:
+        page.get_by_role("menuitem", name="Designspace + UFOs (zipped)").click()
+    download = info.value
+    assert download.suggested_filename == "Mutator.designspace.zip"
+    with zipfile.ZipFile(download.path()) as z:
+        names = z.namelist()
+    assert "Mutator.designspace" in names
+    assert any(n.endswith(".ufo/glyphs/A_.glif") for n in names)
+
+    # A TrueType font.
+    page.get_by_role("button", name="Your fonts").click()
+    before = page.url
+    page.locator(".hive-try-panel input[accept]").set_input_files(
+        str(_smallTTF(tmp_path))
+    )
+    page.wait_for_function(f"location.href !== {json.dumps(before)}", timeout=60000)
+    page.wait_for_function("window.editorController?.fontController?.glyphMap?.O")
+    assert page.locator(".hive-try .name").inner_text() == "Tiny"
+
+    # Not a font: said plainly.
+    page.get_by_role("button", name="Your fonts").click()
+    bad = tmp_path / "notes.zip"
+    with zipfile.ZipFile(bad, "w") as z:
+        z.writestr("notes.txt", "hello")
+    page.locator(".hive-try-panel input[accept]").set_input_files(str(bad))
+    page.wait_for_function(
+        "document.querySelector('.hive-try-panel .error').textContent.length > 0",
+        timeout=30000,
+    )
+    assert "No font found" in page.locator(".hive-try-panel .error").inner_text()
     assert not errors
     context.close()

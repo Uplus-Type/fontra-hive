@@ -477,8 +477,24 @@ scripts at the start of `<head>` and a notice at the end of `<body>`
   one `.fontra` package per font, written through `try-opfs-worker.js`
   (Safari only writes there from a worker).
 - `try-banner.js`: the bar at the bottom (name, save state, "Your fonts",
-  "Download", "Keep a copy" of the demo) and the "Your fonts" panel: open a
-  `.fontra.zip` or a `.fontra` folder, open, delete.
+  "Download" as `.fontra` or designspace + UFOs, "Keep a copy" of the demo)
+  and the "Your fonts" panel: open a file or a folder, open, delete.
+- `try-python-worker.js`: Python in the browser (Pyodide), loaded on first
+  use, for every format but `.fontra`: UFO, designspace with its UFOs,
+  TrueType/OpenType/WOFF/TTX in; designspace + UFOs out. It runs the same
+  code as the server: Fontra's backends and Hive's `importer` and `export`,
+  sent as `/hive/try/python.zip` (`fontra_hive/trybundle.py`: the pure-Python
+  packages of this server's environment, stand-ins for `aiohttp`,
+  `watchfiles` and two functions of `ufo2ft`, and an `entry_points.txt` of the
+  backends that work in the browser; `client/try/py/hive_try_convert.py`).
+
+Pyodide itself comes from the jsDelivr CDN by default. To host it here
+(recommended: no third party sees the visitors, and it works behind a strict
+Content-Security-Policy), unpack a `pyodide-core` release (314.0.7, from
+<https://github.com/pyodide/pyodide/releases>) and set
+`HIVE_PYODIDE_DIR=/path/to/pyodide`: the server then serves it at
+`/hive/pyodide/` and tells the page so. `HIVE_PYODIDE_URL` points the page
+elsewhere. Only the core is needed: every package comes in `python.zip`.
 
 The demo (`demo-font.json`: MutatorSans, BSD licence, see
 `MUTATORSANS-LICENSE.txt`) is not saved; a reload starts over. A font the
@@ -490,9 +506,10 @@ Fontra is changed or rebuilt: the pages are Fontra's own.
 Limits for now: two windows on the same font do not see each other's edits
 live (the last write wins, file by file); what Fontra asks its server over
 HTTP (`/api/unionPath` and the other path operations, `parseClipboard`) is
-not answered, so Remove overlap and pasting from other apps fail; only the
-`.fontra` format (UFO, Glyphs, designspace and compiled fonts come next,
-through Pyodide and fontc).
+not answered, so Remove overlap and pasting from other apps fail; Glyphs files are not
+read (glyphsLib needs openstep_plist, compiled code), and there is no
+compiled font download (fontc in WebAssembly, later). The first conversion
+loads about 15 MB (Pyodide and `python.zip`), cached by the browser after.
 
 To change the demo font: convert a font to `.fontra` with Fontra
 (`fontra-copy`), then write the JSON with the same calls as the engine
@@ -520,6 +537,15 @@ against a real hive-api (a Django development server started by the test,
 from `$HIVE_API_DIR` or a `hive-api` checkout next to this one): sign-in
 through the relay, roles, repository creation, the shared handler per role,
 cross-site refusal, sign-out, sign-up by invitation. Skipped without it.
+
+`tests/test_try.py` and `tests/test_try_js.py` cover "Try Fontra": the
+routes and the Python bundle; the engine, the `.fontra` reader and writer
+(byte for byte against the fixture and Fontra's file names), and, with
+Fontra's built client installed, the real editor on the demo and on a font
+opened, edited, reloaded and downloaded. With
+`HIVE_TEST_PYODIDE_DIR=/path/to/pyodide` (an unpacked `pyodide-core`), a
+designspace and a TrueType font are converted in the browser and a font is
+downloaded as designspace + UFOs.
 
 `tests/test_account_js.py` runs the sign-in and invitation pages and the
 hive-api Share dialog in a headless Chromium, like the next one.

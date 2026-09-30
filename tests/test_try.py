@@ -109,4 +109,79 @@ def test_demo_font_and_its_licence():
     licence = (TRY_DIR / "MUTATORSANS-LICENSE.txt").read_text(encoding="utf-8")
     assert "LettError" in licence and "Redistribution" in licence
     for name in TRY_DIR.iterdir():
-        assert name.suffix[1:] in CLIENT_CONTENT_TYPES, name.name
+        if name.is_file():
+            assert name.suffix[1:] in CLIENT_CONTENT_TYPES, name.name
+
+
+def test_python_bundle_for_the_browser():
+    """What "Try Fontra" runs in Pyodide: pure Python, Fontra's backends found
+    through entry points, stand-ins for what the browser does not have."""
+    import io
+    import zipfile
+
+    from fontra_hive import trybundle
+
+    data = trybundle.buildBundle()
+    assert len(data) < 8 * 1024 * 1024
+    archive = zipfile.ZipFile(io.BytesIO(data))
+    names = set(archive.namelist())
+    assert "hive_try_convert.py" in names
+    assert "fontra/backends/designspace.py" in names
+    assert "fontra_hive/importer.py" in names and "fontra_hive/export.py" in names
+    assert "fontTools/ufoLib/__init__.py" in names and "ufoLib2/__init__.py" in names
+    assert "aiohttp/__init__.py" in names and "watchfiles/__init__.py" in names
+    assert not any(n.endswith((".so", ".pyd", ".pyc")) for n in names)
+    clients = ("fontra/client/", "fontra_hive/client/")
+    assert not any(n.startswith(clients) for n in names)
+    entryPoints = archive.read(f"{trybundle.DIST_INFO}/entry_points.txt").decode()
+    assert "[fontra.filesystem.backends]" in entryPoints
+    assert "designspace = fontra.backends.designspace:DesignspaceBackend" in entryPoints
+    assert "glyphs" not in entryPoints  # not readable in the browser (yet)
+
+
+def test_pyodide_is_served_here(manager, tmp_path, monkeypatch):  # noqa: F811
+    from fontra_hive.projectmanager import pyodideURL
+
+    async def go():
+        get = lambda name: manager.pyodideHandler(  # noqa: E731
+            SimpleNamespace(match_info={"name": name}, headers={})
+        )
+        monkeypatch.delenv("HIVE_PYODIDE_DIR", raising=False)
+        monkeypatch.delenv("HIVE_PYODIDE_URL", raising=False)
+        assert pyodideURL() is None
+        with pytest.raises(web.HTTPNotFound):
+            await get("pyodide.mjs")
+        page = (await manager.viewHandler(request(TRY_PROJECT), view="editor")).text
+        assert "hive-pyodide" not in page  # the page's default: the CDN
+
+        (tmp_path / "pyodide.asm.wasm").write_bytes(b"\0asm")
+        (tmp_path / "secret.txt").write_text("x")
+        monkeypatch.setenv("HIVE_PYODIDE_DIR", str(tmp_path))
+        assert pyodideURL() == "/hive/pyodide/"
+        response = await get("pyodide.asm.wasm")
+        assert response.headers["Content-Type"] == "application/wasm"
+        for name in ("secret.txt", "../x.wasm", ".hidden.js", "missing.mjs"):
+            with pytest.raises(web.HTTPNotFound):
+                await get(name)
+        page = (await manager.viewHandler(request(TRY_PROJECT), view="editor")).text
+        assert page.index('name="hive-pyodide" content="/hive/pyodide/"') < page.index(
+            "try-engine.js"
+        )
+        monkeypatch.delenv("HIVE_PYODIDE_DIR")
+        monkeypatch.setenv("HIVE_PYODIDE_URL", "https://example.org/py/")
+        assert pyodideURL() == "https://example.org/py/"
+
+    asyncio.run(go())
+
+
+def test_python_bundle_route(manager):  # noqa: F811
+    async def go():
+        response = await manager.pythonBundleHandler(SimpleNamespace(headers={}))
+        assert response.content_type == "application/zip"
+        etag = response.headers["ETag"]
+        with pytest.raises(web.HTTPNotModified):
+            await manager.pythonBundleHandler(
+                SimpleNamespace(headers={"If-None-Match": etag})
+            )
+
+    asyncio.run(go())

@@ -22,8 +22,10 @@ import dataclasses
 import hashlib
 import json
 import logging
+import os
 import time
 from functools import partial
+from html import escape as html_escape
 from urllib.parse import quote
 import pathlib
 import re
@@ -248,7 +250,40 @@ class DevHiveProjectManager(CommentRoutesMixin):
             text = self.fontraClientFile(f"{view}.html").read_text(encoding="utf-8")
         except FileNotFoundError:
             raise web.HTTPNotFound()
-        return _htmlResponse(injectTryScripts(text))
+        return _htmlResponse(injectTryScripts(text, pyodideURL()))
+
+    async def pythonBundleHandler(self, request: web.Request) -> web.Response:
+        """/hive/try/python.zip: the Python "Try Fontra" runs in the browser
+        (fontra_hive.trybundle), built once from this server's packages."""
+        from . import trybundle
+
+        data, etag = await asyncio.get_running_loop().run_in_executor(
+            None, trybundle.bundle
+        )
+        headers = {"Cache-Control": "no-cache", "ETag": etag}
+        if request.headers.get("If-None-Match") == etag:
+            raise web.HTTPNotModified(headers=headers)
+        return web.Response(body=data, content_type="application/zip", headers=headers)
+
+    async def pyodideHandler(self, request: web.Request) -> web.Response:
+        """/hive/pyodide/<file>: Pyodide, when this server hosts it
+        ($HIVE_PYODIDE_DIR, the unpacked pyodide-core release); else 404 and
+        the page takes it from the CDN."""
+        folder = os.environ.get("HIVE_PYODIDE_DIR")
+        name = request.match_info.get("name", "")
+        if not folder or not re.fullmatch(r"[A-Za-z0-9_.-]+", name) or name[0] == ".":
+            raise web.HTTPNotFound()
+        path = pathlib.Path(folder) / name
+        contentType = PYODIDE_CONTENT_TYPES.get(path.suffix.lower())
+        if contentType is None or not path.is_file():
+            raise web.HTTPNotFound()
+        return web.FileResponse(
+            path,
+            headers={
+                "Content-Type": contentType,
+                "Cache-Control": "public, max-age=86400",
+            },
+        )
 
     async def tryHandler(self, request: web.Request) -> web.Response:
         """/try: the demo editor, with a line of text to start from."""
@@ -519,6 +554,8 @@ class DevHiveProjectManager(CommentRoutesMixin):
                 for view in FONTRA_VIEWS
             ),
             web.get("/try", self.tryHandler),
+            web.get("/hive/try/python.zip", self.pythonBundleHandler),
+            web.get("/hive/pyodide/{name}", self.pyodideHandler),
             web.get("/hive/{path:.*}", self.clientFileHandler),
             web.get("/favicon.ico", self.faviconHandler),
             web.get("/api/hive/me", self.meHandler),
@@ -1655,6 +1692,24 @@ TRY_HEAD_SCRIPT = (
 TRY_BODY_SCRIPT = '<script type="module" src="/hive/try/try-banner.js"></script>'
 
 
+# Pyodide (Python in the browser) for "Try Fontra": hosted here when
+# $HIVE_PYODIDE_DIR is set, else $HIVE_PYODIDE_URL, else the page's default
+# (the jsDelivr CDN, see try-engine.js).
+PYODIDE_CONTENT_TYPES = {
+    ".mjs": "text/javascript",
+    ".js": "text/javascript",
+    ".wasm": "application/wasm",
+    ".zip": "application/zip",
+    ".json": "application/json",
+}
+
+
+def pyodideURL() -> str | None:
+    if os.environ.get("HIVE_PYODIDE_DIR"):
+        return "/hive/pyodide/"
+    return os.environ.get("HIVE_PYODIDE_URL") or None
+
+
 def _isTryRequest(request, view: str) -> bool:
     query = getattr(request, "query", None) or {}
     project = query.get("project") or ""
@@ -1664,14 +1719,20 @@ def _isTryRequest(request, view: str) -> bool:
     )
 
 
-def injectTryScripts(html: str) -> str:
+def injectTryScripts(html: str, pyodide: str | None = None) -> str:
     """Fontra's page for "Try Fontra": the demo engine first in <head> (it
     must replace the WebSocket before Fontra's modules run), Hive's icons,
-    and the notice at the end of <body>. None of Hive's own scripts."""
+    and the notice at the end of <body>. None of Hive's own scripts.
+    ``pyodide``: where the page loads Pyodide from, if not its default."""
     lower = html.lower()
     head = lower.find("<head>")
     cut = head + len("<head>") if head != -1 else 0
-    html = html[:cut] + TRY_HEAD_SCRIPT + HIVE_ICON_LINKS + html[cut:]
+    meta = (
+        f'<meta name="hive-pyodide" content="{html_escape(pyodide, quote=True)}">'
+        if pyodide
+        else ""
+    )
+    html = html[:cut] + meta + TRY_HEAD_SCRIPT + HIVE_ICON_LINKS + html[cut:]
     body = html.lower().rfind("</body>")
     if body == -1:
         return html + TRY_BODY_SCRIPT

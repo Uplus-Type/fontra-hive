@@ -169,28 +169,115 @@
   }
 
   // The font as a .fontra package, zipped (after pending writes).
-  async function download() {
-    await flush();
-    var font = await loadFont();
-    var name = (projectName || "font").replace(/ \(demo\)$/, "");
-    var stem = name.replace(/[\\/:*?"<>|]/g, "_") || "font";
+  function download() {
+    return downloadAs("fontra");
+  }
+
+  // ---- Python in the browser (try-python-worker.js), on first use ----
+
+  var DEFAULT_PYODIDE = "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/";
+  var pythonWorker = null;
+  var pythonCalls = {};
+  var pythonId = 1;
+
+  function pyodideBase() {
+    var meta = document.querySelector('meta[name="hive-pyodide"]');
+    var base = (meta && meta.content) || DEFAULT_PYODIDE;
+    return new URL(base.endsWith("/") ? base : base + "/", location.href).href;
+  }
+
+  // op: "toFontra" | "toDesignspaceZip"; onProgress(text) is optional.
+  function python(op, payload, transfer, onProgress) {
+    if (!pythonWorker) {
+      pythonWorker = new Worker("/hive/try/try-python-worker.js", { type: "module" });
+      pythonWorker.onmessage = function (event) {
+        var reply = event.data;
+        var call = pythonCalls[reply.id];
+        if (!call) return;
+        if (reply.progress) {
+          if (call.onProgress) call.onProgress(reply.progress);
+          return;
+        }
+        delete pythonCalls[reply.id];
+        if (reply.error) call.reject(new Error(reply.error));
+        else call.resolve(reply);
+      };
+    }
+    return new Promise(function (resolve, reject) {
+      var id = pythonId++;
+      pythonCalls[id] = { resolve: resolve, reject: reject, onProgress: onProgress };
+      var message = Object.assign({ id: id, op: op, base: pyodideBase() }, payload);
+      pythonWorker.postMessage(message, transfer || []);
+    });
+  }
+
+  // A picked file (or a zip made of a picked folder) as .fontra files.
+  async function convertToFontra(name, blob, onProgress) {
+    var data = await blob.arrayBuffer();
+    var reply = await python("toFontra", { name: name, data: data }, [data], onProgress);
     var files = new Map();
-    Format.writePackage(font).forEach(function (data, rel) {
-      files.set(stem + ".fontra/" + rel, data);
+    reply.files.forEach(function (entry) {
+      files.set("converted.fontra/" + entry[0], new Blob([entry[1]]));
     });
-    images.forEach(function (blob, fileName) {
-      files.set(stem + ".fontra/" + Format.IMAGES_DIR + fileName, blob);
-    });
-    var blob = await Format.zip(files);
+    return files;
+  }
+
+  function fileStem() {
+    var name = (projectName || "font").replace(/ \(demo\)$/, "");
+    return name.replace(/[\\/:*?"<>|]/g, "_") || "font";
+  }
+
+  function saveBlob(blob, fileName) {
     var link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = stem + ".fontra.zip";
+    link.download = fileName;
     document.body.append(link);
     link.click();
     link.remove();
     setTimeout(function () {
       URL.revokeObjectURL(link.href);
     }, 10000);
+  }
+
+  async function packageFiles() {
+    await flush();
+    var font = await loadFont();
+    var files = Format.writePackage(font);
+    images.forEach(function (blob, fileName) {
+      files.set(Format.IMAGES_DIR + fileName, blob);
+    });
+    return files;
+  }
+
+  // format: "fontra" (zipped package) | "designspace" (zipped, with UFOs).
+  async function downloadAs(format, onProgress) {
+    var stem = fileStem();
+    var files = await packageFiles();
+    if (format === "designspace") {
+      var entries = [];
+      var transfer = [];
+      for (var [path, data] of files) {
+        var buffer = await (typeof data === "string"
+          ? new Blob([data])
+          : data
+        ).arrayBuffer();
+        entries.push([path, buffer]);
+        transfer.push(buffer);
+      }
+      var reply = await python(
+        "toDesignspaceZip",
+        { stem: stem, files: entries },
+        transfer,
+        onProgress
+      );
+      saveBlob(new Blob([reply.data], { type: "application/zip" }), stem + ".designspace.zip");
+      return;
+    }
+    var zipped = new Map();
+    files.forEach(function (data, rel) {
+      zipped.set(stem + ".fontra/" + rel, data);
+    });
+    saveBlob(await Format.zip(zipped), stem + ".fontra.zip");
   }
 
   // Keep the current font (the demo, edits included) in this browser.
@@ -540,6 +627,9 @@
     },
     flush: flush,
     download: download,
+    downloadAs: downloadAs,
+    convertToFontra: convertToFontra,
+    python: python,
     saveCopy: saveCopy,
     format: Format,
     store: Store,

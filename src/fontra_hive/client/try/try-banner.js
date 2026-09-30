@@ -1,6 +1,9 @@
 // Fontra Hive, "Try Fontra": the bar at the bottom of the editor, and the
-// "Your fonts" panel: open a .fontra package (zipped, or a folder), keep it
-// in this browser, download it, delete it; or go back to the demo font.
+// "Your fonts" panel: open a font (.fontra, UFO, designspace with its UFOs,
+// TrueType/OpenType; a file, a .zip or a folder), keep it in this browser,
+// download it (.fontra, or designspace + UFOs), delete it; or go back to the
+// demo font. .fontra is read in JavaScript; other formats by Fontra's own
+// Python code, in the browser (try-python-worker.js).
 // Loaded at the end of <body>; the engine is try-engine.js.
 //
 // Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
@@ -53,6 +56,16 @@ const STYLE = `
 .hive-try-panel .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 6px; }
 .hive-try-panel .error { color: #ff8a80; min-height: 1.2em; }
 .hive-try-panel .top { display: flex; justify-content: space-between; align-items: start; gap: 8px; }
+.hive-try-menu {
+  position: fixed; z-index: 1002; display: flex; flex-direction: column; gap: 4px; padding: 6px;
+  background: #222; border-radius: 12px; box-shadow: 0 6px 24px rgba(0,0,0,.35);
+  font: 13px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+.hive-try-menu button {
+  font: inherit; text-align: left; color: #f4f1ea; background: transparent; border: 0;
+  border-radius: 8px; padding: 6px 10px; cursor: pointer; white-space: nowrap;
+}
+.hive-try-menu button:hover { background: #3a3a3a; }
 `;
 
 const DEMO_URL = "/editor.html?project=demo%3AMutatorSans&text=%22HAMBURGEFONSTIV%22";
@@ -95,27 +108,65 @@ function when(iso) {
   }
 }
 
-// Files the visitor picked: a .zip, or the files of a folder.
-async function filesFromPick(fileList) {
+const FONT_FILES = /\.(ttf|otf|woff2?|ttx)$/i;
+
+function hasFontra(paths) {
+  return paths.some((p) => p.split("/").pop() === "font-data.json");
+}
+
+function stemOf(name) {
+  return name.replace(/\.zip$/i, "").replace(/\.(fontra|ufo|designspace|ttf|otf|woff2?|ttx)$/i, "");
+}
+
+// What the visitor picked, as the files of a .fontra package, and a name
+// for it: read here for .fontra, converted by Python for anything else.
+async function packageFromPick(fileList, onProgress) {
   const Format = window.HiveTryFormat;
+  const tryAPI = window.hiveTry;
   const picked = [...fileList];
-  if (picked.length === 1 && /\.zip$/i.test(picked[0].name)) {
-    return { files: await Format.unzip(picked[0]), label: picked[0].name.replace(/\.zip$/i, "") };
+  if (!picked.length) throw new Error("Nothing was picked.");
+  if (picked.length === 1 && !picked[0].webkitRelativePath) {
+    const file = picked[0];
+    if (/\.zip$/i.test(file.name)) {
+      const files = await Format.unzip(file);
+      if (hasFontra([...files.keys()])) return { files, label: stemOf(file.name) };
+      return { files: await tryAPI.convertToFontra(file.name, file, onProgress), label: stemOf(file.name) };
+    }
+    if (FONT_FILES.test(file.name)) {
+      return { files: await tryAPI.convertToFontra(file.name, file, onProgress), label: stemOf(file.name) };
+    }
+    if (/\.designspace$/i.test(file.name)) {
+      throw new Error("A designspace needs its UFOs: open the folder that holds them, or a .zip of it.");
+    }
+    if (/\.(glyphs|glyphspackage)$/i.test(file.name)) {
+      throw new Error("Glyphs files cannot be opened here yet.");
+    }
+    throw new Error("Open a .zip, a .ttf, .otf, .woff, .woff2 or .ttx file, or a folder.");
   }
+  // A folder: a .fontra package is read here; anything else is zipped and
+  // converted, the whole folder (a designspace needs its UFOs).
   const files = new Map();
   for (const file of picked) files.set(file.webkitRelativePath || file.name, file);
-  return { files, label: "" };
+  const folder = (picked[0].webkitRelativePath || "").split("/")[0] || "Font";
+  if (hasFontra([...files.keys()])) return { files, label: stemOf(folder) };
+  onProgress?.("Reading the folder…");
+  const zipped = await Format.zip(files);
+  return {
+    files: await tryAPI.convertToFontra(folder + ".zip", zipped, onProgress),
+    label: stemOf(folder),
+  };
 }
 
 function packageName(files, label) {
   const root = window.HiveTryFormat.findRoot([...files.keys()]);
-  const folder = root.replace(/\/$/, "").split("/").pop() || label || "Font";
-  return folder.replace(/\.fontra$/i, "").replace(/\.fontra$/i, "") || "Font";
+  const folder = root.replace(/\/$/, "").split("/").pop();
+  if (folder && folder !== "converted.fontra") return stemOf(folder) || label || "Font";
+  return label || "Font";
 }
 
-export async function importPicked(fileList) {
+export async function importPicked(fileList, onProgress) {
   const Format = window.HiveTryFormat;
-  const { files, label } = await filesFromPick(fileList);
+  const { files, label } = await packageFromPick(fileList, onProgress);
   const { font, images } = await Format.readPackage(files);
   const name = (font.fontInfo && font.fontInfo.familyName) || packageName(files, label);
   const normalized = Format.writePackage(font);
@@ -128,8 +179,13 @@ function openPanel() {
   const Store = window.HiveTryStore;
   const current = window.hiveTry?.localId;
   const error = el("p", { class: "error", role: "alert" });
+  const progress = el("p", { class: "note", role: "status" });
   const list = el("ul");
-  const fileInput = el("input", { type: "file", accept: ".zip,application/zip", hidden: "" });
+  const fileInput = el("input", {
+    type: "file",
+    accept: ".zip,.ttf,.otf,.woff,.woff2,.ttx,application/zip",
+    hidden: "",
+  });
   const folderInput = el("input", { type: "file", webkitdirectory: "", hidden: "" });
 
   const close = () => backdrop.remove();
@@ -140,12 +196,16 @@ function openPanel() {
 
   async function onPick(input) {
     if (!input.files.length) return;
-    error.textContent = "Opening…";
+    error.textContent = "";
+    progress.textContent = "Opening…";
     try {
-      const { id, text } = await importPicked(input.files);
+      const { id, text } = await importPicked(input.files, (text) => {
+        progress.textContent = text;
+      });
       go(editorURL(id, text));
     } catch (e) {
       console.error(e);
+      progress.textContent = "";
       error.textContent = e.message || String(e);
     } finally {
       input.value = "";
@@ -201,21 +261,35 @@ function openPanel() {
         el("h2", {}, "Your fonts in this browser"),
         el("button", { type: "button", class: "plain", onclick: close }, "Close")
       ),
-      el("p", {}, "Open a font in Fontra's format (.fontra), work on it, download it when you like. It never leaves your computer."),
+      el(
+        "p",
+        {},
+        "Open a font, work on it, download it when you like. It never leaves your computer: " +
+          "even converting a UFO or a TrueType font happens here, in your browser."
+      ),
       list,
       el(
         "div",
         { class: "actions" },
-        el("button", { type: "button", onclick: () => fileInput.click() }, "Open a .fontra.zip…"),
-        el("button", { type: "button", class: "plain", onclick: () => folderInput.click() }, "Open a .fontra folder…"),
+        el(
+          "button",
+          { type: "button", title: ".zip (of a .fontra, a UFO or a designspace with its UFOs), .ttf, .otf, .woff2", onclick: () => fileInput.click() },
+          "Open a file…"
+        ),
+        el(
+          "button",
+          { type: "button", class: "plain", title: "a .fontra, a .ufo, or the folder of a designspace and its UFOs", onclick: () => folderInput.click() },
+          "Open a folder…"
+        ),
         el("button", { type: "button", class: "plain", onclick: () => go(DEMO_URL) }, "Demo font")
       ),
+      progress,
       error,
       el(
         "p",
         { class: "note" },
-        "Fonts are kept by this browser only: clearing this site's data deletes them. Download a copy to keep it. " +
-          "Other formats (UFO, Glyphs, designspace) come next."
+        "Opens .fontra, UFO, designspace + UFOs, TrueType and OpenType (Glyphs files: not yet). " +
+          "Fonts are kept by this browser only: clearing this site's data deletes them. Download a copy to keep it."
       ),
       fileInput,
       folderInput
@@ -226,6 +300,36 @@ function openPanel() {
     error.textContent = "This browser cannot keep files for this site (private window?).";
   }
   fill();
+}
+
+function openDownloads(event, status) {
+  document.querySelector(".hive-try-menu")?.remove();
+  const tryAPI = window.hiveTry;
+  const run = async (format) => {
+    menu.remove();
+    const before = status.textContent;
+    try {
+      await tryAPI.downloadAs(format, (text) => (status.textContent = text));
+      status.textContent = before;
+    } catch (e) {
+      console.error(e);
+      status.classList.add("error");
+      status.textContent = "download failed: " + (e.message || e);
+    }
+  };
+  const menu = el(
+    "div",
+    { class: "hive-try-menu", role: "menu" },
+    el("button", { type: "button", role: "menuitem", onclick: () => run("fontra") }, ".fontra (zipped)"),
+    el("button", { type: "button", role: "menuitem", onclick: () => run("designspace") }, "Designspace + UFOs (zipped)")
+  );
+  const box = event.currentTarget.getBoundingClientRect();
+  menu.style.left = Math.max(8, box.left) + "px";
+  menu.style.bottom = window.innerHeight - box.top + 8 + "px";
+  document.body.append(menu);
+  setTimeout(() => {
+    document.addEventListener("click", () => menu.remove(), { once: true });
+  }, 0);
 }
 
 function start() {
@@ -255,7 +359,7 @@ function start() {
     name,
     status,
     el("button", { type: "button", class: "plain", onclick: openPanel }, "Your fonts"),
-    el("button", { type: "button", class: "plain extra", onclick: () => tryAPI.download() }, "Download"),
+    el("button", { type: "button", class: "plain extra", onclick: (event) => openDownloads(event, status) }, "Download"),
     isLocal ? null : keep,
     el("a", { href: "/", class: "extra" }, "Fontra Hive for teams"),
     el(
