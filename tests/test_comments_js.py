@@ -430,7 +430,9 @@ def test_what_a_reviewer_sees_on_someone_elses_topic(page):
     buttons = p.evaluate(
         "[...card().querySelectorAll('button')].map(b => b.textContent.trim())"
     )
-    assert "Resolve" not in buttons and "🗑" not in buttons
+    assert "Resolve" not in buttons
+    titles = p.evaluate("[...card().querySelectorAll('button')].map(b => b.title)")
+    assert "Delete this topic" not in titles
     # Her own reply: edit and delete; Bob's opening message: nothing.
     first, second = p.evaluate(
         "[...card().querySelectorAll('.message')].map(m => m.querySelector('.actions')"
@@ -469,7 +471,7 @@ def test_resolve_edit_and_delete(page):
     assert requests(p, "PATCH")[-1]["body"] == {"state": "resolved"}
     p.evaluate("window.confirm = () => true")
     p.evaluate(
-        "[...card().querySelectorAll('button')].find(b => b.textContent === '🗑').click()"
+        "[...card().querySelectorAll('button')].find(b => b.title === 'Delete this topic').click()"
     )
     p.wait_for_function("server.issues.length === 0")
     p.evaluate("frame()")

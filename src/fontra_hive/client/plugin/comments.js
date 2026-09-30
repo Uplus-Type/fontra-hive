@@ -146,6 +146,16 @@ const CARD_STYLES = `
     font-size: 15px;
     line-height: 1;
   }
+  .svg-icon {
+    display: inline-flex;
+    width: 16px;
+    height: 16px;
+    vertical-align: middle;
+  }
+  .svg-icon svg {
+    width: 100%;
+    height: 100%;
+  }
   .link {
     border: none;
     padding: 0;
@@ -433,6 +443,22 @@ function drawArguments(args) {
   if (args.length === 1 && args[0] && "context" in args[0]) return args[0];
   const [context, positionedGlyph, parameters, model, controller] = args;
   return { context, positionedGlyph, parameters, model, controller };
+}
+
+// "trash" from Tabler Icons (outline, MIT; see TABLER-ICONS-LICENSE.txt), the
+// icon set Fontra uses for its own panels.
+const TRASH_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" ' +
+  'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+  'stroke-linejoin="round"><path d="M4 7l16 0" /><path d="M10 11l0 6" />' +
+  '<path d="M14 11l0 6" /><path d="M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2 -2l1 -12" />' +
+  '<path d="M9 7v-3a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v3" /></svg>';
+
+function trashIcon() {
+  const span = document.createElement("span");
+  span.className = "svg-icon";
+  span.innerHTML = TRASH_SVG;
+  return span;
 }
 
 function stopKeys(element) {
@@ -1114,7 +1140,7 @@ export class HiveComments {
               disabled: this.busy,
               onclick: () => this.confirmDelete(issue),
             },
-            ["🗑"]
+            [trashIcon()]
           )
         : null,
       el("button", { class: "icon", title: "Close", onclick: () => this.close() }, ["×"]),

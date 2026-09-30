@@ -468,6 +468,7 @@ install chromium`) and is skipped otherwise.
 
 GPLv3, like Fontra. See `LICENSE`.
 
-The history panel's icon is `history` from [Tabler Icons](https://tabler.io/icons)
+The icons of the history and comments panels (`history`, `message-circle`)
+and the delete button of a comment (`trash`) are from [Tabler Icons](https://tabler.io/icons)
 (MIT License, see `src/fontra_hive/client/plugin/TABLER-ICONS-LICENSE.txt`),
 the icon set Fontra uses for its own panels.
