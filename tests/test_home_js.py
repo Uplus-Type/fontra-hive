@@ -343,3 +343,31 @@ def test_a_project_with_its_font_can_be_opened(browser_and_url):  # noqa: F811
     page.wait_for_function("calls.some(c => c.path.endsWith('/export'))")
     assert page.errors == []
     page.close()
+
+
+def test_empty_the_trash(browser_and_url):  # noqa: F811
+    page = open_home(
+        browser_and_url,
+        extra={
+            "DELETE /api/projects/uplustype/Old/permanently": [
+                200,
+                {"deleted": "uplustype/Old"},
+            ],
+            "POST /api/hive/sweep-deleted": [200, {"removed": []}],
+        },
+    )
+    page.wait_for_selector(".project-card")
+    page.click("details summary")
+    page.on("dialog", lambda dialog: dialog.accept())
+    page.click("text=Empty the trash")
+    page.wait_for_function("calls.some(c => c.path === '/api/hive/sweep-deleted')")
+    methods = page.evaluate(
+        "calls.filter(c => c.path.includes('permanently') || c.path.includes('sweep'))"
+        ".map(c => [c.method, c.path])"
+    )
+    assert methods == [
+        ["DELETE", "/api/projects/uplustype/Old/permanently"],
+        ["POST", "/api/hive/sweep-deleted"],
+    ]
+    assert page.errors == []
+    page.close()

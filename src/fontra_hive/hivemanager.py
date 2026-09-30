@@ -122,6 +122,19 @@ class HiveProjectManagerFactory:
         )
 
 
+SWEEP_INTERVAL = 15 * 60  # seconds
+
+
+def _isRepoName(repo: str) -> bool:
+    return (
+        repo.endswith(".git")
+        and len(repo) > 4
+        and "/" not in repo
+        and "\\" not in repo
+        and not repo.startswith(".")
+    )
+
+
 def splitIdentifier(identifier: str) -> tuple[str, str | None]:
     """``owner/name@branch`` -> ("owner/name", "branch"); no @: branch None."""
     name, at, branch = identifier.partition("@")
@@ -142,8 +155,12 @@ class HiveProjectManager(DevHiveProjectManager):
         self.directory = api  # accounts are on (the base class checks this)
         self.proxy = proxy
         self._proxySession: aiohttp.ClientSession | None = None
+        self._sweepLock = asyncio.Lock()
+        self._sweepTask: asyncio.Task | None = None
 
     async def aclose(self) -> None:
+        if self._sweepTask is not None:
+            self._sweepTask.cancel()
         await super().aclose()
         await self.api.aclose()
         if self._proxySession is not None:
@@ -199,7 +216,7 @@ class HiveProjectManager(DevHiveProjectManager):
 
     def _repoPathFor(self, projectAccess: ProjectAccess) -> pathlib.Path:
         repo = projectAccess.repo
-        if not repo.endswith(".git") or "/" in repo or repo.startswith("."):
+        if not _isRepoName(repo):
             raise web.HTTPInternalServerError(text="unexpected repository name")
         return self.rootPath / repo
 
@@ -240,6 +257,58 @@ class HiveProjectManager(DevHiveProjectManager):
                     raise
                 shutil.rmtree(building, ignore_errors=True)
         return path
+
+    # A project deleted for good in hive-api (from the trash) leaves its
+    # repository here: hive-api lists those, and we remove them, at start,
+    # every SWEEP_INTERVAL, and when the home page asks (right after a
+    # deletion). A repository still open (someone in the editor) waits for
+    # the next sweep. The nightly backups keep them for their retention time.
+
+    async def sweepDeletedRepositories(self) -> list[str]:
+        async with self._sweepLock:
+            try:
+                repos = await self.api.deletedRepositories()
+            except HiveApiUnavailable as error:
+                logger.warning("hive-api unavailable: %s", error)
+                return []
+            removed = []
+            for repo in repos:
+                if not isinstance(repo, str) or not _isRepoName(repo):
+                    logger.warning("not removing unexpected repository %r", repo)
+                    continue
+                path = self.rootPath / repo
+                if not path.is_dir():
+                    continue
+                if any(key.startswith(repo + "@") for key in self.fontHandlers):
+                    continue  # open: next time
+                trash = self.rootPath / f".deleted-{repo[:-4]}"
+                shutil.rmtree(trash, ignore_errors=True)
+                path.rename(trash)  # gone at once, even if the removal takes time
+                await asyncio.to_thread(shutil.rmtree, trash, ignore_errors=True)
+                logger.info("removed %s (project deleted)", path)
+                removed.append(repo)
+            return removed
+
+    async def _sweepPeriodically(self) -> None:
+        while True:
+            try:
+                await self.sweepDeletedRepositories()
+            except Exception:  # never stop sweeping
+                logger.exception("sweeping deleted repositories")
+            await asyncio.sleep(SWEEP_INTERVAL)
+
+    def setupWebRoutes(self, server) -> None:
+        super().setupWebRoutes(server)
+
+        async def startSweeping(app):
+            self._sweepTask = asyncio.create_task(self._sweepPeriodically())
+
+        server.httpApp.on_startup.append(startSweeping)
+
+    async def sweepHandler(self, request: web.Request) -> web.Response:
+        if await self.authorize(request) is None:
+            raise web.HTTPUnauthorized()
+        return web.json_response({"removed": await self.sweepDeletedRepositories()})
 
     async def repositoryHandler(self, request: web.Request) -> web.Response:
         """Whether the project has its repository yet, without creating it
@@ -382,6 +451,7 @@ class HiveProjectManager(DevHiveProjectManager):
             *(web.get(path, self.accountPageHandler) for path in ACCOUNT_PAGES),
             web.post("/api/hive/projects/{name}/import", self.importHandler),
             web.get("/api/hive/projects/{name}/repository", self.repositoryHandler),
+            web.post("/api/hive/sweep-deleted", self.sweepHandler),
             *self.projectRoutes(),
         ]
         if self.proxy:

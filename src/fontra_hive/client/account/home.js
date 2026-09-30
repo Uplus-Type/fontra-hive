@@ -196,12 +196,45 @@ async function projectsSection() {
               route();
             },
           }, ["Restore"]),
+          el("button", {
+            class: "danger",
+            onclick: () => deleteForGood([p.id]),
+          }, ["Delete"]),
         ])
       );
     }
+    details.append(
+      el("div", { class: "row", style: "margin:0.5em 0" }, [
+        el("span", { class: "grow" }),
+        el("button", {
+          class: "danger",
+          onclick: () => deleteForGood(trashed.map((p) => p.id)),
+        }, ["Empty the trash"]),
+      ])
+    );
     content.push(el("h3", {}, [""]), details);
   }
   main().replaceChildren(...content);
+}
+
+// Deleting for good, from the trash only: hive-api forgets the projects, then
+// the Fontra server removes their repositories (it also does so on its own
+// every few minutes). Only the nightly backups keep them after that.
+async function deleteForGood(ids, then = route) {
+  const what = ids.length === 1 ? ids[0] : `the ${ids.length} projects in the trash`;
+  if (!confirm(`Delete ${what} for good? The font and its whole history will be deleted. This cannot be undone.`)) return false;
+  try {
+    for (const id of ids) await call(`${hiveApiProjectPath(id)}/permanently`, undefined, "DELETE");
+  } catch (error) {
+    alert(error.message);
+  }
+  try {
+    await call("/api/hive/sweep-deleted");
+  } catch (error) {
+    // the server's own sweep will remove them
+  }
+  then();
+  return true;
 }
 
 async function newProjectSection() {
@@ -383,7 +416,13 @@ async function projectSection(projectId) {
       el("div", { class: "panel" }, [
         el("h3", { style: "margin-top:0" }, [project.trashed ? "In the trash" : "Trash"]),
         project.trashed
-          ? el("button", { onclick: async () => { await call(`${base}/restore`); route(); } }, ["Restore the project"])
+          ? el("div", { class: "row" }, [
+              el("button", { onclick: async () => { await call(`${base}/restore`); route(); } }, ["Restore the project"]),
+              el("button", {
+                class: "danger",
+                onclick: () => deleteForGood([project.id], () => (location.hash = "")),
+              }, ["Delete for good"]),
+            ])
           : el("button", {
               class: "danger",
               onclick: async () => {

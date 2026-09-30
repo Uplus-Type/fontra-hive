@@ -234,6 +234,11 @@ class HiveApi:
         data = await self._get("/api/internal/projects", user=uid)
         return (data or {}).get("projects", [])
 
+    async def deletedRepositories(self) -> list[str]:
+        """Repositories of projects deleted for good (to remove from disk)."""
+        data = await self._get("/api/internal/deleted-repositories")
+        return (data or {}).get("repositories", [])
+
     async def project(self, project: str) -> dict | None:
         """A project's id, repository and default branch (no user needed)."""
         return await self._get("/api/internal/project", project=project)
