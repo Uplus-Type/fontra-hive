@@ -491,8 +491,15 @@ Fontra's own.
   UFOs, Glyphs (`.glyphs`, `.glyphspackage`), TrueType/OpenType/WOFF/TTX
   in; `.fontra` or designspace + UFOs out.
 - `try-banner.js`: the bar at the bottom (name, save state, "Your fonts",
-  "Download", "Keep a copy") and the "Your fonts" panel (open a file or a
-  folder, open, delete).
+  "Keep a copy" on the demo, "Collaborate online" to Hive's home page) and
+  the "Your fonts" panel (open a file or a folder, open, delete). Fontra's
+  own File › Export as downloads the font (`.fontra` or designspace + UFOs,
+  zipped): the engine answers `exportAs` itself instead of the server.
+- One Python for all the tabs of the site (a `SharedWorker`, where the
+  browser has one): two windows on the same font are served by the same
+  server and see each other's edits as they happen; each tab holds a Web
+  Lock, and the worker closes a tab's connections when its lock is free.
+  Without `SharedWorker`, a worker per page.
 
 The Python comes as `/hive/try/python.zip` (`fontra_hive/trybundle.py`),
 built once from this server's environment: the pure-Python packages
@@ -517,8 +524,7 @@ Content-Security-Policy), unpack a `pyodide-core` release (314.0.7, from
 `HIVE_PYODIDE_URL` points the page elsewhere. Only the core is needed.
 
 Limits for now: no branches in the browser (the branch menu belongs to
-Hive's page script, which needs accounts); two windows on the same font
-share one server in each window's worker, not live with each other; what
+Hive's page script, which needs accounts); what
 Fontra asks its server over HTTP (`/api/unionPath` and the other path
 operations, `parseClipboard`) is not answered, so Remove overlap and
 pasting from other apps fail; no compiled font download (fontc in

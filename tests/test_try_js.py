@@ -335,6 +335,13 @@ API = """async ([method, route, body]) => {
 }"""
 
 
+def _exportAs(page, item):
+    """Fontra's File › Export as: a download in Try Fontra."""
+    page.get_by_text("File", exact=True).click()
+    page.get_by_text("Export as", exact=True).hover()
+    page.get_by_text(item, exact=True).click()
+
+
 def _needsHiveInTheBrowser():
     if Handler.fontraClient is None:
         pytest.skip("Fontra's built client is not installed")
@@ -421,9 +428,8 @@ def test_a_local_font_has_hive_in_the_browser(server, browser, tmp_path):
     assert status == 200, body
 
     # Downloaded as the repository's latest state.
-    page.get_by_role("button", name="Download").click()
     with page.expect_download(timeout=60000) as info:
-        page.get_by_role("menuitem", name=".fontra (zipped)").click()
+        _exportAs(page, "Fontra (*.fontra)")
     download = info.value
     assert download.suggested_filename == "Mutator.fontra.zip"
     with zipfile.ZipFile(download.path()) as z:
@@ -523,9 +529,8 @@ def test_other_formats_are_converted_in_the_browser(server, browser, tmp_path):
     assert set(glyphs) == {"A", "A.alt", "B"}
 
     # Downloaded as designspace + UFOs, converted back in Pyodide.
-    page.get_by_role("button", name="Download").click()
     with page.expect_download(timeout=60000) as info:
-        page.get_by_role("menuitem", name="Designspace + UFOs (zipped)").click()
+        _exportAs(page, "Designspace + UFO (*.designspace)")
     download = info.value
     assert download.suggested_filename == "Mutator.designspace.zip"
     with zipfile.ZipFile(download.path()) as z:
@@ -615,6 +620,73 @@ def test_glyphs_files_are_read_in_the_browser(server, browser, tmp_path):
     assert page.locator(".hive-try .name").inner_text() == "Hexa"
     assert page.evaluate("editorController.fontController.glyphMap.O") == [79]
     assert not errors
+    context.close()
+
+
+def test_two_windows_on_one_font_see_each_others_edits(server, browser, tmp_path):
+    """Tabs share one Python (a SharedWorker): the same server serves both
+    windows, as online, and a closed tab lets go of its connection."""
+    _needsHiveInTheBrowser()
+    archive = tmp_path / "Mutator.fontra.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
+        for path in sorted(FIXTURE.rglob("*")):
+            if path.is_file():
+                z.write(path, "Mutator.fontra/" + path.relative_to(FIXTURE).as_posix())
+    context = browser.new_context(viewport={"width": 1400, "height": 850})
+    first = context.new_page()
+    errors = []
+    first.on("pageerror", lambda error: errors.append(str(error)))
+    first.goto(f"{server}/editor.html?{TRY_PAGE_QUERY}")
+    first.get_by_role("button", name="Your fonts").click()
+    first.locator(".hive-try-panel input[accept]").set_input_files(str(archive))
+    first.wait_for_url("**project=local*", timeout=90000)
+    first.wait_for_function(
+        "window.editorController?.fontController?.glyphMap?.A", timeout=90000
+    )
+    second = context.new_page()
+    second.on("pageerror", lambda error: errors.append(str(error)))
+    second.goto(first.url)
+    second.wait_for_function(
+        "window.editorController?.fontController?.glyphMap?.A", timeout=30000
+    )
+    before = second.evaluate(LAYERS_A)
+
+    first.evaluate(EDIT_A, 25)
+    edited = first.evaluate(LAYERS_A)
+    assert edited != before
+    second.wait_for_function(f"({LAYERS_A}).then(l => l === {json.dumps(edited)})")
+
+    # The first window closed: the second one goes on, and is saved.
+    first.close()
+    second.evaluate(EDIT_A, 5)
+    second.wait_for_function(
+        "document.querySelector('.hive-try .status').textContent"
+        " === 'saved in this browser'",
+        timeout=20000,
+    )
+    status, body = second.evaluate(API, ["GET", "/log?glyph=A", None])
+    assert status == 200
+    messages = [c["message"].split("\n")[0] for c in json.loads(body)["commits"]]
+    assert messages[-1] == "Opened in Try Fontra" and len(messages) >= 2
+    assert not errors
+    context.close()
+
+
+def test_the_demo_is_exported_from_fontras_menu(server, browser):
+    if Handler.fontraClient is None:
+        pytest.skip("Fontra's built client is not installed")
+    context = browser.new_context(
+        viewport={"width": 1400, "height": 850}, accept_downloads=True
+    )
+    page = context.new_page()
+    page.goto(f"{server}/editor.html?{TRY_PAGE_QUERY}")
+    page.wait_for_function("window.editorController?.fontController?.glyphMap?.A")
+    with page.expect_download(timeout=30000) as info:
+        _exportAs(page, "Fontra (*.fontra)")
+    download = info.value
+    assert download.suggested_filename == "MutatorSans.fontra.zip"
+    with zipfile.ZipFile(download.path()) as z:
+        assert "MutatorSans.fontra/font-data.json" in z.namelist()
     context.close()
 
 

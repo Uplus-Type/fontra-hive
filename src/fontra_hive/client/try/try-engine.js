@@ -106,9 +106,39 @@
   var sockets = {}; // id → PythonWebSocket
   var status = { text: "", detail: "" };
 
+  // One Python for all the tabs of this site when the browser has
+  // SharedWorker: two windows on the same font are then served by the same
+  // server, and see each other's edits as they happen (as online). Else a
+  // worker for this page alone.
+  var WORKER_URL = "/hive/try/try-python-worker.js";
+  var tabId = Array.from(crypto.getRandomValues(new Uint8Array(8)), function (b) {
+    return b.toString(16).padStart(2, "0");
+  }).join("");
+
+  function startWorker() {
+    if (typeof SharedWorker === "function") {
+      try {
+        var shared = new SharedWorker(WORKER_URL, { type: "module", name: "fontra-hive-try" });
+        shared.port.start();
+        // While this page lives it holds a lock; the worker waits for it to
+        // know when the page is gone.
+        if (navigator.locks) {
+          navigator.locks.request("fontra-hive-try-tab:" + tabId, function () {
+            shared.port.postMessage({ op: "hello", tab: tabId });
+            return new Promise(function () {});
+          });
+        }
+        return shared.port;
+      } catch (error) {
+        console.warn("SharedWorker unavailable:", error);
+      }
+    }
+    return new Worker(WORKER_URL, { type: "module" });
+  }
+
   function worker() {
     if (!pythonWorker) {
-      pythonWorker = new Worker("/hive/try/try-python-worker.js", { type: "module" });
+      pythonWorker = startWorker();
       pythonWorker.onmessage = function (event) {
         var reply = event.data;
         if (reply.op === "ws") {
@@ -242,6 +272,16 @@
   }
 
   // format: "fontra" (zipped package) | "designspace" (zipped, with UFOs).
+  function exportAs(options) {
+    var format = options && options.format;
+    if (format !== "fontra" && format !== "designspace") {
+      return Promise.reject(new Error("Not available in the browser: " + format));
+    }
+    return downloadAs(format, progress).finally(function () {
+      progress("");
+    });
+  }
+
   async function downloadAs(format, onProgress) {
     if (localId) await localInfo();
     var stem = fileStem();
@@ -436,7 +476,8 @@
       return {
         name: "FontraHiveTry",
         features: { "background-image": true, "find-glyphs-that-use-glyph": true },
-        projectManagerFeatures: {},
+        // File › Export as: a download (exportAs below).
+        projectManagerFeatures: { "export-as": ["fontra", "designspace"] },
       };
     },
     getGlyphMap: function (font) {
@@ -522,8 +563,9 @@
         return null;
       });
     },
-    exportAs: function () {
-      throw new Error("Export is not available in the demo");
+    // File › Export as: a download, as from the bar.
+    exportAs: function (font, options) {
+      return exportAs(options);
     },
   };
 
@@ -616,6 +658,27 @@
     // The handshake remote.js sends on opening: the server side has made its
     // own (hive_try_server.openSocket).
     if (/^\{\s*"client-uuid"/.test(text)) return;
+    // File › Export as: a download here (the server would write a file).
+    if (text.indexOf('"exportAs"') !== -1) {
+      var message = JSON.parse(text);
+      if (message["method-name"] === "exportAs") {
+        var self = this;
+        var reply = function (payload) {
+          payload["client-call-id"] = message["client-call-id"];
+          self.deliver(JSON.stringify(payload));
+        };
+        exportAs((message.arguments || [])[0]).then(
+          function () {
+            reply({ "return-value": null });
+          },
+          function (error) {
+            console.error(error);
+            reply({ exception: String(error && error.message ? error.message : error) });
+          }
+        );
+        return;
+      }
+    }
     tell("wsSend", { socket: this.id, text: text });
   };
   PythonWebSocket.prototype.deliver = function (text) {

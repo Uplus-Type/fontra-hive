@@ -1,4 +1,7 @@
-// Fontra Hive, "Try Fontra": Python in the browser. A module worker: loads
+// Fontra Hive, "Try Fontra": Python in the browser. A module worker, shared
+// by the tabs of this site when the browser has SharedWorker (so two windows
+// on the same font are served by one server, and see each other's edits),
+// dedicated to its page otherwise. Loads
 // Pyodide from the address it is given, and Hive's Python bundle
 // (/hive/try/python.zip), on first use only. Two jobs:
 //
@@ -13,7 +16,11 @@
 //
 // Requests: {id, op, base, ...} → {id, ...} or {id, error}; progress
 // {id, progress}. Unsolicited: {op: "ws", socket, text} (a message for the
-// editor), {op: "ws-closed", socket}, {op: "status", text} (saved / saving).
+// editor), {op: "ws-closed", socket}, {op: "status", text} (saved / saving,
+// to every tab). A tab says {op: "hello", tab} once it holds the Web Lock
+// "fontra-hive-try-tab:<tab>": when the lock is free, the tab is gone and
+// its editor connections are closed. Socket ids are the page's own; each
+// tab's are numbered apart here.
 //
 // Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
 
@@ -25,7 +32,13 @@ let pyodidePromise = null;
 let hivePromise = null;
 let counter = 0;
 const mounts = new Map(); // mount point → promise (loaded from IndexedDB)
-const socketsReady = new Map(); // socket id → promise (opened in Python)
+const socketsReady = new Map(); // socket (here) → promise (opened in Python)
+const ports = new Set(); // one per tab
+let nextSocket = 1;
+
+function broadcast(message) {
+  for (const port of ports) port.postMessage(message);
+}
 
 function ready(base, say) {
   if (!pyodidePromise) {
@@ -121,7 +134,7 @@ let persisting = Promise.resolve();
 
 function persistSoon(py) {
   clearTimeout(persistTimer);
-  postMessage({ op: "status", text: "saving" });
+  broadcast({ op: "status", text: "saving" });
   persistTimer = setTimeout(() => persistNow(py), PERSIST_DELAY);
 }
 
@@ -132,11 +145,11 @@ function persistNow(py) {
     .then(async () => {
       await py.runPythonAsync("await hive.flush()");
       await syncfs(py, false);
-      postMessage({ op: "status", text: "saved" });
+      broadcast({ op: "status", text: "saved" });
     })
     .catch((error) => {
       console.error(error);
-      postMessage({ op: "status", text: "error", detail: message(error) });
+      broadcast({ op: "status", text: "error", detail: message(error) });
     });
   return persisting;
 }
@@ -280,18 +293,20 @@ const OPS = {
   // The editor's WebSocket: open (then served until closed), messages.
   // Messages are not queued behind other requests: a request may be waiting
   // for the editor's answer (a restore reloads the glyph in the editor).
-  wsOpen(request, say) {
-    const opened = OPS._wsOpen(request, say);
-    socketsReady.set(request.socket, opened);
+  wsOpen(request, say, tab) {
+    const socket = nextSocket++;
+    tab.sockets.set(request.socket, socket);
+    const opened = OPS._wsOpen(request, say, tab, socket);
+    socketsReady.set(socket, opened);
     return opened;
   },
 
-  async _wsOpen(request, say) {
+  async _wsOpen(request, say, tab, socket) {
     const py = await hive(request.base, say);
     const name = request.project.split("@")[0];
     await mount(py, name);
-    const socket = request.socket;
-    const send = (text) => postMessage({ op: "ws", socket, text });
+    const pageSocket = request.socket;
+    const send = (text) => tab.port.postMessage({ op: "ws", socket: pageSocket, text });
     py.globals.set("hive_send", send);
     py.runPython(`hive.openSocket(${Number(socket)}, hive_send)`);
     py.globals.delete("hive_send");
@@ -305,28 +320,30 @@ const OPS = {
     })
       .catch((error) => {
         console.error(error);
-        postMessage({ op: "ws", socket, text: JSON.stringify({ "initialization-error": message(error) }) });
+        send(JSON.stringify({ "initialization-error": message(error) }));
       })
-      .finally(() => postMessage({ op: "ws-closed", socket }));
+      .finally(() => {
+        tab.sockets.delete(pageSocket);
+        tab.port.postMessage({ op: "ws-closed", socket: pageSocket });
+      });
     return [{}];
   },
 
-  async wsSend(request) {
-    await socketsReady.get(request.socket);
+  async wsSend(request, say, tab) {
+    const socket = tab.sockets.get(request.socket);
+    if (!socket) return [{}];
+    await socketsReady.get(socket);
     const py = await pyodidePromise;
     py.globals.set("hive_text", request.text);
-    py.runPython(`hive.socketMessage(${Number(request.socket)}, hive_text)`);
+    py.runPython(`hive.socketMessage(${Number(socket)}, hive_text)`);
     py.globals.delete("hive_text");
     if (request.text && request.text.includes('"editFinal"')) persistSoon(py);
     return [{}];
   },
 
-  async wsClose(request) {
-    await socketsReady.get(request.socket);
-    socketsReady.delete(request.socket);
-    const py = await pyodidePromise;
-    py.runPython(`hive.socketMessage(${Number(request.socket)}, None)`);
-    persistNow(py);
+  async wsClose(request, say, tab) {
+    const socket = tab.sockets.get(request.socket);
+    if (socket) await closeSocket(socket);
     return [{}];
   },
 
@@ -395,19 +412,58 @@ async function designspace(py, pkg, stem, work) {
   return data;
 }
 
-onmessage = (event) => {
-  const request = event.data;
-  const say = (progress) => request.id && postMessage({ id: request.id, progress });
-  const run = async () => {
-    try {
-      const op = OPS[request.op];
-      if (!op) throw new Error("unknown operation " + request.op);
-      const [reply, transfer] = await op(request, say);
-      if (request.id) postMessage(Object.assign({ id: request.id }, reply), transfer || []);
-    } catch (error) {
-      console.error(error);
-      if (request.id) postMessage({ id: request.id, error: message(error) });
+async function closeSocket(socket) {
+  const opened = socketsReady.get(socket);
+  if (!opened) return;
+  socketsReady.delete(socket);
+  await opened.catch(() => {});
+  const py = await pyodidePromise;
+  py.runPython(`hive.socketMessage(${Number(socket)}, None)`);
+  persistNow(py);
+}
+
+// A tab gone: its editors' connections are closed (the font's other windows
+// stay served), and what they edited is saved.
+function tabGone(tab) {
+  ports.delete(tab.port);
+  for (const socket of tab.sockets.values()) closeSocket(socket);
+  tab.sockets.clear();
+}
+
+function serve(port) {
+  const tab = { port, sockets: new Map() }; // page socket id → socket here
+  ports.add(port);
+  port.onmessage = (event) => {
+    const request = event.data;
+    if (request.op === "hello") {
+      if (self.navigator.locks && request.tab) {
+        self.navigator.locks.request("fontra-hive-try-tab:" + request.tab, () => tabGone(tab));
+      }
+      return;
     }
+    const say = (progress) => request.id && port.postMessage({ id: request.id, progress });
+    const run = async () => {
+      try {
+        const op = OPS[request.op];
+        if (!op || request.op.startsWith("_")) throw new Error("unknown operation " + request.op);
+        const [reply, transfer] = await op(request, say, tab);
+        if (request.id) port.postMessage(Object.assign({ id: request.id }, reply), transfer || []);
+      } catch (error) {
+        console.error(error);
+        if (request.id) port.postMessage({ id: request.id, error: message(error) });
+      }
+    };
+    run();
   };
-  run();
-};
+}
+
+if ("onconnect" in self) {
+  // A SharedWorker: one port per tab.
+  self.onconnect = (event) => {
+    const port = event.ports[0];
+    serve(port);
+    port.start();
+  };
+} else {
+  serve(self);
+}

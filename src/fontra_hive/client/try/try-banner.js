@@ -56,16 +56,6 @@ const STYLE = `
 .hive-try-panel .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 6px; }
 .hive-try-panel .error { color: #ff8a80; min-height: 1.2em; }
 .hive-try-panel .top { display: flex; justify-content: space-between; align-items: start; gap: 8px; }
-.hive-try-menu {
-  position: fixed; z-index: 1002; display: flex; flex-direction: column; gap: 4px; padding: 6px;
-  background: #222; border-radius: 12px; box-shadow: 0 6px 24px rgba(0,0,0,.35);
-  font: 13px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-}
-.hive-try-menu button {
-  font: inherit; text-align: left; color: #f4f1ea; background: transparent; border: 0;
-  border-radius: 8px; padding: 6px 10px; cursor: pointer; white-space: nowrap;
-}
-.hive-try-menu button:hover { background: #3a3a3a; }
 `;
 
 const DEMO_URL = "/editor.html?project=demo%3AMutatorSans&text=%22HAMBURGEFONSTIV%22";
@@ -245,7 +235,7 @@ function openPanel() {
               class: "plain",
               title: "Delete from this browser",
               onclick: async () => {
-                if (!confirm(`Delete “${project.name}” from this browser? Download it first to keep it.`)) return;
+                if (!confirm(`Delete “${project.name}” from this browser? Export it first (File › Export as) to keep it.`)) return;
                 await window.hiveTry.deleteLocal(project.id);
                 if (project.id === current) go(DEMO_URL);
                 else fill();
@@ -298,7 +288,7 @@ function openPanel() {
         "p",
         { class: "note" },
         "Opens .fontra, Glyphs (.glyphs, .glyphspackage), UFO, designspace + UFOs, TrueType and OpenType. " +
-          "Fonts are kept by this browser only: clearing this site's data deletes them. Download a copy to keep it."
+          "Fonts are kept by this browser only: clearing this site's data deletes them. File › Export as saves a copy on your computer."
       ),
       fileInput,
       folderInput
@@ -309,36 +299,6 @@ function openPanel() {
     error.textContent = "This browser cannot keep files for this site (private window?).";
   }
   fill();
-}
-
-function openDownloads(event, status) {
-  document.querySelector(".hive-try-menu")?.remove();
-  const tryAPI = window.hiveTry;
-  const run = async (format) => {
-    menu.remove();
-    const before = status.textContent;
-    try {
-      await tryAPI.downloadAs(format, (text) => (status.textContent = text));
-      status.textContent = before;
-    } catch (e) {
-      console.error(e);
-      status.classList.add("error");
-      status.textContent = "download failed: " + (e.message || e);
-    }
-  };
-  const menu = el(
-    "div",
-    { class: "hive-try-menu", role: "menu" },
-    el("button", { type: "button", role: "menuitem", onclick: () => run("fontra") }, ".fontra (zipped)"),
-    el("button", { type: "button", role: "menuitem", onclick: () => run("designspace") }, "Designspace + UFOs (zipped)")
-  );
-  const box = event.currentTarget.getBoundingClientRect();
-  menu.style.left = Math.max(8, box.left) + "px";
-  menu.style.bottom = window.innerHeight - box.top + 8 + "px";
-  document.body.append(menu);
-  setTimeout(() => {
-    document.addEventListener("click", () => menu.remove(), { once: true });
-  }, 0);
 }
 
 function start() {
@@ -378,9 +338,16 @@ function start() {
     name,
     status,
     el("button", { type: "button", class: "plain", onclick: openPanel }, "Your fonts"),
-    el("button", { type: "button", class: "plain extra", onclick: (event) => openDownloads(event, status) }, "Download"),
     isLocal ? null : keep,
-    el("a", { href: "/", class: "extra" }, "Fontra Hive for teams"),
+    el(
+      "a",
+      {
+        href: "/",
+        class: "extra",
+        title: "With a Fontra Hive account, your fonts are online: share them, work on them together, with branches and reviews.",
+      },
+      "Collaborate online"
+    ),
     el(
       "button",
       { class: "close", type: "button", title: "Hide", "aria-label": "Hide", onclick: () => bar.classList.toggle("small") },
