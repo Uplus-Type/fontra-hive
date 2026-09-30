@@ -19,7 +19,7 @@ def test_account_pages_link_hives_icon():
             assert (ACCOUNT.parent / "icons" / src).is_file(), (page.name, src)
 
 
-def test_landing_images_exist_and_are_served_as_jpeg():
+def test_landing_images_exist_and_are_served_with_their_type():
     html = (ACCOUNT / "login.html").read_text(encoding="utf-8")
     images = re.findall(r'src="/hive/landing/([^"]+)"', html)
     assert len(images) >= 4
@@ -27,4 +27,6 @@ def test_landing_images_exist_and_are_served_as_jpeg():
         assert (ACCOUNT.parent / "landing" / name).is_file(), name
     from fontra_hive.projectmanager import CLIENT_CONTENT_TYPES
 
-    assert CLIENT_CONTENT_TYPES["jpg"] == "image/jpeg"
+    for name in images:
+        assert name.rsplit(".", 1)[-1] in CLIENT_CONTENT_TYPES, name
+    assert CLIENT_CONTENT_TYPES["webp"] == "image/webp"

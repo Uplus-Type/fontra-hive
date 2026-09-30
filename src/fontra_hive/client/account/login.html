@@ -69,122 +69,93 @@
     </nav>
 
     <article class="feature" id="f-history">
-      <figure class="shot"><img src="/hive/landing/history.jpg" alt="The glyph history panel next to a glyph, an earlier version drawn in amber over the current one" loading="lazy"></figure>
       <div class="copy">
-        <p class="kicker"><svg class="i"><use href="#i-history"/></svg>Version history</p>
-        <h3>Every change is kept</h3>
-        <p>Each edit becomes a version, signed by who made it, with the sources it touched. Open a glyph's history, hover a version to see it drawn over the current outline, click to keep it on the canvas, and restore it in one step.</p>
-        <p class="why"><strong>Why it matters.</strong> Experiment without fear: last week's good curve is never lost, and you always know who changed what, and when.</p>
-        <ul class="points"><li>Preview on hover</li><li>One-click restore</li><li>Whole-font history</li></ul>
+        <div class="text">
+          <p class="kicker"><svg class="i"><use href="#i-history"/></svg>Version history</p>
+          <h3>Every change is kept</h3>
+          <p>Each edit becomes a version, signed by who made it, with the sources it touched. Open a glyph's history, hover a version to see it drawn over the current outline, click to keep it on the canvas, and restore it in one step.</p>
+        </div>
+        <div class="aside">
+          <p class="why"><strong>Why it matters.</strong> Experiment without fear: last week's good curve is never lost, and you always know who changed what, and when.</p>
+          <ul class="points"><li>Preview on hover</li><li>One-click restore</li><li>Whole-font history</li></ul>
+        </div>
       </div>
+      <figure class="shot"><img src="/hive/landing/history.webp" width="758" height="407" alt="The Glyph history panel: versions of a signed by Ana, Mei and Leo, and the version commented in #1 drawn in amber over the current outline" loading="lazy"></figure>
     </article>
 
     <article class="feature" id="f-snapshots">
-      <figure class="shot mock mk-snapshots" aria-label="The Font history panel, with changes grouped under named snapshots">
-        <div class="mk-panel">
-          <div class="mk-panel-head"><b>Font history</b><span class="mk-btn">Snapshot…</span></div>
-          <div class="mk-since">Since the last snapshot · 3 changes</div>
-          <div class="mk-row"><i class="av a2">L</i>Léo<span>Edit g · Bold</span><em>10:42</em></div>
-          <div class="mk-row"><i class="av a3">M</i>Mei<span>Edit a · Light, Bold</span><em>09:15</em></div>
-          <div class="mk-snap open"><span class="mk-dia">◆</span><b>Proof for the client</b><span class="mk-meta">14 changes · Ana, Léo, Mei</span><span class="mk-ok">✓ 4</span></div>
-          <div class="mk-row sub"><i class="av a1">A</i>Ana<span>Edit R · Regular</span><em>Sep 28</em></div>
-          <div class="mk-row sub"><i class="av a2">L</i>Léo<span>Kerning A V</span><em>Sep 28</em></div>
-          <div class="mk-snap"><span class="mk-dia">◆</span><b>Approved by the AD</b><span class="mk-meta">31 changes · Ana, Mei</span><span class="mk-ok">✓ 7</span></div>
-          <div class="mk-snap"><span class="mk-dia">◆</span><b>v1.0</b><span class="mk-meta">Import family.designspace</span></div>
-        </div>
-      </figure>
       <div class="copy">
-        <p class="kicker"><svg class="i"><use href="#i-bookmarks"/></svg>Snapshots</p>
-        <h3>Name the moments that matter</h3>
-        <p>Give a name to the state of the whole font (“Proof for the client”, “v1.0”) or to a single glyph (“Approved by the AD”). The changes made since the previous snapshot are grouped under it, with who made them and the comments resolved in between.</p>
-        <p class="why"><strong>Why it matters.</strong> Your history reads like a project diary: find the version you sent, see what changed since, go back to it if needed.</p>
-        <ul class="points"><li>Font and glyph snapshots</li><li>Changes grouped by milestone</li><li>Nothing ever rewritten</li></ul>
+        <div class="text">
+          <p class="kicker"><svg class="i"><use href="#i-bookmarks"/></svg>Snapshots</p>
+          <h3>Name the moments that matter</h3>
+          <p>Give a name to the state of the whole font (“Proof for the client”, “v1.0”) or to a single glyph (“Approved by the AD”). The changes made since the previous snapshot are grouped under it, with who made them and the comments resolved in between.</p>
+        </div>
+        <div class="aside">
+          <p class="why"><strong>Why it matters.</strong> Your history reads like a project diary: find the version you sent, see what changed since, go back to it if needed.</p>
+          <ul class="points"><li>Font and glyph snapshots</li><li>Changes grouped by milestone</li><li>Nothing ever rewritten</li></ul>
+        </div>
       </div>
+      <figure class="shot"><img src="/hive/landing/snapshots.webp" width="705" height="518" alt="The Glyph history panel with two snapshots, sent-to-client and validated, grouping the versions made between them" loading="lazy"></figure>
     </article>
 
     <article class="feature" id="f-branches">
-      <figure class="shot mock mk-branches" aria-label="The branch menu, and a merge conflict with both drawings side by side">
-        <div class="mk-bar"><span class="mk-chip"><svg class="i"><use href="#i-branch"/></svg>bold-exploration ▾</span><span class="mk-faces"><i class="av a3">M</i><i class="av a2">L</i></span></div>
-        <div class="mk-menu">
-          <div class="mk-item"><b>main</b><span>default · 1 h ago · Ana</span></div>
-          <div class="mk-item on"><b>✓ bold-exploration</b><span>4 ahead · 1 behind main · Mei</span><i class="av a3">M</i></div>
-          <div class="mk-item"><b>tighter-spacing</b><span>2 ahead · yesterday · Léo</span></div>
-          <hr>
-          <div class="mk-item act">New branch…</div>
-          <div class="mk-item act">Update from main… <span>(1 new)</span></div>
-          <div class="mk-item act">Merge into main…</div>
-        </div>
-        <div class="mk-merge">
-          <div class="mk-merge-head"><svg class="i"><use href="#i-merge"/></svg>Merge bold-exploration into main</div>
-          <p>12 glyphs merged automatically · 1 conflict</p>
-          <div class="mk-conflict">
-            <div class="mk-side"><svg viewBox="-20 -640 640 940"><path d="M285 271Q195 271 140 251Q85 231 60 200Q35 169 35 136Q35 105 50 82Q64 58 86 41Q107 24 127 16Q95 5 76 -14Q58 -32 58 -63Q58 -98 86 -128Q114 -159 158 -166Q112 -188 84 -227Q57 -266 57 -318Q57 -378 88 -422Q119 -467 168 -492Q216 -516 268 -516Q301 -516 334 -506Q367 -497 395 -479Q405 -507 424 -529Q442 -551 466 -564Q490 -576 516 -576Q542 -576 556 -562Q569 -549 569 -526Q569 -519 565 -509Q561 -499 552 -492Q542 -485 526 -485Q509 -485 498 -495Q487 -505 484 -520Q459 -516 445 -496Q431 -477 426 -454Q450 -432 464 -401Q479 -370 479 -335Q479 -279 450 -235Q420 -191 372 -166Q324 -142 268 -142Q249 -142 235 -144Q221 -147 201 -147Q164 -147 141 -129Q118 -111 125 -86Q133 -62 174 -56Q215 -49 284 -46Q361 -43 416 -28Q471 -13 500 18Q530 50 530 104Q530 144 508 176Q487 207 452 228Q416 249 372 260Q329 271 285 271ZM284 232Q370 232 418 200Q466 168 466 125Q466 88 441 68Q416 49 373 42Q330 34 274 33Q247 32 221 30Q195 29 171 25Q144 43 129 69Q114 95 114 124Q114 173 160 202Q207 232 284 232ZM271 -178Q308 -178 332 -196Q357 -214 370 -245Q382 -276 382 -315Q382 -359 369 -397Q356 -435 330 -458Q305 -481 266 -481Q212 -481 182 -440Q153 -400 153 -340Q153 -292 167 -256Q181 -219 208 -198Q234 -178 271 -178Z"/></svg><span>main</span></div>
-            <div class="mk-side picked"><svg viewBox="-20 -640 640 940"><path d="M256 271Q170 271 120 252Q70 234 49 204Q28 174 28 140Q28 119 37 98Q46 77 66 58Q87 38 123 25Q82 14 66 -10Q49 -35 49 -63Q49 -89 70 -122Q91 -154 146 -171Q104 -188 77 -224Q50 -260 48 -311Q46 -371 78 -418Q110 -464 162 -490Q214 -516 271 -516Q297 -516 331 -509Q365 -502 390 -485Q401 -516 418 -544Q436 -571 461 -588Q486 -606 517 -606Q551 -606 568 -588Q586 -571 586 -542Q586 -530 580 -516Q575 -501 562 -491Q548 -481 524 -481Q509 -481 494 -492Q479 -504 476 -520Q463 -516 450 -494Q437 -472 435 -455Q464 -430 479 -397Q494 -364 494 -326Q494 -268 462 -224Q429 -179 378 -154Q326 -128 267 -128Q254 -128 238 -130Q222 -131 207 -131Q185 -131 170 -123Q155 -115 155 -101Q155 -82 184 -75Q213 -68 283 -64Q360 -60 418 -44Q475 -29 507 4Q539 37 539 95Q539 138 514 170Q489 203 448 226Q406 248 356 260Q306 271 256 271ZM285 202Q356 202 392 176Q429 150 429 122Q429 101 413 88Q397 74 366 66Q334 58 285 56Q263 54 234 53Q205 52 183 48Q168 60 160 78Q152 96 151 113Q149 153 186 178Q222 202 285 202ZM271 -195Q298 -195 316 -212Q335 -229 344 -255Q354 -281 354 -308Q354 -343 345 -376Q336 -408 318 -428Q299 -449 270 -449Q230 -449 208 -413Q186 -377 186 -331Q186 -296 196 -264Q206 -233 225 -214Q244 -195 271 -195Z"/></svg><span>bold-exploration ✓</span></div>
-          </div>
-          <p class="mk-small">g · Bold changed on both sides</p>
-        </div>
-      </figure>
       <div class="copy">
-        <p class="kicker"><svg class="i"><use href="#i-branch"/></svg>Branches &amp; merge</p>
-        <h3>Explore on a branch, merge when it's right</h3>
-        <p>Start a branch from main or from a snapshot to try a bolder weight, new alternates or a spacing pass, and switch branches without leaving your glyph. When it works, merge it into main: Hive merges source by source, kerning pair by kerning pair, and draws real conflicts side by side so you pick the right drawing.</p>
-        <p class="why"><strong>Why it matters.</strong> Designers explore in parallel without stepping on each other, and main stays clean for everyone else.</p>
-        <ul class="points"><li>Ahead / behind main</li><li>Automatic merge per source</li><li>Deleted branches restorable</li></ul>
+        <div class="text">
+          <p class="kicker"><svg class="i"><use href="#i-branch"/></svg>Branches &amp; merge</p>
+          <h3>Explore on a branch, merge when it's right</h3>
+          <p>Start a branch from main or from a snapshot to try a bolder weight, new alternates or a spacing pass, and switch branches without leaving your glyph. When it works, merge it into main: Hive merges source by source, kerning pair by kerning pair, and draws real conflicts side by side so you pick the right drawing.</p>
+        </div>
+        <div class="aside">
+          <p class="why"><strong>Why it matters.</strong> Designers explore in parallel without stepping on each other, and main stays clean for everyone else.</p>
+          <ul class="points"><li>Ahead / behind main</li><li>Automatic merge per source</li><li>Deleted branches restorable</li></ul>
+        </div>
       </div>
+      <figure class="shot duo"><img src="/hive/landing/branches.webp" width="456" height="384" alt="The branch menu: main, LeosTake, MyStuff and Mei_s-Branch, how far each is ahead or behind main, who is on it, and Merge into main" loading="lazy"><img src="/hive/landing/merge.webp" width="680" height="384" alt="The Merge LeosTake into main dialog: one conflict on a, both drawings side by side, Take LeosTake chosen" loading="lazy"></figure>
     </article>
 
     <article class="feature" id="f-comments">
-      <figure class="shot mock mk-comments" aria-label="A comment pinned on the glyph a, with red pen strokes and a discussion thread">
-        <svg class="mk-canvas" viewBox="-70 -640 660 720" aria-hidden="true">
-          <line x1="-70" x2="590" y1="0" y2="0" class="mk-metric"/>
-          <line x1="-70" x2="590" y1="-500" y2="-500" class="mk-metric"/>
-          <path class="mk-glyph" d="M338 0Q336 -16 335 -28Q334 -40 332 -53Q298 -19 259 -2Q220 16 178 16Q106 16 70 -20Q33 -55 33 -108Q33 -154 60 -188Q87 -222 131 -244Q175 -265 227 -276Q279 -286 329 -286V-345Q329 -377 323 -404Q317 -432 298 -450Q280 -467 241 -467Q215 -468 189 -458Q163 -447 149 -423Q157 -415 160 -404Q162 -394 162 -385Q162 -371 150 -354Q138 -336 109 -337Q85 -337 72 -354Q60 -370 60 -392Q60 -428 86 -456Q113 -484 159 -500Q205 -516 262 -516Q348 -516 390 -471Q433 -426 433 -329Q433 -293 433 -260Q433 -227 432 -194Q432 -161 432 -124Q432 -109 431 -90Q430 -71 428 -50Q445 -51 463 -52Q481 -53 497 -53V0ZM329 -240Q297 -238 264 -231Q230 -224 203 -210Q176 -196 160 -174Q143 -152 143 -121Q145 -87 166 -71Q186 -55 214 -55Q249 -55 276 -68Q303 -82 329 -106Q328 -117 328 -128Q328 -140 328 -153Q328 -162 328 -186Q329 -211 329 -240Z"/>
-          <g class="mk-nodes"><rect x="332" y="-6" width="12" height="12"/><circle cx="332" cy="-53" r="6"/><circle cx="178" cy="16" r="6"/><rect x="27" y="-114" width="12" height="12"/><circle cx="329" cy="-286" r="6"/><circle cx="329" cy="-345" r="6"/><rect x="235" y="-473" width="12" height="12"/><circle cx="149" cy="-423" r="6"/><circle cx="162" cy="-385" r="6"/><rect x="103" y="-343" width="12" height="12"/><circle cx="60" cy="-392" r="6"/><circle cx="262" cy="-516" r="6"/><rect x="427" y="-335" width="12" height="12"/><circle cx="432" cy="-124" r="6"/><circle cx="428" cy="-50" r="6"/><rect x="491" y="-59" width="12" height="12"/><circle cx="497" cy="0" r="6"/><circle cx="329" cy="-240" r="6"/><rect x="137" y="-127" width="12" height="12"/><circle cx="214" cy="-55" r="6"/><circle cx="329" cy="-106" r="6"/><rect x="322" y="-159" width="12" height="12"/></g>
-          <path class="mk-pen" d="M255 -305c52 -30 118 -18 128 30c10 50 -40 86 -95 80c-58 -6 -80 -52 -58 -88c14 -22 40 -30 62 -30"/>
-          <path class="mk-pen" d="M395 -205c20 18 38 40 52 66m-2 -34l3 36l-33 -8"/>
-          <g class="mk-pin" transform="translate(318 -336)"><path d="M0 0l-14 -24h-10a22 22 0 0 1 0 -44h48a22 22 0 0 1 0 44h-10z"/><text x="0" y="-38">1</text></g>
-          <g class="mk-pin pale" transform="translate(470 -420)"><path d="M0 0l-14 -24h-10a22 22 0 0 1 0 -44h48a22 22 0 0 1 0 44h-10z"/><text x="0" y="-38">2</text></g>
-        </svg>
-        <div class="mk-postit">
-          <div class="mk-postit-head"><b>#1</b> The bowl joins the stem too low <span>a · Bold</span></div>
-          <div class="mk-tags"><span class="mk-assignee"><i class="av a2">L</i>Léo</span><span class="mk-tag">curve</span><span class="mk-tag">client</span></div>
-          <div class="mk-msg"><i class="av a4">S</i><div><b>Sam</b> <em>✎ · 2 h</em><p>The join feels heavy here, see my sketch. Could it start higher, like in the Light?</p></div></div>
-          <div class="mk-msg"><i class="av a2">L</i><div><b>Léo</b> <em>1 h</em><p>Raised it by 20 units, have a look.</p></div></div>
-          <div class="mk-postit-foot"><span class="mk-reply">Reply…</span><span class="mk-btn honey">Resolve</span></div>
-        </div>
-      </figure>
       <div class="copy">
-        <p class="kicker"><svg class="i"><use href="#i-comment"/></svg>Comments &amp; review</p>
-        <h3>Review right on the glyph</h3>
-        <p>Pin a comment to a point of a glyph's source, discuss it in a thread, assign it, label it, resolve it. Sketch on the outline with a red pen, with a mouse or a stylus. Every comment of the project is listed on one page with filters, and opens the editor on the right glyph, source and point.</p>
-        <p class="why"><strong>Why it matters.</strong> Feedback lands exactly where the problem is, no more screenshots in emails. And reviewers are free: invite your client or art director.</p>
-        <ul class="points"><li>Post-its and red pen</li><li>Assign, label, resolve</li><li>Linked to the version commented</li></ul>
+        <div class="text">
+          <p class="kicker"><svg class="i"><use href="#i-comment"/></svg>Comments &amp; review</p>
+          <h3>Review right on the glyph</h3>
+          <p>Pin a comment to a point of a glyph's source, discuss it in a thread, assign it, label it, resolve it. Sketch on the outline with a red pen, with a mouse or a stylus. Every comment of the project is listed on one page with filters, and opens the editor on the right glyph, source and point.</p>
+        </div>
+        <div class="aside">
+          <p class="why"><strong>Why it matters.</strong> Feedback lands exactly where the problem is, no more screenshots in emails. And reviewers are free: invite your client or art director.</p>
+          <ul class="points"><li>Post-its and red pen</li><li>Assign, label, resolve</li><li>Linked to the version commented</li></ul>
+        </div>
       </div>
+      <figure class="shot stack"><img src="/hive/landing/comments.webp" width="1037" height="476" alt="A comment pinned on the glyph a, with red pen strokes, a thread between Ana and Mei, and the Comments panel" loading="lazy"><img src="/hive/landing/comments-list.webp" width="1025" height="287" alt="The comments page of the project, with filters by state, glyph, person and label" loading="lazy"></figure>
     </article>
 
     <article class="feature" id="f-together">
-      <figure class="shot"><img src="/hive/landing/share.jpg" alt="The Share dialog: people on the project, their roles, an invitation field" loading="lazy"></figure>
       <div class="copy">
-        <p class="kicker"><svg class="i"><use href="#i-users"/></svg>Real-time collaboration</p>
-        <h3>Draw together, each with the right role</h3>
-        <p>Everyone works on the same font at the same time and sees who is there. Share a project by username or email with a role: observer, reviewer, designer, manager or admin. Organizations have owners and members, and can keep their projects to their members.</p>
-        <p class="why"><strong>Why it matters.</strong> The whole team, and your client, in one place, and everyone changes only what they are meant to.</p>
-        <ul class="points"><li>Live presence</li><li>Five roles</li><li>Read-only for reviewers</li></ul>
+        <div class="text">
+          <p class="kicker"><svg class="i"><use href="#i-users"/></svg>Real-time collaboration</p>
+          <h3>Draw together, each with the right role</h3>
+          <p>Everyone works on the same font at the same time and sees who is there. Share a project by username or email with a role: observer, reviewer, designer, manager or admin. Organizations have owners and members, and can keep their projects to their members.</p>
+        </div>
+        <div class="aside">
+          <p class="why"><strong>Why it matters.</strong> The whole team, and your client, in one place, and everyone changes only what they are meant to.</p>
+          <ul class="points"><li>Live presence</li><li>Five roles</li><li>Read-only for reviewers</li></ul>
+        </div>
       </div>
+      <figure class="shot duo"><img src="/hive/landing/share.webp" width="561" height="411" alt="The Share dialog: Ana and Mei managers, Leo designer, Sam reviewer, Noor observer" loading="lazy"><img src="/hive/landing/presence.webp" width="348" height="411" alt="The user menu: Ana, Mei and Noor in the editor, Sam editing a" loading="lazy"></figure>
     </article>
 
     <article class="feature" id="f-files">
-      <figure class="shot stack">
-        <img src="/hive/landing/import.jpg" alt="The New project form, with Import a font selected" loading="lazy">
-        <img src="/hive/landing/download.jpg" alt="The Download panel: .fontra, Designspace + UFOs, OpenType, TrueType, Webfont" loading="lazy">
-      </figure>
       <div class="copy">
-        <p class="kicker"><svg class="i"><use href="#i-import"/></svg>Import &amp; download</p>
-        <h3>Bring your fonts, take them anywhere</h3>
-        <p>Start a project from any format Fontra reads: .designspace with its UFOs, .ufo, .glyphs, .glyphspackage, .fontra, or a compiled .ttf, .otf or .woff2. Import again later and it becomes a new version. Download the sources from any branch, or fonts built on the server the way Fontra Pak builds them.</p>
-        <p class="why"><strong>Why it matters.</strong> No lock-in: Hive fits in with the tools and the pipeline you already have, in both directions.</p>
-        <ul class="points"><li>.fontra · Designspace + UFO</li><li>.otf · .ttf · .woff2</li><li>Any branch</li></ul>
+        <div class="text">
+          <p class="kicker"><svg class="i"><use href="#i-import"/></svg>Import &amp; download</p>
+          <h3>Bring your fonts, take them anywhere</h3>
+          <p>Start a project from any format Fontra reads: .designspace with its UFOs, .ufo, .glyphs, .glyphspackage, .fontra, or a compiled .ttf, .otf or .woff2. Import again later and it becomes a new version. Download the sources from any branch, or fonts built on the server the way Fontra Pak builds them.</p>
+        </div>
+        <div class="aside">
+          <p class="why"><strong>Why it matters.</strong> No lock-in: Hive fits in with the tools and the pipeline you already have, in both directions.</p>
+          <ul class="points"><li>.fontra · Designspace + UFO</li><li>.otf · .ttf · .woff2</li><li>Any branch</li></ul>
+        </div>
       </div>
+      <figure class="shot stack"><img src="/hive/landing/download.webp" width="1026" height="163" alt="The Download panel: pick a branch, then .fontra, Designspace + UFOs, OpenType, TrueType or Webfont" loading="lazy"><img src="/hive/landing/import.webp" width="1026" height="175" alt="Import a font: replaces the font as a new version, the history before it stays" loading="lazy"></figure>
     </article>
 
     <div class="foundation">
