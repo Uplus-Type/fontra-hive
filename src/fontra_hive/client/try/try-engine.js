@@ -239,6 +239,8 @@
 
   function fileStem() {
     var name = (projectName || "font").replace(/ \(demo\)$/, "");
+    var branch = project.split("@")[1];
+    if (localId && branch) name += "-" + branch; // a branch other than main
     return name.replace(/[\\/:*?"<>|]/g, "_") || "font";
   }
 
@@ -256,7 +258,7 @@
 
   async function packageFiles(onProgress) {
     if (localId) {
-      var reply = await python("exportFontra", { name: localName }, [], onProgress);
+      var reply = await python("exportFontra", { name: project }, [], onProgress);
       return new Map(
         reply.files.map(function (entry) {
           return [entry[0], new Blob([entry[1]])];
@@ -286,7 +288,7 @@
     if (localId) await localInfo();
     var stem = fileStem();
     if (format === "designspace" && localId) {
-      var result = await python("exportDesignspace", { name: localName, stem: stem }, [], onProgress);
+      var result = await python("exportDesignspace", { name: project, stem: stem }, [], onProgress);
       saveBlob(new Blob([result.data], { type: "application/zip" }), stem + ".designspace.zip");
       return;
     }

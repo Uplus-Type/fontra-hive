@@ -367,7 +367,7 @@ const OPS = {
   // A font kept in the browser, as a .fontra package (its latest state).
   async exportFontra(request, say) {
     const py = await hive(request.base, say);
-    await mount(py, request.name);
+    await mount(py, request.name.split("@")[0]);
     await py.runPythonAsync("await hive.flush()");
     const work = "/tmp/hive-try-in/" + counter++;
     await call(py, "hive.exportProject(hive_args['name'], hive_args['dest'])", {
@@ -381,7 +381,7 @@ const OPS = {
 
   async exportDesignspace(request, say) {
     const py = await hive(request.base, say);
-    await mount(py, request.name);
+    await mount(py, request.name.split("@")[0]);
     await py.runPythonAsync("await hive.flush()");
     say("Writing the designspace and its UFOs…");
     const work = "/tmp/hive-try-in/" + counter++;

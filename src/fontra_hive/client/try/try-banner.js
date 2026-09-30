@@ -306,6 +306,19 @@ function openPanel() {
   fill();
 }
 
+// Hive's branch pill (⎇ main ▾) in the top bar, as online: branches of the
+// font kept here, served by Hive's routes in the browser.
+async function startBranches() {
+  window.__hiveViewsNoAutoStart = true;
+  try {
+    const views = await import("/hive/views/hive-views.js");
+    await views.startTry();
+    views.fixEarlyTranslations();
+  } catch (error) {
+    console.error(error);
+  }
+}
+
 function start() {
   document.head.append(el("style", {}, STYLE));
   const tryAPI = window.hiveTry;
@@ -366,6 +379,7 @@ function start() {
       .localInfo()
       .then((info) => {
         name.textContent = info.name;
+        startBranches();
       })
       .catch(() => {
         name.textContent = "Font not found";
@@ -386,7 +400,7 @@ function start() {
     const { text } = event.detail;
     status.classList.toggle("error", text === "error");
     status.textContent =
-      text === "saving" ? "saving…" : text === "saved" ? "saved in this browser" : "could not save: download a copy";
+      text === "saving" ? "saving…" : text === "saved" ? "saved in this browser" : "could not save: export a copy (File › Export as)";
   });
   document.body.append(bar);
 }

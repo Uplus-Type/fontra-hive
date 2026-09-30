@@ -535,8 +535,13 @@ self-hosted Pyodide, put `pyclipper-1.4.0-cp314-cp314-pyemscripten_2026_0_wasm32
 (from the same release on the jsDelivr CDN) next to it (hive-api's
 `install.sh` does this).
 
-Limits for now: no branches in the browser (the branch menu belongs to
-Hive's page script, which needs accounts); no compiled font download (fontc in
+Branches: on a font kept in the browser, `try-banner.js` starts Hive's page
+script in a mode of its own (`hive-views.js`, `startTry`: one person, no
+accounts): only the branch pill, as online (new branch, switch, delete,
+restore, merge, update from main), served by Hive's routes in Pyodide. An
+export (File › Export as) is of the branch open, named after it.
+
+Limits for now: no compiled font download (fontc in
 WebAssembly, later). Opening a font kept in the browser loads about 15 MB
 the first time (Pyodide and `python.zip`), cached by the browser after.
 

@@ -723,7 +723,9 @@ export function openMergeDialog(projectName, { from, into, onMerged, onDone, tit
 export class HiveViews {
   constructor({ me, project, access, view, source = "dev" }) {
     this.me = me;
-    this.source = source; // "hive-api", or "dev" (hive-dev-users.json)
+    // "hive-api", "dev" (hive-dev-users.json), or "try" (a font kept in the
+    // browser, Try Fontra: one person, no accounts; only the branch pill)
+    this.source = source;
     this.project = project;
     this.access = access;
     this.view = view;
@@ -750,6 +752,21 @@ export class HiveViews {
     this.chip = el("button", { class: "hive-chip", title: this.me.name, onclick: (e) => this.toggleUserMenu(e) }, [
       avatar(this.me, 26),
     ]);
+    if (this.source === "try") {
+      if (topBar && this.project) {
+        const right = el("div", { class: "hive-right" });
+        const projectName = topBar.querySelector("#fontra-project-name");
+        topBar.append(right);
+        if (projectName) right.append(projectName);
+        right.append(this.makeBranchPill(projectName));
+      }
+      document.addEventListener("click", (event) => {
+        if (this.menu && !this.menu.contains(event.target) && !this.menuOwner?.contains(event.target)) {
+          this.closeMenu();
+        }
+      });
+      return;
+    }
     if (topBar) {
       const right = el("div", { class: "hive-right" });
       const projectName = topBar.querySelector("#fontra-project-name");
@@ -1442,6 +1459,18 @@ export function defaultFileMenuItems(controller) {
     { title: "New", enabled: () => false, callback: () => {} },
     { title: "Open", enabled: () => false, callback: () => {} },
   ];
+}
+
+// Try Fontra, a font kept in the browser (try-banner.js starts it): the
+// branch pill only, served by Hive's routes in the browser.
+export async function startTry() {
+  const project = currentProject();
+  if (!project) return null;
+  const me = { username: "you", name: "You" };
+  const hive = new HiveViews({ me, project, access: null, view: currentView(), source: "try" });
+  await hive.mount();
+  window.hiveViews = hive;
+  return hive;
 }
 
 export async function start() {

@@ -731,6 +731,84 @@ def test_remove_overlap_is_done_in_the_browser(server, browser):
     context.close()
 
 
+def test_branches_of_a_font_kept_in_the_browser(server, browser, tmp_path):
+    """Hive's branch pill on a font kept in the browser: a new branch, an
+    edit on it, merged into main, all served by Hive's routes in Pyodide."""
+    _needsHiveInTheBrowser()
+    archive = tmp_path / "Mutator.fontra.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
+        for path in sorted(FIXTURE.rglob("*")):
+            if path.is_file():
+                z.write(path, "Mutator.fontra/" + path.relative_to(FIXTURE).as_posix())
+    context = browser.new_context(
+        viewport={"width": 1400, "height": 850}, accept_downloads=True
+    )
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.goto(f"{server}/editor.html?{TRY_PAGE_QUERY}")
+    page.get_by_role("button", name="Your fonts").click()
+    page.locator(".hive-try-panel input[accept]").set_input_files(str(archive))
+    page.wait_for_url("**project=local*", timeout=90000)
+    page.wait_for_function(
+        "window.editorController?.fontController?.glyphMap?.A", timeout=90000
+    )
+    before = page.evaluate(LAYERS_A)
+    page.wait_for_function(
+        "document.querySelector('.hive-branch span')?.textContent === 'main'",
+        timeout=30000,
+    )
+
+    # A new branch: the same view, on it.
+    page.locator(".hive-branch").click()
+    page.get_by_text("New branch…").click()
+    page.get_by_label("Branch name").fill("wider")
+    page.get_by_role("button", name="Create").click()
+    page.wait_for_function(
+        "new URLSearchParams(location.search).get('project').endsWith('@wider')",
+        timeout=30000,
+    )
+    page.wait_for_function(
+        "window.editorController?.fontController?.glyphMap?.A", timeout=90000
+    )
+    page.wait_for_function(
+        "document.querySelector('.hive-branch span')?.textContent === 'wider'",
+        timeout=30000,
+    )
+    page.evaluate(EDIT_A, 40)
+    page.wait_for_function(
+        "document.querySelector('.hive-try .status').textContent"
+        " === 'saved in this browser'",
+        timeout=20000,
+    )
+    edited = page.evaluate(LAYERS_A)
+    assert edited != before
+
+    # Exported: the branch, named after it.
+    with page.expect_download(timeout=60000) as info:
+        _exportAs(page, "Fontra (*.fontra)")
+    assert info.value.suggested_filename == "Mutator-wider.fontra.zip"
+    with zipfile.ZipFile(info.value.path()) as z:
+        exported = z.read("Mutator-wider.fontra/glyphs/A^1.json")
+    assert exported != (FIXTURE / "glyphs" / "A^1.json").read_bytes()  # the edit
+
+    # Merged into main: main has the edit.
+    page.locator(".hive-branch").click()
+    page.get_by_text("Merge into main…").click()
+    page.get_by_role("button", name="Merge", exact=True).click()
+    page.get_by_role("button", name="Open main").click(timeout=30000)
+    page.wait_for_function(
+        "!new URLSearchParams(location.search).get('project').includes('@')",
+        timeout=30000,
+    )
+    page.wait_for_function(
+        "window.editorController?.fontController?.glyphMap?.A", timeout=90000
+    )
+    page.wait_for_function(f"({LAYERS_A}).then(l => l === {json.dumps(edited)})")
+    assert not errors
+    context.close()
+
+
 def test_the_demo_is_kept_with_its_edits(server, browser):
     _needsHiveInTheBrowser()
     context = browser.new_context(viewport={"width": 1400, "height": 850})
