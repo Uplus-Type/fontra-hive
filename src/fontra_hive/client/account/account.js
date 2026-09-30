@@ -94,8 +94,8 @@ async function loginPage() {
   waitlist();
 }
 
-// "Request an invitation" under the sign-in form (sign-up is by invitation
-// only). Opened directly by /#request, e.g. from a landing page.
+// "Join the waiting list" under the sign-in form (sign-up is by invitation
+// only; the entries are invited from hive-api's admin). Opened directly by /#request, e.g. from a landing page.
 function waitlist() {
   const open = $("#request-open");
   const form = $("#request");
@@ -123,7 +123,7 @@ function waitlist() {
         website: form.website.value,
       });
       form.classList.add("hidden");
-      sent.textContent = `Thank you. We will write to ${email} with an invitation when the beta opens.`;
+      sent.textContent = `Thank you, you are on the waiting list. We will write to ${email} with your invitation when the beta opens.`;
       sent.classList.remove("hidden");
     });
   });
