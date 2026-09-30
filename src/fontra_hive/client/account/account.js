@@ -123,7 +123,7 @@ function waitlist() {
         website: form.website.value,
       });
       form.classList.add("hidden");
-      sent.textContent = `Thank you. We will write to ${email} with an invitation.`;
+      sent.textContent = `Thank you. We will write to ${email} with an invitation when the beta opens.`;
       sent.classList.remove("hidden");
     });
   });
