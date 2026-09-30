@@ -420,3 +420,7 @@ install chromium`) and is skipped otherwise.
 ## Licence
 
 GPLv3, like Fontra. See `LICENSE`.
+
+The history panel's icon is `history` from [Tabler Icons](https://tabler.io/icons)
+(MIT License, see `src/fontra_hive/client/plugin/TABLER-ICONS-LICENSE.txt`),
+the icon set Fontra uses for its own panels.

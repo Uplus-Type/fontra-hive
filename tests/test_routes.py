@@ -413,3 +413,19 @@ def test_glyph_log_says_which_sources_changed(manager):
         assert font["commits"][1]["sources"] == []  # "Tweak": no glyph list
 
     run(go())
+
+
+def test_the_panel_icon_is_a_single_svg_element():
+    """Fontra's <inline-svg> (htmlToElement) wants exactly one node: no
+    comment, no XML declaration before the <svg>."""
+    import pathlib
+    import xml.dom.minidom
+
+    path = (
+        pathlib.Path(__file__).parent.parent
+        / "src/fontra_hive/client/plugin/history.svg"
+    )
+    text = path.read_text().strip()
+    assert text.startswith("<svg") and text.endswith("</svg>")
+    document = xml.dom.minidom.parseString(text)
+    assert document.documentElement.getAttribute("viewBox") == "0 0 24 24"
