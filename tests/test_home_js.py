@@ -440,6 +440,34 @@ def test_project_branches(browser_and_url):  # noqa: F811
             f"POST {hive}/branches": [200, {"branch": {"name": "x"}}],
             f"DELETE {hive}/branches": [200, {"deleted": "bold"}],
             f"POST {hive}/branches/restore": [200, {"branch": {"name": "light"}}],
+            f"GET {hive}/merge-preview": [
+                200,
+                {
+                    "from": "bold",
+                    "into": "main",
+                    "fromHead": "f",
+                    "intoHead": "e",
+                    "ahead": 2,
+                    "behind": 0,
+                    "upToDate": False,
+                    "fastForward": True,
+                    "changes": {"from": ["A"], "into": [], "files": []},
+                    "merged": [],
+                    "conflicts": [],
+                    "canMerge": True,
+                },
+            ],
+            f"POST {hive}/merge": [
+                200,
+                {
+                    "from": "bold",
+                    "into": "main",
+                    "head": "1",
+                    "fastForward": False,
+                    "glyphs": ["A"],
+                    "resolved": [],
+                },
+            ],
             "GET /api/hive/export-formats": [
                 200,
                 {"formats": [{"format": "fontra", "label": "Fontra package"}]},
@@ -483,6 +511,19 @@ def test_project_branches(browser_and_url):  # noqa: F811
         "calls.find(c => c.method === 'POST' && c.path.endsWith('/branches'))"
     )
     assert post["query"] == "?name=ana%2Fitalic&from=bold"
+
+    # Merge a branch (managers): only those with something to merge.
+    merges = page.eval_on_selector_all(
+        "table.branches tr",
+        "rows => rows.map(r => !![...r.querySelectorAll('button')]"
+        ".find(b => b.textContent === 'Merge…'))",
+    )
+    assert merges == [False, True, False]
+    page.click("tr[data-branch='bold'] >> text=Merge…")
+    page.wait_for_selector(".hive-merge button.blue")
+    page.click(".hive-merge button.blue")
+    page.wait_for_selector("text=Merged: 1 glyph changed in main.")
+    page.click(".hive-merge >> text=Close")
 
     # Deleted branches, folded; restored under their name.
     page.wait_for_selector("details.archived")

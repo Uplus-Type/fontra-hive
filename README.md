@@ -139,7 +139,14 @@ list), which Hive serves with its own script added (Fontra is not modified):
   when; *Restore* brings it back, under its name or another one (managers
   and admins, whoever deleted it, or whoever made it). The project page of
   the home page lists the branches too (open, delete, new branch, deleted
-  branches) and downloads from any of them;
+  branches, *Merge…*) and downloads from any of them;
+- **merging**: off the default branch, the pill's menu has *Merge into
+  main…* (managers and admins) and *Update from main…* (anyone who can
+  edit). The dialog says what the merge brings (glyphs changed on each
+  side, those changed on both but in different sources, merged
+  automatically) and lists the conflicts, each glyph drawn as it is on both
+  sides, with a choice for each: keep one side or take the other. See
+  "Merging" below;
 - **File › Share…**: the members of the project and where their role comes
   from (owner, organization, collaborator). Managers and admins can add
   people, change or remove collaborators; in development this writes
@@ -289,6 +296,9 @@ GET    /api/hive/projects/<name>/branches
 POST   /api/hive/projects/<name>/branches?name=bold&from=<branch|snapshot/<name>|sha>
 DELETE /api/hive/projects/<name>/branches?branch=bold
 POST   /api/hive/projects/<name>/branches/restore?tag=archive/bold[&name=bold-again]
+GET    /api/hive/projects/<name>/merge-preview?from=bold[&into=main]
+POST   /api/hive/projects/<name>/merge?from=bold[&into=main][&fromHead=…&intoHead=…]
+       {"resolutions": {"glyphs/A^1.json": "theirs", "font-data.json": "ours"}}
 POST /api/hive/projects/<name>/restore?branch=main&glyph=A&ref=<sha|tag>
 GET  /api/hive/projects/<name>/snapshots?branch=main
 POST /api/hive/projects/<name>/snapshot?branch=main&name=Proofs%20sent
@@ -319,6 +329,35 @@ information is kept in git but outside the font: a commit chain on
 refs) and a plain `git clone` does not fetch. Branch names follow git's
 rules within hive-api's characters (letters, digits, `.`, `_`, `-`, `/`),
 and cannot start with `snapshot/`, `glyph-snapshot/` or `archive/`.
+
+### Merging
+
+`fontra_hive/merge.py` merges two versions of a `.fontra` package against
+the commit where they parted (three-way), file by file: a file changed on
+one side only is taken from that side; a file changed on both is merged by
+its content: a glyph layer by layer and source by source (keyed by layer
+name), `glyph-info.csv` row by row, `kerning.csv` pair by pair and group by
+group, `font-data.json` key by key through nested objects; other files
+whole. So two designers working on two masters of the same glyph merge
+without a question. A conflict (the same layer, source, row, pair or key
+changed differently, or a file deleted on one side and changed on the
+other) is settled per file by a side, which wins on the parts in conflict
+while what merged cleanly stays merged.
+
+`merge-preview` answers what a merge would do (`changes.from`,
+`changes.into`, `merged`, `conflicts`, `ahead`/`behind`, `upToDate`,
+`fastForward`, `canMerge`). `merge` refuses (409) a merge with conflicts
+left unresolved (the list, as JSON), a merge whose branches moved since
+the preview (`fromHead`, `intoHead`), and one with nothing to merge. Into
+the default branch it always makes a merge commit (two parents, message
+`Merge bold into main`, trailers `Hive-Merge`, `Hive-Merge-Base`,
+`Hive-Merge-Head` and `Hive-Glyphs` for the glyphs it changed, so that a
+glyph's history on main shows the merge as one version) and records
+`mergedInto`/`mergedAt`/`mergedBy` in the branch's information; into
+another branch (*Update from main*), a fast-forward when that branch has
+nothing of its own. Capability `merge` (managers, admins) into the default
+branch, `edit` into another. Pending edits of both branches are committed
+first; an open target picks the merge up as an external change.
 
 The panel polls `head` every 1.5 s (a few bytes) and reloads the list only
 when the branch moved. Per-glyph history is answered from the `Hive-Glyphs:`

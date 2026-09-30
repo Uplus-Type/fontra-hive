@@ -80,3 +80,4 @@ label.check { flex-direction: row; align-items: center; gap: 0.5em; }
 .downloads { flex-wrap: wrap; gap: 0.5em; }
 details.archived { margin-top: 0.8em; }
 details.archived summary { cursor: pointer; opacity: 0.75; }
+table.branches td:nth-child(4) { width: 1%; white-space: nowrap; }

@@ -18,6 +18,7 @@ import {
   exportDownload,
   hiveApiProjectPath,
   mayRestore,
+  openMergeDialog,
   openRestoreBranchDialog,
   openShareDialog,
   timeAgo,
@@ -321,6 +322,19 @@ function branchesPanel(project, data) {
         el("small", {}, [
           `${compareWithDefault(b, data.default)} · changed ${timeAgo(b.time)} by ${b.author}${madeBy}`,
         ]),
+      ]),
+      el("td", {}, [
+        !b.isDefault && data.can.merge && b.ahead
+          ? el("button", {
+              class: "secondary",
+              title: `Merge ${b.name} into ${data.default}`,
+              onclick: () => openMergeDialog(project.id, {
+                from: b.name,
+                into: data.default,
+                onDone: () => route(),
+              }),
+            }, ["Merge…"])
+          : null,
       ]),
       el("td", {}, [el("a", { href: openURL(project.id, b.isDefault ? null : b.name) }, [
         el("button", { class: "secondary" }, ["Open"]),

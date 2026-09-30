@@ -16,7 +16,8 @@
 //   - the branch pill (⎇ main ▾): the project's branches, who is on which,
 //     how each compares with the default branch; switch branch (the same
 //     view on the other branch), make a new branch, delete one, bring back
-//     a deleted one.
+//     a deleted one; merge a branch into the default one, or bring it up to
+//     date from it (a dialog with the conflicts drawn side by side).
 //
 // It only uses what Fontra exposes publicly: the top bar element, the
 // #fontra-project-name element Fontra adds to it, and the view controller
@@ -349,6 +350,22 @@ const STYLE = `
   .hive-menu .branch-row .delete:disabled { opacity: 0.15; cursor: default; }
   .hive-menu a.disabled { opacity: 0.45; pointer-events: none; }
   .hive-menu .archived-list.hidden { display: none; }
+  .hive-dialog.hive-merge { width: min(680px, calc(100vw - 40px)); }
+  .hive-merge ul.merge-facts { padding-left: 1.2em; margin: 6px 0 10px; line-height: 1.45; }
+  .hive-merge ul.merge-facts .quiet { opacity: 0.6; }
+  .hive-merge h4 { margin: 14px 0 8px; font-size: 1em; }
+  .hive-merge .merge-conflicts { display: flex; flex-direction: column; gap: 10px; }
+  .hive-merge .merge-conflict { display: flex; align-items: center; gap: 12px; padding: 8px 0;
+                 border-top: 1px solid #8883; }
+  .hive-merge .merge-conflict .what { flex: 1; min-width: 0; }
+  .hive-merge .merge-conflict .what small { display: block; opacity: 0.6; font-size: 0.85em; overflow-wrap: anywhere; }
+  .hive-merge .sides { display: flex; gap: 8px; }
+  .hive-merge .side { font: inherit; font-size: 0.85em; display: flex; flex-direction: column; align-items: center;
+                 gap: 4px; padding: 6px; border: 2px solid #8884; border-radius: 8px; background: none;
+                 color: inherit; cursor: pointer; min-width: 96px; }
+  .hive-merge .side:hover { border-color: #46f8; }
+  .hive-merge .side.chosen { border-color: #46f; background: #46f1; }
+  .hive-merge canvas.thumb { width: 110px; height: 110px; display: block; }
   .hive-menu .branch-row.archived { cursor: default; }
   .hive-menu .branch-row.archived:hover { background: none; color: inherit; }
   .hive-menu .branch-row.archived b { font-weight: normal; }
@@ -434,6 +451,270 @@ export function openRestoreBranchDialog(projectName, archived, { defaultBranch =
     el("div", { class: "footer" }, [el("button", { class: "pill plain", onclick: close }, ["Cancel"]), restore])
   );
   name.focus();
+  return dialog;
+}
+
+// --- merging -------------------------------------------------------------------------
+
+// "A, B, C and 12 more"
+export function listNames(names, max = 12) {
+  if (names.length <= max) return names.join(", ");
+  return `${names.slice(0, max).join(", ")} and ${names.length - max} more`;
+}
+
+// Which layer of a glyph a conflict is about: "layer X" -> X, "source Name"
+// -> that source's layer; else the glyph's default layer.
+export function conflictLayer(glyphJSON, parts, pickLayerName) {
+  for (const part of parts || []) {
+    if (part.startsWith("layer ") && glyphJSON?.layers?.[part.slice(6)]) return part.slice(6);
+    if (part.startsWith("source ")) {
+      const source = (glyphJSON?.sources || []).find((s) => s.name === part.slice(7));
+      if (source && glyphJSON.layers?.[source.layerName]) return source.layerName;
+    }
+  }
+  return glyphJSON ? pickLayerName(glyphJSON, null) : null;
+}
+
+const FILE_LABELS = {
+  "font-data.json": "Font info (axes, sources, metrics…)",
+  "glyph-info.csv": "Glyph names and code points",
+  "kerning.csv": "Kerning",
+  "features.txt": "OpenType features",
+};
+
+// A glyph at a commit, with the glyphs it uses as components (recursively).
+async function loadGlyphWithComponents(projectName, glyphName, ref, cache, depth = 0) {
+  const key = `${ref}/${glyphName}`;
+  if (cache.has(key)) return cache.get(key);
+  let glyph = null;
+  try {
+    const query = new URLSearchParams({ glyph: glyphName, ref });
+    glyph = await api(`/api/hive/projects/${encodeURIComponent(projectName)}/glyph?${query}`);
+  } catch (error) {
+    glyph = null;
+  }
+  cache.set(key, glyph);
+  if (glyph && depth < 8) {
+    const names = new Set();
+    for (const layer of Object.values(glyph.layers || {})) {
+      for (const component of layer.glyph?.components || []) names.add(component.name);
+    }
+    for (const name of names) await loadGlyphWithComponents(projectName, name, ref, cache, depth + 1);
+  }
+  return glyph;
+}
+
+// Draw one layer of a glyph in a canvas, fitted: its outline's bounds and its
+// advance width, with a baseline.
+function drawGlyph(canvas, glyph, layerName, ref, cache, plugin) {
+  const context = canvas.getContext("2d");
+  const ratio = window.devicePixelRatio || 1;
+  const width = canvas.clientWidth || 150;
+  const height = canvas.clientHeight || 150;
+  canvas.width = width * ratio;
+  canvas.height = height * ratio;
+  context.scale(ratio, ratio);
+  const color = getComputedStyle(canvas).color || "black";
+  if (!glyph || !layerName) {
+    context.fillStyle = color;
+    context.globalAlpha = 0.5;
+    context.font = "13px fontra-ui-regular, sans-serif";
+    context.textAlign = "center";
+    context.fillText(glyph ? "no such layer" : "deleted", width / 2, height / 2);
+    return;
+  }
+  const getGlyph = (name) => cache.get(`${ref}/${name}`);
+  // Bounds: the points of the layer and of its components, transformed.
+  let xMin = 0, xMax = glyph.layers[layerName]?.glyph?.xAdvance || 500, yMin = -200, yMax = 800;
+  const visit = (g, name, matrix, depth) => {
+    const layerGlyph = g?.layers?.[name]?.glyph;
+    if (!layerGlyph) return;
+    for (const contour of layerGlyph.path?.contours || []) {
+      for (const point of contour.points || []) {
+        const q = matrix.transformPoint(new DOMPoint(point.x, point.y));
+        xMin = Math.min(xMin, q.x); xMax = Math.max(xMax, q.x);
+        yMin = Math.min(yMin, q.y); yMax = Math.max(yMax, q.y);
+      }
+    }
+    if (depth > 8) return;
+    for (const component of layerGlyph.components || []) {
+      const base = getGlyph(component.name);
+      const baseLayer = base && plugin.pickLayerName(base, name);
+      if (baseLayer) {
+        visit(base, baseLayer, matrix.multiply(plugin.transformFromDecomposed(component.transformation)), depth + 1);
+      }
+    }
+  };
+  visit(glyph, layerName, new DOMMatrix(), 0);
+  const margin = 8;
+  const scale = Math.min((width - 2 * margin) / (xMax - xMin || 1), (height - 2 * margin) / (yMax - yMin || 1));
+  context.translate((width - (xMax - xMin) * scale) / 2 - xMin * scale, (height + (yMax - yMin) * scale) / 2 + yMin * scale);
+  context.scale(scale, -scale);
+  context.strokeStyle = color;
+  context.globalAlpha = 0.25;
+  context.lineWidth = 1 / scale;
+  context.beginPath();
+  context.moveTo(xMin, 0);
+  context.lineTo(xMax, 0);
+  context.stroke();
+  context.globalAlpha = 1;
+  context.fillStyle = color;
+  context.fill(plugin.buildLayerPath(glyph, layerName, getGlyph));
+}
+
+// "Merge X into Y": what the merge brings, the conflicts with both versions
+// drawn and a choice for each, then the merge. Shared by the pill (merge
+// into the default branch, update a branch from it) and the home page.
+// onDone(result) once merged; onMerged(result): an "Open <into>" button.
+export function openMergeDialog(projectName, { from, into, onMerged, onDone, title } = {}) {
+  const { dialog, close } = modalDialog(title || `Merge “${from}” into “${into}”`);
+  dialog.classList.add("hive-merge");
+  const body = el("div", {}, [el("p", { class: "note" }, ["Looking at the changes…"])]);
+  dialog.append(body);
+  const base = `/api/hive/projects/${encodeURIComponent(projectName)}`;
+  const cache = new Map();
+  let plugin = null;
+
+  const load = async () => {
+    body.replaceChildren(el("p", { class: "note" }, ["Looking at the changes…"]));
+    let preview;
+    try {
+      preview = await api(`${base}/merge-preview?${new URLSearchParams({ from, into })}`);
+    } catch (e) {
+      body.replaceChildren(el("div", { class: "error" }, [e.message.replace(/^\d+ /, "")]));
+      return;
+    }
+    render(preview);
+  };
+
+  const render = (preview, errorText) => {
+    const footer = el("div", { class: "footer" }, [el("button", { class: "pill plain", onclick: close }, ["Close"])]);
+    if (preview.upToDate) {
+      body.replaceChildren(el("p", {}, [`Nothing to merge: ${into} already has everything ${from} has.`]), footer);
+      return;
+    }
+    const { changes } = preview;
+    const lines = [];
+    lines.push(el("p", { style: "margin-top:0" }, [
+      `${preview.ahead} change${preview.ahead === 1 ? "" : "s"} on ${from}` +
+        (preview.behind ? `; ${into} has ${preview.behind} of its own since they parted.` : "."),
+    ]));
+    const facts = el("ul", { class: "merge-facts" });
+    if (changes.from.length) facts.append(el("li", {}, [`Glyphs changed on ${from}: `, el("b", {}, [listNames(changes.from)])]));
+    if (changes.files.length) {
+      facts.append(el("li", {}, [`Also: ${changes.files.map((f) => FILE_LABELS[f] || f).join(", ")}`]));
+    }
+    if (preview.merged.length) {
+      facts.append(el("li", {}, [
+        "Changed on both, merged automatically (different sources): ",
+        el("b", {}, [listNames(preview.merged.map((p) => FILE_LABELS[p] || p))]),
+      ]));
+    }
+    if (changes.into.length) facts.append(el("li", { class: "quiet" }, [`Changed on ${into} only (kept): ${listNames(changes.into)}`]));
+    lines.push(facts);
+
+    const resolutions = {};
+    const merge = el("button", { class: "pill blue" }, ["Merge"]);
+    const update = () => {
+      merge.disabled = !preview.canMerge || preview.conflicts.some((c) => !resolutions[c.path]);
+    };
+    if (preview.conflicts.length) {
+      lines.push(el("h4", {}, [
+        `${preview.conflicts.length} conflict${preview.conflicts.length === 1 ? "" : "s"}: ` +
+          "changed differently on both sides. Choose the version to keep.",
+      ]));
+      const list = el("div", { class: "merge-conflicts" });
+      for (const conflict of preview.conflicts) {
+        const choose = (side) => {
+          resolutions[conflict.path] = side;
+          for (const button of row.querySelectorAll(".side")) {
+            button.classList.toggle("chosen", button.dataset.side === side);
+          }
+          update();
+        };
+        const side = (which, label, ref) => {
+          const canvas = conflict.kind === "glyph" ? el("canvas", { class: "thumb" }) : null;
+          const button = el("button", { class: "side", "data-side": which, onclick: () => choose(which) }, [
+            canvas,
+            el("span", {}, [label]),
+          ]);
+          if (canvas) {
+            const glyphName = conflict.glyph;
+            (async () => {
+              plugin = plugin || (await import(new URL("../plugin/init.js", import.meta.url)));
+              const glyph = glyphName ? await loadGlyphWithComponents(projectName, glyphName, ref, cache) : null;
+              drawGlyph(canvas, glyph, conflictLayer(glyph, conflict.parts, plugin.pickLayerName), ref, cache, plugin);
+            })().catch(() => {});
+          }
+          return button;
+        };
+        const what = conflict.glyph ? `“${conflict.glyph}”` : FILE_LABELS[conflict.path] || conflict.path;
+        const detail = conflict.deleted
+          ? `deleted on ${conflict.deleted === "ours" ? into : from}, changed on the other`
+          : conflict.parts.join(", ");
+        const row = el("div", { class: "merge-conflict", "data-path": conflict.path }, [
+          el("div", { class: "what" }, [el("b", {}, [what]), el("small", {}, [detail])]),
+          el("div", { class: "sides" }, [
+            side("ours", `Keep ${into}`, preview.intoHead),
+            side("theirs", `Take ${from}`, preview.fromHead),
+          ]),
+        ]);
+        list.append(row);
+      }
+      lines.push(list);
+    }
+    if (!preview.canMerge) {
+      lines.push(el("p", { class: "note" }, [`Only managers and admins can merge into ${into}.`]));
+    } else {
+      lines.push(el("p", { class: "note" }, [
+        `People working on ${into} see the changes arrive. Nothing is lost: ` +
+          `${into}'s history keeps the version before the merge.`,
+      ]));
+    }
+    const error = el("div", { class: "error" }, [errorText || ""]);
+    merge.addEventListener("click", async () => {
+      merge.disabled = true;
+      error.textContent = "";
+      try {
+        const query = new URLSearchParams({ from, into, fromHead: preview.fromHead, intoHead: preview.intoHead });
+        const done = await api(`${base}/merge?${query}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ resolutions }),
+        });
+        showDone(done);
+      } catch (e) {
+        error.textContent = /changed|meanwhile|conflicts/.test(e.message)
+          ? "The branches changed meanwhile: look again before merging."
+          : e.message.replace(/^\d+ /, "");
+        footer.prepend(el("button", { class: "pill plain", onclick: load }, ["Look again"]));
+        update();
+      }
+    });
+    update();
+    footer.append(merge);
+    body.replaceChildren(...lines, error, footer);
+  };
+
+  const showDone = (done) => {
+    onDone?.(done);
+    const n = done.glyphs.length;
+    body.replaceChildren(
+      el("p", { style: "margin-top:0" }, [
+        done.fastForward
+          ? `${into} is up to date with ${from}.`
+          : `Merged: ${n} glyph${n === 1 ? "" : "s"} changed in ${into}.`,
+      ]),
+      el("div", { class: "footer" }, [
+        el("button", { class: "pill plain", onclick: close }, ["Close"]),
+        onMerged
+          ? el("button", { class: "pill blue", onclick: () => { close(); onMerged(done); } }, [`Open ${into}`])
+          : null,
+      ])
+    );
+  };
+
+  load();
   return dialog;
 }
 
@@ -743,6 +1024,7 @@ export class HiveViews {
       archivedToggle,
       archivedToggle ? archivedBox : null,
       el("hr"),
+      ...this.mergeMenuItems(data),
       el("a", {
         class: data.can.create ? "" : "disabled",
         title: data.can.create ? "" : "Your role cannot make branches",
@@ -753,6 +1035,43 @@ export class HiveViews {
       }, ["New branch…"]),
     ]);
     this.showMenu(this.branchPill, rect);
+  }
+
+  // Off the default branch: merge it into the default one (managers and
+  // admins), bring it up to date with the default one (who can edit).
+  mergeMenuItems(data) {
+    const current = data.branches.find((b) => b.name === this.project.branch);
+    if (!current || current.isDefault) return [];
+    const into = data.default;
+    const items = [
+      el("a", {
+        class: data.can.merge && current.ahead ? "" : "disabled",
+        title: !data.can.merge ? `Only managers and admins merge into ${into}`
+          : !current.ahead ? `Everything on ${current.name} is in ${into}` : "",
+        onclick: () => {
+          this.closeMenu();
+          this.branchDialog = openMergeDialog(this.project.name, {
+            from: current.name,
+            into,
+            onMerged: () => this.gotoBranch(into),
+          });
+        },
+      }, [`Merge into ${into}…`]),
+      el("a", {
+        class: data.can.create && current.behind ? "" : "disabled",
+        title: current.behind ? "" : `Nothing new on ${into}`,
+        onclick: () => {
+          this.closeMenu();
+          this.branchDialog = openMergeDialog(this.project.name, {
+            from: into,
+            into: current.name,
+            title: `Update “${current.name}” from “${into}”`,
+          });
+        },
+      }, [`Update from ${into}…` + (current.behind ? ` (${current.behind} new)` : "")]),
+      el("hr"),
+    ];
+    return items;
   }
 
   dialog(title) {

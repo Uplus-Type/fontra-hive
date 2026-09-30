@@ -519,9 +519,11 @@ class GitRepoStore:
         committer: Signature = SERVER_SIGNATURE,
         expected_head: str | None | object = ...,
         timestamp: int | None = None,
+        merge_parents: Iterable[str] = (),
     ) -> str:
         """Apply ``changes`` (``path -> bytes`` to write, ``path -> None`` to
         delete) on top of the branch head and move the branch to the new commit.
+        ``merge_parents``: more parents after the head (a merge commit).
 
         ``expected_head`` is the parent the caller built its changes against
         (``None`` for a new, empty branch). When given and the branch has moved,
@@ -551,7 +553,9 @@ class GitRepoStore:
         now = int(time.time()) if timestamp is None else timestamp
         c = Commit()
         c.tree = tree_id
-        c.parents = [_b(current)] if current else []
+        c.parents = ([_b(current)] if current else []) + [
+            _b(self.resolve(p)) for p in merge_parents
+        ]
         c.author = author.encode()
         c.committer = committer.encode()
         c.author_time = c.commit_time = now
@@ -987,6 +991,13 @@ class GitRepoStore:
             else:
                 result.append(TreeChange("modify", _s(change.new.path)))
         return result
+
+    def merge_base(self, a: str, b: str) -> str | None:
+        """The best common ancestor of two commits (None: unrelated)."""
+        from dulwich.graph import find_merge_base
+
+        bases = find_merge_base(self.repo, [_b(self.resolve(a)), _b(self.resolve(b))])
+        return _s(bases[0]) if bases else None
 
     def is_ancestor(self, ancestor: str, descendant: str) -> bool:
         a = _b(self.resolve(ancestor))

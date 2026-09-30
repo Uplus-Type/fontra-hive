@@ -20,6 +20,7 @@ import argparse
 import asyncio
 import dataclasses
 import hashlib
+import json
 import logging
 import time
 from functools import partial
@@ -34,10 +35,11 @@ from types import SimpleNamespace
 from typing import Any
 
 from aiohttp import web
-from fontra.backends.filenames import stringToFileName
+from fontra.backends.filenames import fileNameToString, stringToFileName
 from fontra.core.fonthandler import FontHandler
 from fontra.core.protocols import ProjectManager
 
+from . import merge as merging
 from .access import ROLES, Access, DevDirectory, token_for, username_from_token
 from .backend_git import GitFontraBackend
 from .fonthandler import HiveFontHandler
@@ -500,6 +502,10 @@ class DevHiveProjectManager:
             web.post(
                 "/api/hive/projects/{name}/branches/restore", self.restoreBranchHandler
             ),
+            web.get(
+                "/api/hive/projects/{name}/merge-preview", self.mergePreviewHandler
+            ),
+            web.post("/api/hive/projects/{name}/merge", self.mergeHandler),
             web.get("/api/hive/projects/{name}/log", self.logHandler),
             web.get("/api/hive/projects/{name}/glyph", self.glyphHandler),
             web.get("/api/hive/projects/{name}/head", self.headHandler),
@@ -929,6 +935,226 @@ class DevHiveProjectManager:
             store.close()
         return web.json_response(
             {"deleted": branch, "head": head, "merged": merged, "archived": archived}
+        )
+
+    # --- merging ------------------------------------------------------------------
+
+    def _mergeState(
+        self,
+        store: GitRepoStore,
+        source: str,
+        target: str,
+        resolutions: dict | None = None,
+    ):
+        """What merging ``source`` into ``target`` would do: the JSON the
+        preview answers, and the merge itself (None: nothing to merge)."""
+        if source == target:
+            raise web.HTTPBadRequest(text="A branch cannot be merged into itself.")
+        branches = store.branches()
+        for branch in (source, target):
+            if branch not in branches:
+                raise web.HTTPNotFound(text=f"No branch {branch!r}.")
+        theirs, ours = store.head(source), store.head(target)
+        base = store.merge_base(ours, theirs)
+        ahead, behind = self._aheadBehind(store, theirs, ours)
+        state = {
+            "from": source,
+            "into": target,
+            "fromHead": theirs,
+            "intoHead": ours,
+            "base": base,
+            # Commits of the branch merged that the other one lacks, and
+            # the other way round.
+            "ahead": ahead,
+            "behind": behind,
+            "upToDate": ahead == 0,
+            "fastForward": ahead > 0 and behind == 0,
+        }
+        if ahead == 0:
+            state.update(changes={"from": [], "into": [], "files": []}, merged=[])
+            state["conflicts"] = []
+            return state, None
+        result = merging.merge_trees(
+            store.list_tree(base) if base else {},
+            store.list_tree(ours),
+            store.list_tree(theirs),
+            store.read_blob,
+            resolutions,
+        )
+
+        def glyphs(paths):
+            return [
+                fileNameToString(p[len("glyphs/") : -len(".json")])
+                for p in paths
+                if p.startswith("glyphs/") and p.endswith(".json")
+            ]
+
+        def files(paths):
+            return [p for p in paths if not p.startswith("glyphs/")]
+
+        state["changes"] = {
+            "from": glyphs(result.theirs_only),
+            "into": glyphs(result.ours_only),
+            "files": files(result.theirs_only),
+        }
+        state["merged"] = glyphs(result.merged) + files(result.merged)
+        state["conflicts"] = [c.to_json() for c in result.conflicts]
+        return state, result
+
+    async def mergePreviewHandler(self, request: web.Request) -> web.Response:
+        """What merging ``from`` into ``into`` (the default branch if not
+        given) would do: the glyphs changed on each side, those merged
+        automatically (changed on both sides, in different sources), the
+        conflicts; and whether the requester may do it."""
+        name = request.match_info["name"]
+        repoPath, access = await self._project(request, name, "read")
+        default = await self._defaultBranch(request, name)
+        source = request.query.get("from") or ""
+        target = request.query.get("into") or default
+        store = GitRepoStore.open(repoPath)
+        try:
+            state, _ = self._mergeState(store, source, target)
+        finally:
+            store.close()
+        capability = "merge" if target == default else "edit"
+        state["default"] = default
+        state["canMerge"] = not self.readOnly and (
+            access is None or access.can(capability)
+        )
+        return web.json_response(state)
+
+    async def mergeHandler(self, request: web.Request) -> web.Response:
+        """Merge ``from`` into ``into``: managers and admins into the default
+        branch, anyone who can edit into another one (bringing a branch up to
+        date). JSON body: ``{"resolutions": {path: "ours" | "theirs"}}`` for
+        the conflicts of the preview. ``fromHead`` / ``intoHead``: the heads
+        the preview was made with; the merge is refused if either moved.
+
+        Into the default branch, always a merge commit (one line in its
+        history: "Merge X into main"); into another branch, a fast-forward
+        when that branch has nothing of its own. Pending edits of both are
+        committed first; an open ``into`` reloads what changed."""
+        name = request.match_info["name"]
+        repoPath, access = await self._project(request, name, "read")
+        if self.readOnly:
+            raise web.HTTPForbidden(text="read-only server")
+        default = await self._defaultBranch(request, name)
+        source = request.query.get("from") or ""
+        target = request.query.get("into") or default
+        capability = "merge" if target == default else "edit"
+        if access is not None and not access.can(capability):
+            raise web.HTTPForbidden(
+                text=(
+                    f"Only managers and admins can merge into {target}."
+                    if target == default
+                    else f"{access.role} cannot edit"
+                )
+            )
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        resolutions = body.get("resolutions") if isinstance(body, dict) else None
+        resolutions = {
+            str(path): side
+            for path, side in (resolutions or {}).items()
+            if side in ("ours", "theirs")
+        }
+
+        handlers = {
+            branch: self.fontHandlers.get(self._handlerKey(repoPath, branch))
+            for branch in (source, target)
+        }
+        backends = {b: h.backend for b, h in handlers.items() if h is not None}
+        store = (
+            backends[target].store
+            if target in backends
+            else GitRepoStore.open(repoPath)
+        )
+        try:
+            for backend in backends.values():
+                backend.flush()  # what people see is what gets merged
+            state, result = self._mergeState(store, source, target, resolutions)
+            for key, stateKey in (("fromHead", "fromHead"), ("intoHead", "intoHead")):
+                expected = request.query.get(key)
+                if expected and expected != state[stateKey]:
+                    raise web.HTTPConflict(
+                        text="The branches changed since the preview: look again."
+                    )
+            if result is None:
+                raise web.HTTPConflict(
+                    text=f"Nothing to merge: {target} has everything {source} has."
+                )
+            if result.conflicts:
+                raise web.HTTPConflict(
+                    text=json.dumps({"conflicts": state["conflicts"]}),
+                    content_type="application/json",
+                )
+            author = _author(access, self.author)
+            ours, theirs = state["intoHead"], state["fromHead"]
+            if state["fastForward"] and target != default:
+                try:
+                    head = store.fast_forward(target, theirs)
+                except (ValueError, RefMovedError) as error:
+                    raise web.HTTPConflict(text=str(error))
+                changed = state["changes"]["from"]
+            else:
+                changedPaths = sorted(result.changes)
+                changed = [
+                    fileNameToString(p[len("glyphs/") : -len(".json")])
+                    for p in changedPaths
+                    if p.startswith("glyphs/") and p.endswith(".json")
+                ]
+                resolvedNote = ""
+                if result.resolved:
+                    resolvedNote = "\nConflicts resolved: " + ", ".join(
+                        f"{c.glyph or c.path} ({resolutions[c.path]})"
+                        for c in result.resolved
+                    )
+                message = (
+                    f"Merge {source} into {target}\n\n"
+                    f"{state['ahead']} commits of {source}; "
+                    f"{len(changed)} glyphs changed in {target}.{resolvedNote}\n\n"
+                    f"Hive-Merge: {source}\n"
+                    f"Hive-Merge-Base: {state['base'] or ''}\n"
+                    f"Hive-Merge-Head: {theirs}\n"
+                    f"Hive-Glyphs: {' '.join(changed)}\n"
+                )
+                try:
+                    head = store.commit(
+                        result.changes,
+                        branch=target,
+                        message=message,
+                        author=author,
+                        expected_head=ours,
+                        merge_parents=[theirs],
+                    )
+                except RefMovedError:
+                    raise web.HTTPConflict(
+                        text=f"{target} changed meanwhile: look again."
+                    )
+            if target == default:
+                info = store.branch_info().get(source) or {}
+                info.update(
+                    mergedInto=target,
+                    mergedAt=int(time.time()),
+                    mergedBy=access.user.username if access is not None else None,
+                )
+                store.set_branch_info(source, info, author=author)
+            if target in backends:
+                await backends[target].check_external_changes()
+        finally:
+            if target not in backends:
+                store.close()
+        return web.json_response(
+            {
+                "from": source,
+                "into": target,
+                "head": head,
+                "fastForward": state["fastForward"] and target != default,
+                "glyphs": changed,
+                "resolved": [c.to_json() for c in result.resolved],
+            }
         )
 
     async def restoreBranchHandler(self, request: web.Request) -> web.Response:

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 from aiohttp import web
 
-from conftest import run
+from conftest import FIXTURE, run
 from fontra_hive.access import DevDirectory
 from fontra_hive.gitstore import GitRepoStore, Signature, branch_name_error
 from fontra_hive.projectmanager import (
@@ -470,5 +470,255 @@ def test_whoever_deleted_a_branch_may_restore_it(team, root):
             "archive/x-2",
         ]
         assert all(a["deletedByUsername"] == "dan" for a in listed["archived"])
+
+    run(go())
+
+
+# --- merging ---------------------------------------------------------------------------
+
+BOLD = "MutatorSansBoldCondensed/foreground"
+LIGHT = "MutatorSansLightCondensed/foreground"
+
+
+def moved(data: bytes, layer: str, dx: int) -> bytes:
+    """The glyph with one layer's advance width changed by ``dx``."""
+    glyph = json.loads(data)
+    if layer not in glyph["layers"]:  # A.alt has one layer, "default"
+        layer = next(iter(glyph["layers"]))
+    glyph["layers"][layer]["glyph"]["xAdvance"] += dx
+    return (json.dumps(glyph, indent=0, ensure_ascii=False) + "\n").encode()
+
+
+def first_x(data: bytes, layer: str) -> int:
+    return json.loads(data)["layers"][layer]["glyph"]["xAdvance"]
+
+
+def edit_glyph(store, branch, glyph, layer, dx, message=None):
+    path = glyphPath(glyph)
+    data = store.read_file(store.head(branch), path)
+    return store.commit(
+        {path: moved(data, layer, dx)},
+        branch=branch,
+        message=f"{message or 'Edit ' + glyph}\n\nHive-Glyphs: {glyph}\n",
+        author=ME,
+    )
+
+
+def post(project="Mutator", user=None, body=None, **query):
+    r = request(project, user=user, **query)
+
+    async def read_json():
+        if body is None:
+            raise ValueError("no body")
+        return body
+
+    r.json = read_json
+    return r
+
+
+def real_glyph_a(store):
+    """The fixture's A again (the ``root`` fixture replaced it with {})."""
+    data = (FIXTURE / "glyphs" / "A^1.json").read_bytes()
+    store.commit({glyphPath("A"): data}, message="A", author=ME)
+
+
+@pytest.fixture
+def diverged(root):
+    """main and bold both changed A, in different masters; B on main only,
+    C on bold only."""
+    store = GitRepoStore.open(root / "Mutator.git")
+    real_glyph_a(store)
+    store.create_branch("bold")
+    base = store.head()
+    edit_glyph(store, "bold", "A", BOLD, 10)
+    edit_glyph(store, "bold", "A.alt", BOLD, 3)
+    edit_glyph(store, "main", "A", LIGHT, -5)
+    edit_glyph(store, "main", "B", LIGHT, 1)
+    store.close()
+    return base
+
+
+def test_merge_preview(manager, diverged):
+    async def go():
+        preview = await body(
+            await manager.mergePreviewHandler(request(**{"from": "bold"}))
+        )
+        assert preview["into"] == "main" and preview["base"] == diverged
+        assert (preview["ahead"], preview["behind"]) == (2, 2)
+        assert not preview["upToDate"] and not preview["fastForward"]
+        assert preview["changes"] == {"from": ["A.alt"], "into": ["B"], "files": []}
+        assert preview["merged"] == ["A"] and preview["conflicts"] == []
+        assert preview["canMerge"]
+        with pytest.raises(web.HTTPBadRequest):
+            await manager.mergePreviewHandler(request(**{"from": "main"}))
+        with pytest.raises(web.HTTPNotFound):
+            await manager.mergePreviewHandler(request(**{"from": "ghost"}))
+
+    run(go())
+
+
+def test_merge_into_main(manager, root, diverged):
+    async def go():
+        store = GitRepoStore.open(root / "Mutator.git")
+        main, bold = store.head("main"), store.head("bold")
+        store.close()
+        merged = await body(
+            await manager.mergeHandler(
+                post(**{"from": "bold", "fromHead": bold, "intoHead": main})
+            )
+        )
+        assert not merged["fastForward"] and merged["glyphs"] == ["A.alt", "A"]
+
+        store = GitRepoStore.open(root / "Mutator.git")
+        head = store.head("main")
+        info = store.commit_info(head)
+        assert info.parents == (main, bold)
+        assert info.message.startswith("Merge bold into main")
+        assert "Hive-Merge: bold" in info.message
+        assert "Hive-Glyphs: A.alt A" in info.message
+        a = store.read_file(head, glyphPath("A"))
+        base = store.read_file(diverged, glyphPath("A"))
+        assert first_x(a, BOLD) == first_x(base, BOLD) + 10
+        assert first_x(a, LIGHT) == first_x(base, LIGHT) - 5
+        assert store.branch_info()["bold"]["mergedInto"] == "main"
+        store.close()
+
+        # The glyph's history on main shows the merge as one version.
+        log = await body(await manager.logHandler(request(glyph="A")))
+        assert log["commits"][0]["message"].startswith("Merge bold into main")
+        # bold is now merged; merging again: nothing to do.
+        listed = await body(await manager.branchesHandler(request()))
+        assert [b["merged"] for b in listed["branches"] if b["name"] == "bold"] == [
+            True
+        ]
+        preview = await body(
+            await manager.mergePreviewHandler(request(**{"from": "bold"}))
+        )
+        assert preview["upToDate"]
+        with pytest.raises(web.HTTPConflict):
+            await manager.mergeHandler(post(**{"from": "bold"}))
+
+    run(go())
+
+
+def test_merge_conflicts_need_a_choice(manager, root, diverged):
+    store = GitRepoStore.open(root / "Mutator.git")
+    edit_glyph(store, "bold", "B", LIGHT, 7)  # main moved B's LIGHT by 1
+    store.close()
+
+    async def go():
+        preview = await body(
+            await manager.mergePreviewHandler(request(**{"from": "bold"}))
+        )
+        assert preview["conflicts"] == [
+            {
+                "path": glyphPath("B"),
+                "kind": "glyph",
+                "glyph": "B",
+                "parts": [f"layer {LIGHT}"],
+                "deleted": None,
+            }
+        ]
+        with pytest.raises(web.HTTPConflict) as refused:
+            await manager.mergeHandler(post(**{"from": "bold"}))
+        assert json.loads(refused.value.text)["conflicts"][0]["glyph"] == "B"
+        # Stale preview: refused too.
+        with pytest.raises(web.HTTPConflict):
+            await manager.mergeHandler(
+                post(
+                    body={"resolutions": {glyphPath("B"): "theirs"}},
+                    **{"from": "bold", "intoHead": "0" * 40},
+                )
+            )
+        merged = await body(
+            await manager.mergeHandler(
+                post(
+                    body={"resolutions": {glyphPath("B"): "theirs"}}, **{"from": "bold"}
+                )
+            )
+        )
+        assert [c["glyph"] for c in merged["resolved"]] == ["B"]
+        store = GitRepoStore.open(root / "Mutator.git")
+        head = store.head("main")
+        b = store.read_file(head, glyphPath("B"))
+        base = store.read_file(diverged, glyphPath("B"))
+        assert first_x(b, LIGHT) == first_x(base, LIGHT) + 7  # bold's
+        assert "Conflicts resolved: B (theirs)" in store.commit_info(head).message
+        store.close()
+
+    run(go())
+
+
+def test_update_a_branch_from_main(team, root):
+    store = GitRepoStore.open(root / "Mutator.git")
+    real_glyph_a(store)
+    store.create_branch("dan")
+    edit_glyph(store, "main", "B", LIGHT, 1)
+    main = store.head("main")
+    store.close()
+
+    async def go():
+        # A designer cannot merge into main, but can bring a branch up to date.
+        preview = await body(
+            await team.mergePreviewHandler(request(user="dan", **{"from": "dan"}))
+        )
+        assert preview["upToDate"] and not preview["canMerge"]
+        with pytest.raises(web.HTTPForbidden):
+            await team.mergeHandler(post(user="dan", **{"from": "dan"}))
+        with pytest.raises(web.HTTPForbidden):  # a reviewer cannot edit
+            await team.mergeHandler(post(user="ria", **{"from": "main", "into": "dan"}))
+        preview = await body(
+            await team.mergePreviewHandler(
+                request(user="dan", **{"from": "main", "into": "dan"})
+            )
+        )
+        assert preview["fastForward"] and preview["canMerge"]
+        # Nothing of its own: a fast-forward, no merge commit.
+        updated = await body(
+            await team.mergeHandler(post(user="dan", **{"from": "main", "into": "dan"}))
+        )
+        assert updated["fastForward"] and updated["head"] == main
+        # With changes of its own: a merge commit.
+        store = GitRepoStore.open(root / "Mutator.git")
+        edit_glyph(store, "dan", "A", BOLD, 2)
+        edit_glyph(store, "main", "A.alt", LIGHT, 2)
+        store.close()
+        updated = await body(
+            await team.mergeHandler(post(user="dan", **{"from": "main", "into": "dan"}))
+        )
+        assert not updated["fastForward"] and updated["glyphs"] == ["A.alt"]
+        store = GitRepoStore.open(root / "Mutator.git")
+        info = store.commit_info(store.head("dan"))
+        assert info.message.startswith("Merge main into dan")
+        assert info.author == "Dan Designer"
+        store.close()
+
+    run(go())
+
+
+def test_merge_into_an_open_branch(manager, root, diverged):
+    async def go():
+        fontHandler = await manager.getRemoteSubject("Mutator", "dev")
+        backend = fontHandler.backend
+        received = []
+
+        async def callback(pattern):
+            received.append(pattern)
+
+        await backend.watchExternalChanges(callback)
+        glyph = await backend.getGlyph("B")
+        await backend.putGlyph("B", glyph, [66])
+        assert backend.tree.pending  # not committed yet
+
+        merged = await body(await manager.mergeHandler(post(**{"from": "bold"})))
+        store = GitRepoStore.open(root / "Mutator.git")
+        head = store.head("main")
+        # The pending edit went in first (the merge's first parent has it).
+        first = store.commit_info(head).parents[0]
+        assert "B" in store.commit_info(first).message
+        store.close()
+        assert backend.tree.commit_sha == merged["head"] == head
+        assert received and "A" in received[-1]["glyphs"]
+        await manager.aclose()
 
     run(go())

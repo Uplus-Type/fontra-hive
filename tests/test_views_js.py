@@ -57,6 +57,12 @@ PAGE = """<!doctype html><html><head>
     window.calls.push({ path, method, body, query: Object.fromEntries(parsed.searchParams) });
     const json = (data, status = 200) => new Response(JSON.stringify(data), { status });
     if (path === "/api/hive/me") return json(fake.me);
+    if (path.endsWith("/merge-preview")) return json(fake.preview);
+    if (path.endsWith("/merge")) return json(fake.mergeResult);
+    if (path.endsWith("/glyph")) {
+      const glyph = (fake.glyphs || {})[parsed.searchParams.get("glyph")];
+      return glyph ? json(glyph) : new Response("", { status: 404 });
+    }
     if (path.endsWith("/branches/restore")) {
       const name = parsed.searchParams.get("name");
       if (name === "taken") {
@@ -457,13 +463,15 @@ def freeze_time(page):
 
 
 def menu_rows(page):
-    return page.evaluate("""[...document.querySelectorAll('.branch-row:not(.archived)')].map(r => ({
+    return page.evaluate(
+        """[...document.querySelectorAll('.branch-row:not(.archived)')].map(r => ({
         name: r.dataset.branch,
         check: r.querySelector('.check').textContent,
         text: r.querySelector('small').textContent,
         faces: [...r.querySelectorAll('.faces .avatar')].map(a => a.textContent),
         del: r.querySelector('button.delete') ? !r.querySelector('button.delete').disabled : null,
-      }))""")
+      }))"""
+    )
 
 
 def test_branch_pill_and_menu(browser_and_url):
@@ -685,4 +693,191 @@ def test_deleted_branches_in_the_menu(browser_and_url):
     page.wait_for_selector(".branch-row")
     assert page.is_visible(".branch-row.archived")
     assert page.errors == []
+    page.close()
+
+
+# --- merging ---------------------------------------------------------------------
+
+GLYPH_A = json.loads(
+    (
+        pathlib.Path(__file__).parent
+        / "data"
+        / "MutatorSansLocationBase.fontra"
+        / "glyphs"
+        / "A^1.json"
+    ).read_text()
+)
+BOLD_LAYER = "MutatorSansBoldCondensed/foreground"
+
+PREVIEW = {
+    "from": "bold",
+    "into": "main",
+    "fromHead": "f" * 40,
+    "intoHead": "e" * 40,
+    "base": "d" * 40,
+    "ahead": 5,
+    "behind": 2,
+    "upToDate": False,
+    "fastForward": False,
+    "changes": {"from": ["A", "A.alt"], "into": ["C"], "files": ["kerning.csv"]},
+    "merged": ["B"],
+    "conflicts": [
+        {
+            "path": "glyphs/A^1.json",
+            "kind": "glyph",
+            "glyph": "A",
+            "parts": [f"layer {BOLD_LAYER}"],
+            "deleted": None,
+        },
+        {
+            "path": "font-data.json",
+            "kind": "font-data",
+            "glyph": None,
+            "parts": ["axes › axes"],
+            "deleted": None,
+        },
+    ],
+    "default": "main",
+    "canMerge": True,
+}
+
+
+def merge_data(**kwargs):
+    return {
+        **branch_data(**kwargs),
+        "preview": PREVIEW,
+        "mergeResult": {
+            "from": "bold",
+            "into": "main",
+            "head": "1" * 40,
+            "fastForward": False,
+            "glyphs": ["A", "A.alt"],
+            "resolved": [],
+        },
+        "glyphs": {"A": GLYPH_A},
+    }
+
+
+def test_merge_into_main(browser_and_url):
+    page = open_page(
+        browser_and_url, project="Mutator@bold", data=merge_data(can_delete=True)
+    )
+    page.wait_for_function("hive.branches && hive.project.branch === 'bold'")
+    page.evaluate("hive.gotoBranch = (name) => { window.went = name; }")
+    page.click(".hive-branch")
+    page.wait_for_selector(".branch-row")
+    items = page.eval_on_selector_all(
+        ".hive-menu > a:not(.archived-toggle)",
+        "as => as.map(a => [a.textContent, a.className])",
+    )
+    assert items[:2] == [["Merge into main…", ""], ["Update from main… (1 new)", ""]]
+    page.click("text=Merge into main…")
+    page.wait_for_selector(".merge-conflict")
+    text = page.inner_text(".hive-merge")
+    assert "Merge “bold” into “main”" in text
+    assert "5 changes on bold; main has 2 of its own" in text
+    assert "Glyphs changed on bold: A, A.alt" in text
+    assert "Also: Kerning" in text
+    assert "merged automatically (different sources): B" in text
+    assert "2 conflicts" in text
+    # Both versions of A are drawn.
+    page.wait_for_function(
+        """() => [...document.querySelectorAll('canvas.thumb')].every(c => {
+        const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+        for (let i = 3; i < d.length; i += 4) if (d[i]) return true;
+        return false; })"""
+    )
+    assert page.eval_on_selector_all(
+        ".merge-conflict", "rs => rs.map(r => r.querySelectorAll('canvas').length)"
+    ) == [2, 0]
+    merge = ".hive-merge button.blue"
+    assert page.is_disabled(merge)
+    page.click(".merge-conflict[data-path='glyphs/A^1.json'] .side[data-side='theirs']")
+    assert page.is_disabled(merge)  # one more to choose
+    page.click(".merge-conflict[data-path='font-data.json'] .side[data-side='ours']")
+    assert page.is_enabled(merge)
+    page.click(merge)
+    page.wait_for_selector("text=Merged: 2 glyphs changed in main.")
+    call = page.evaluate("calls.find(c => c.path.endsWith('/merge'))")
+    assert call["method"] == "POST"
+    assert call["query"] == {
+        "from": "bold",
+        "into": "main",
+        "fromHead": "f" * 40,
+        "intoHead": "e" * 40,
+    }
+    assert call["body"] == {
+        "resolutions": {"glyphs/A^1.json": "theirs", "font-data.json": "ours"}
+    }
+    page.click("text=Open main")
+    page.wait_for_function("window.went")
+    assert page.evaluate("window.went") == "main"
+    assert page.errors == []
+    page.close()
+
+
+def test_designers_update_but_do_not_merge(browser_and_url):
+    data = merge_data()
+    data["preview"] = {
+        **PREVIEW,
+        "from": "main",
+        "into": "bold",
+        "conflicts": [],
+        "canMerge": True,
+    }
+    page = open_page(browser_and_url, project="Mutator@bold", data=data)
+    page.wait_for_function("hive.branches && hive.project.branch === 'bold'")
+    page.click(".hive-branch")
+    page.wait_for_selector(".branch-row")
+    items = page.eval_on_selector_all(
+        ".hive-menu > a:not(.archived-toggle)",
+        "as => as.map(a => [a.textContent, a.className, a.title])",
+    )
+    assert items[0] == [
+        "Merge into main…",
+        "disabled",
+        "Only managers and admins merge into main",
+    ]
+    page.click("text=Update from main…")
+    page.wait_for_selector(".hive-merge button.blue")
+    assert "Update “bold” from “main”" in page.inner_text(".hive-merge")
+    assert page.is_enabled(".hive-merge button.blue")  # no conflicts
+    page.click(".hive-merge button.blue")
+    page.wait_for_selector("text=Merged:")
+    call = page.evaluate("calls.find(c => c.path.endsWith('/merge'))")
+    assert (call["query"]["from"], call["query"]["into"]) == ("main", "bold")
+    assert (
+        page.evaluate("document.querySelector('.hive-merge .blue')") is None
+    )  # no "Open"
+    page.close()
+
+
+def test_nothing_to_merge(browser_and_url):
+    data = merge_data(can_delete=True)
+    data["preview"] = {**PREVIEW, "upToDate": True, "ahead": 0}
+    page = open_page(browser_and_url, project="Mutator@bold", data=data)
+    page.wait_for_function("hive.branches")
+    page.evaluate(
+        "window.hiveModule.openMergeDialog('Mutator', {from: 'bold', into: 'main'})"
+    )
+    page.wait_for_selector("text=Nothing to merge")
+    assert page.evaluate("document.querySelector('.hive-merge .blue')") is None
+    page.close()
+
+
+def test_merge_helpers(browser_and_url):
+    page = open_page(browser_and_url)
+    result = page.evaluate("""async () => {
+        const m = window.hiveModule;
+        const plugin = await import('/plugin/init.js');
+        const glyph = {
+          sources: [{ name: 'Bold', layerName: 'b' }, { name: 'Reg', layerName: 'r' }],
+          layers: { b: {}, r: {} },
+        };
+        return [m.listNames(['a', 'b']), m.listNames(['a', 'b', 'c', 'd'], 2),
+                m.conflictLayer(glyph, ['layer r'], plugin.pickLayerName),
+                m.conflictLayer(glyph, ['source Bold'], plugin.pickLayerName),
+                m.conflictLayer(glyph, ['name'], plugin.pickLayerName)];
+      }""")
+    assert result == ["a, b", "a, b and 2 more", "r", "b", "b"]
     page.close()
