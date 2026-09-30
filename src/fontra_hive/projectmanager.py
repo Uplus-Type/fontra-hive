@@ -254,12 +254,20 @@ class DevHiveProjectManager(CommentRoutesMixin):
 
     async def pythonBundleHandler(self, request: web.Request) -> web.Response:
         """/hive/try/python.zip: the Python "Try Fontra" runs in the browser
-        (fontra_hive.trybundle), built once from this server's packages."""
+        (fontra_hive.trybundle), built once from this server's packages;
+        /hive/try/python-glyphs.zip: what reads Glyphs files, loaded when
+        one is opened."""
         from . import trybundle
 
-        data, etag = await asyncio.get_running_loop().run_in_executor(
-            None, trybundle.bundle
+        build = (
+            trybundle.glyphsBundle
+            if request.match_info.get("which") == "-glyphs"
+            else trybundle.bundle
         )
+        built = await asyncio.get_running_loop().run_in_executor(None, build)
+        if built is None:
+            raise web.HTTPNotFound(text="Glyphs files cannot be read on this server")
+        data, etag = built
         headers = {"Cache-Control": "no-cache", "ETag": etag}
         if request.headers.get("If-None-Match") == etag:
             raise web.HTTPNotModified(headers=headers)
@@ -554,7 +562,7 @@ class DevHiveProjectManager(CommentRoutesMixin):
                 for view in FONTRA_VIEWS
             ),
             web.get("/try", self.tryHandler),
-            web.get("/hive/try/python.zip", self.pythonBundleHandler),
+            web.get("/hive/try/python{which:(-glyphs)?}.zip", self.pythonBundleHandler),
             web.get("/hive/pyodide/{name}", self.pyodideHandler),
             web.get("/hive/{path:.*}", self.clientFileHandler),
             web.get("/favicon.ico", self.faviconHandler),
@@ -1678,6 +1686,8 @@ def injectHiveScripts(html: str) -> str:
 # (those are "owner/name") nor a project of the dev server.
 TRY_PROJECT = "demo:MutatorSans"
 TRY_LOCAL_PREFIX = "local:"
+# A font kept in the browser, on a branch or not ("local:<id>@<branch>").
+TRY_LOCAL_PATTERN = re.escape(TRY_LOCAL_PREFIX) + r"[0-9a-f]{12}(@[^/@]+)?"
 TRY_VIEWS = ("editor", "fontoverview", "fontinfo")
 TRY_START = (
     "/editor.html?project="
@@ -1715,7 +1725,7 @@ def _isTryRequest(request, view: str) -> bool:
     project = query.get("project") or ""
     return view in TRY_VIEWS and (
         project == TRY_PROJECT
-        or re.fullmatch(re.escape(TRY_LOCAL_PREFIX) + "[0-9a-f]{12}", project) is not None
+        or re.fullmatch(TRY_LOCAL_PATTERN, project) is not None
     )
 
 

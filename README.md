@@ -488,7 +488,8 @@ Fontra's own.
   Python backend does, byte for byte, and zips (`CompressionStream`); every
   other format goes through Python too (`py/hive_try_convert.py`, Fontra's
   backends and Hive's `importer` and `export`): UFO, designspace with its
-  UFOs, TrueType/OpenType/WOFF/TTX in; `.fontra` or designspace + UFOs out.
+  UFOs, Glyphs (`.glyphs`, `.glyphspackage`), TrueType/OpenType/WOFF/TTX
+  in; `.fontra` or designspace + UFOs out.
 - `try-banner.js`: the bar at the bottom (name, save state, "Your fonts",
   "Download", "Keep a copy") and the "Your fonts" panel (open a file or a
   folder, open, delete).
@@ -498,7 +499,14 @@ built once from this server's environment: the pure-Python packages
 (Fontra, Hive, fontTools, ufoLib2, cattrs, attrs, aiohttp with multidict,
 yarl and co. in their pure versions, dulwich…), stand-ins for `watchfiles`
 and two functions of `ufo2ft`, and an `entry_points.txt` of the backends
-that work in the browser. About 2 MB.
+that work in the browser. About 2 MB. Reading Glyphs files comes in a
+second bundle, `/hive/try/python-glyphs.zip` (about 0.9 MB), loaded only
+when a Glyphs file is opened: glyphsLib, fontra-glyphs, and
+`py/openstep_plist`, a pure-Python port of openstep-plist's parser (the
+package on PyPI is compiled). The server builds it when glyphsLib and
+fontra-glyphs are installed (`pip install "glyphsLib>=6.14" fontra-glyphs`);
+without them it answers 404 and the page says Glyphs files cannot be read
+there.
 
 Pyodide itself comes from the jsDelivr CDN by default. To host it here
 (recommended: no third party sees the visitors, and it works behind a strict
@@ -513,8 +521,7 @@ Hive's page script, which needs accounts); two windows on the same font
 share one server in each window's worker, not live with each other; what
 Fontra asks its server over HTTP (`/api/unionPath` and the other path
 operations, `parseClipboard`) is not answered, so Remove overlap and
-pasting from other apps fail; Glyphs files are not read (glyphsLib needs
-openstep_plist, compiled code); no compiled font download (fontc in
+pasting from other apps fail; no compiled font download (fontc in
 WebAssembly, later). Opening a font kept in the browser loads about 15 MB
 the first time (Pyodide and `python.zip`), cached by the browser after.
 

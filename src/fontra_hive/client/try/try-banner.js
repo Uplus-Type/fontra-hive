@@ -108,14 +108,17 @@ function when(iso) {
   }
 }
 
-const FONT_FILES = /\.(ttf|otf|woff2?|ttx)$/i;
+const FONT_FILES = /\.(ttf|otf|woff2?|ttx|glyphs)$/i;
+const GLYPHS = /\.glyphs(package)?(\/|$)/i;
 
 function hasFontra(paths) {
   return paths.some((p) => p.split("/").pop() === "font-data.json");
 }
 
 function stemOf(name) {
-  return name.replace(/\.zip$/i, "").replace(/\.(fontra|ufo|designspace|ttf|otf|woff2?|ttx)$/i, "");
+  return name
+    .replace(/\.zip$/i, "")
+    .replace(/\.(fontra|ufo|designspace|ttf|otf|woff2?|ttx|glyphs|glyphspackage)$/i, "");
 }
 
 // What the visitor picked, as the files of a .fontra package, and a name
@@ -130,18 +133,23 @@ async function packageFromPick(fileList, onProgress) {
     if (/\.zip$/i.test(file.name)) {
       const files = await Format.unzip(file);
       if (hasFontra([...files.keys()])) return { files, label: stemOf(file.name) };
-      return { files: await tryAPI.convertToFontra(file.name, file, onProgress), label: stemOf(file.name) };
+      const glyphs = [...files.keys()].some((p) => GLYPHS.test(p));
+      return {
+        files: await tryAPI.convertToFontra(file.name, file, onProgress, { glyphs }),
+        label: stemOf(file.name),
+      };
     }
     if (FONT_FILES.test(file.name)) {
-      return { files: await tryAPI.convertToFontra(file.name, file, onProgress), label: stemOf(file.name) };
+      const glyphs = GLYPHS.test(file.name);
+      return {
+        files: await tryAPI.convertToFontra(file.name, file, onProgress, { glyphs }),
+        label: stemOf(file.name),
+      };
     }
     if (/\.designspace$/i.test(file.name)) {
       throw new Error("A designspace needs its UFOs: open the folder that holds them, or a .zip of it.");
     }
-    if (/\.(glyphs|glyphspackage)$/i.test(file.name)) {
-      throw new Error("Glyphs files cannot be opened here yet.");
-    }
-    throw new Error("Open a .zip, a .ttf, .otf, .woff, .woff2 or .ttx file, or a folder.");
+    throw new Error("Open a .zip, a .glyphs, .ttf, .otf, .woff, .woff2 or .ttx file, or a folder.");
   }
   // A folder: a .fontra package is read here; anything else is zipped and
   // converted, the whole folder (a designspace needs its UFOs).
@@ -151,8 +159,9 @@ async function packageFromPick(fileList, onProgress) {
   if (hasFontra([...files.keys()])) return { files, label: stemOf(folder) };
   onProgress?.("Reading the folder…");
   const zipped = await Format.zip(files);
+  const glyphs = [...files.keys()].some((p) => GLYPHS.test(p));
   return {
-    files: await tryAPI.convertToFontra(folder + ".zip", zipped, onProgress),
+    files: await tryAPI.convertToFontra(folder + ".zip", zipped, onProgress, { glyphs }),
     label: stemOf(folder),
   };
 }
@@ -183,7 +192,7 @@ function openPanel() {
   const list = el("ul");
   const fileInput = el("input", {
     type: "file",
-    accept: ".zip,.ttf,.otf,.woff,.woff2,.ttx,application/zip",
+    accept: ".zip,.glyphs,.ttf,.otf,.woff,.woff2,.ttx,application/zip",
     hidden: "",
   });
   const folderInput = el("input", { type: "file", webkitdirectory: "", hidden: "" });
@@ -278,7 +287,7 @@ function openPanel() {
         ),
         el(
           "button",
-          { type: "button", class: "plain", title: "a .fontra, a .ufo, or the folder of a designspace and its UFOs", onclick: () => folderInput.click() },
+          { type: "button", class: "plain", title: "a .fontra, a .ufo, a .glyphspackage, or the folder of a designspace and its UFOs", onclick: () => folderInput.click() },
           "Open a folder…"
         ),
         el("button", { type: "button", class: "plain", onclick: () => go(DEMO_URL) }, "Demo font")
@@ -288,7 +297,7 @@ function openPanel() {
       el(
         "p",
         { class: "note" },
-        "Opens .fontra, UFO, designspace + UFOs, TrueType and OpenType (Glyphs files: not yet). " +
+        "Opens .fontra, Glyphs (.glyphs, .glyphspackage), UFO, designspace + UFOs, TrueType and OpenType. " +
           "Fonts are kept by this browser only: clearing this site's data deletes them. Download a copy to keep it."
       ),
       fileInput,

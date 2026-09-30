@@ -139,7 +139,54 @@ def test_python_bundle_for_the_browser():
     entryPoints = archive.read(f"{trybundle.DIST_INFO}/entry_points.txt").decode()
     assert "[fontra.filesystem.backends]" in entryPoints
     assert "designspace = fontra.backends.designspace:DesignspaceBackend" in entryPoints
-    assert "glyphs" not in entryPoints  # not readable in the browser (yet)
+    assert "glyphs" not in entryPoints  # in the second bundle, loaded when needed
+
+
+def test_glyphs_bundle_for_the_browser():
+    """Reading Glyphs files: glyphsLib, fontra-glyphs and a pure-Python
+    openstep_plist, in a second bundle loaded only when a Glyphs file is opened."""
+    import io
+    import zipfile
+
+    from fontra_hive import trybundle
+
+    if not trybundle.glyphsAvailable():
+        assert trybundle.glyphsBundle() is None
+        pytest.skip("glyphsLib and fontra-glyphs are not installed")
+    archive = zipfile.ZipFile(io.BytesIO(trybundle.buildGlyphsBundle()))
+    names = set(archive.namelist())
+    assert "glyphsLib/parser.py" in names and "fontra_glyphs/backend.py" in names
+    assert "openstep_plist/parser.py" in names
+    assert not any(n.endswith((".so", ".pyd", ".pyc")) for n in names)
+    assert not any(n.startswith(("fontra/", "fontTools/")) for n in names)
+    entryPoints = "".join(
+        archive.read(n).decode() for n in names if n.endswith("entry_points.txt")
+    )
+    assert "glyphs = " in entryPoints and "glyphspackage = " in entryPoints
+
+
+def test_pure_python_openstep_plist():
+    """The browser's openstep_plist (the real one is compiled)."""
+    import sys
+
+    sys.path.insert(0, str(TRY_DIR / "py"))
+    try:
+        import openstep_plist
+
+        assert openstep_plist.__file__.startswith(str(TRY_DIR))
+        text = '{a = 1; b = (x, "y z", <4142>); c = {d = -1.5;};}'
+        assert openstep_plist.loads(text, use_numbers=True) == {
+            "a": 1,
+            "b": ["x", "y z", b"AB"],
+            "c": {"d": -1.5},
+        }
+        with pytest.raises(openstep_plist.ParseError):
+            openstep_plist.loads("{a = 1")
+    finally:
+        sys.path.remove(str(TRY_DIR / "py"))
+        sys.modules.pop("openstep_plist", None)
+        for name in [m for m in sys.modules if m.startswith("openstep_plist.")]:
+            sys.modules.pop(name)
 
 
 def test_pyodide_is_served_here(manager, tmp_path, monkeypatch):  # noqa: F811
@@ -179,12 +226,23 @@ def test_pyodide_is_served_here(manager, tmp_path, monkeypatch):  # noqa: F811
 
 def test_python_bundle_route(manager):  # noqa: F811
     async def go():
-        response = await manager.pythonBundleHandler(SimpleNamespace(headers={}))
+        response = await manager.pythonBundleHandler(
+            SimpleNamespace(headers={}, match_info={})
+        )
         assert response.content_type == "application/zip"
         etag = response.headers["ETag"]
         with pytest.raises(web.HTTPNotModified):
             await manager.pythonBundleHandler(
-                SimpleNamespace(headers={"If-None-Match": etag})
+                SimpleNamespace(headers={"If-None-Match": etag}, match_info={})
             )
+        from fontra_hive import trybundle
+
+        glyphs = SimpleNamespace(headers={}, match_info={"which": "-glyphs"})
+        if trybundle.glyphsAvailable():
+            response = await manager.pythonBundleHandler(glyphs)
+            assert response.headers["ETag"] != etag
+        else:
+            with pytest.raises(web.HTTPNotFound):
+                await manager.pythonBundleHandler(glyphs)
 
     asyncio.run(go())

@@ -195,9 +195,11 @@
   }
 
   // A picked file (or a zip made of a picked folder) as .fontra files.
-  async function convertToFontra(name, blob, onProgress) {
+  // options.glyphs: it is (or holds) a Glyphs file, which needs more Python.
+  async function convertToFontra(name, blob, onProgress, options) {
     var data = await blob.arrayBuffer();
-    var reply = await python("toFontra", { name: name, data: data }, [data], onProgress);
+    var extras = options && options.glyphs ? ["glyphs"] : [];
+    var reply = await python("toFontra", { name: name, data: data, extras: extras }, [data], onProgress);
     var files = new Map();
     reply.files.forEach(function (entry) {
       files.set("converted.fontra/" + entry[0], new Blob([entry[1]]));

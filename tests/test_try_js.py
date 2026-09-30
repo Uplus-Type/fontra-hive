@@ -79,6 +79,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             from fontra_hive import trybundle
 
             return self._send(trybundle.bundle()[0], "application/zip")
+        if path == "/hive/try/python-glyphs.zip":
+            from fontra_hive import trybundle
+
+            glyphs = trybundle.glyphsBundle()
+            if glyphs is None:
+                self.send_error(404)
+                return
+            return self._send(glyphs[0], "application/zip")
         if path.startswith("/hive/pyodide/") and PYODIDE_DIR:
             file = pathlib.Path(PYODIDE_DIR) / path[len("/hive/pyodide/") :]
         elif path.startswith("/hive/"):
@@ -546,6 +554,66 @@ def test_other_formats_are_converted_in_the_browser(server, browser, tmp_path):
         timeout=30000,
     )
     assert "No font found" in page.locator(".hive-try-panel .error").inner_text()
+    assert not errors
+    context.close()
+
+
+GLYPHS_SOURCE = """{
+.appVersion = "3260";
+.formatVersion = 3;
+familyName = "Hexa";
+fontMaster = (
+{
+id = m01;
+name = Regular;
+metricValues = ({pos = 700;},{},{pos = 500;},{pos = -200;},{});
+}
+);
+glyphs = (
+{
+glyphname = O;
+layers = (
+{
+layerId = m01;
+shapes = (
+{
+closed = 1;
+nodes = ((100,0,l),(500,0,l),(500,700,l),(100,700,l));
+}
+);
+width = 600;
+}
+);
+unicode = 79;
+}
+);
+metrics = ({type = ascender;},{type = baseline;},{type = "x-height";},{type = descender;},{type = "cap height";});
+unitsPerEm = 1000;
+versionMajor = 1;
+versionMinor = 0;
+}
+"""
+
+
+def test_glyphs_files_are_read_in_the_browser(server, browser, tmp_path):
+    _needsHiveInTheBrowser()
+    from fontra_hive import trybundle
+
+    if not trybundle.glyphsAvailable():
+        pytest.skip("glyphsLib and fontra-glyphs are not installed")
+    source = tmp_path / "Hexa.glyphs"
+    source.write_text(GLYPHS_SOURCE, encoding="utf-8")
+    context = browser.new_context(viewport={"width": 1400, "height": 850})
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.goto(f"{server}/editor.html?{TRY_PAGE_QUERY}")
+    page.get_by_role("button", name="Your fonts").click()
+    page.locator(".hive-try-panel input[accept]").set_input_files(str(source))
+    page.wait_for_url("**project=local*", timeout=120000)
+    page.wait_for_function("window.editorController?.fontController?.glyphMap?.O")
+    assert page.locator(".hive-try .name").inner_text() == "Hexa"
+    assert page.evaluate("editorController.fontController.glyphMap.O") == [79]
     assert not errors
     context.close()
 

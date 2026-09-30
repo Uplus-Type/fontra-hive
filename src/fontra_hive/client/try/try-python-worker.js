@@ -49,6 +49,26 @@ function ready(base, say) {
   return pyodidePromise;
 }
 
+// A second bundle, loaded when first needed: "glyphs" (reading Glyphs files).
+const extras = new Map();
+function extra(py, name, say) {
+  if (!extras.has(name)) {
+    extras.set(
+      name,
+      (async () => {
+        say("Loading what reads Glyphs files…");
+        const response = await fetch(`/hive/try/python-${name}.zip`);
+        if (response.status === 404) throw new Error("Glyphs files cannot be read on this server.");
+        if (!response.ok) throw new Error(`python-${name}.zip: HTTP ${response.status}`);
+        py.unpackArchive(new Uint8Array(await response.arrayBuffer()), "zip", { extractDir: SITE });
+        py.runPython("import importlib; importlib.invalidate_caches()");
+      })()
+    );
+    extras.get(name).catch(() => extras.delete(name));
+  }
+  return extras.get(name);
+}
+
 function hive(base, say) {
   if (!hivePromise) {
     hivePromise = (async () => {
@@ -196,6 +216,7 @@ function message(error) {
 const OPS = {
   async toFontra(request, say) {
     const py = await ready(request.base, say);
+    for (const name of request.extras || []) await extra(py, name, say);
     say("Converting " + request.name + "…");
     const work = "/tmp/hive-try-in/" + counter++;
     const upload = work + "/" + request.name.replace(/[\\/]/g, "_");
