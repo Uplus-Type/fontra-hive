@@ -1833,18 +1833,40 @@ export class HiveComments {
       this.toast(this.loaded ? "Your role on this project cannot comment." : "Loading comments…");
       return true;
     }
+    const point = { x: Math.round(x), y: Math.round(y) };
     const source = sourceOf(positionedGlyph.glyph);
     if (!source) {
-      this.toast(
-        `Comments are pinned to a source: go to one of ${positionedGlyph.glyphName}'s sources first.`
-      );
+      // Like Fontra when one tries to edit there: offer the nearest source,
+      // then start the comment at the same point.
+      const glyphName = positionedGlyph.glyphName;
+      this.toast("Comments are pinned to a source, and this is not one.", {
+        label: "Go to the nearest source",
+        action: async () => {
+          const onSource = await this.goToNearestSource(glyphName);
+          if (onSource) this.startDraft(glyphName, onSource, point);
+        },
+      });
       return true;
     }
-    this.startDraft(positionedGlyph.glyphName, source, {
-      x: Math.round(x),
-      y: Math.round(y),
-    });
+    this.startDraft(positionedGlyph.glyphName, source, point);
     return true;
+  }
+
+  // Fontra's own "Go to nearest source", then wait until the glyph shown is
+  // that source's. Its source ({layer, name, location}), or null.
+  async goToNearestSource(glyphName) {
+    try {
+      await this.editor.goToNearestSource?.();
+    } catch (error) {
+      return null;
+    }
+    for (let i = 0; i < 30; i++) {
+      const positioned = this.sceneModel?.getSelectedPositionedGlyph?.();
+      const source = positioned?.glyphName === glyphName ? sourceOf(positioned.glyph) : null;
+      if (source) return source;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return null;
   }
 
   // --- going to a topic from the list ---------------------------------------------------

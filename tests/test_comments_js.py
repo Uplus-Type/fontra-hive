@@ -369,9 +369,18 @@ def test_the_tool_needs_a_source(page):
     p.evaluate("useTool(120, 450)")
     p.evaluate("frame()")
     assert p.evaluate("card()") is None
-    assert "pinned to a source" in p.evaluate(
-        "comments.overlayRoot.querySelector('.toast').textContent"
-    )
+    toast = "comments.overlayRoot.querySelector('.toast')"
+    assert "pinned to a source" in p.evaluate(f"{toast}.textContent")
+    # "Go to the nearest source" (Fontra's), then the comment starts there.
+    p.evaluate("""editor.goToNearestSource = async () => {
+      window.wentNearest = true;
+      setTimeout(() => (positioned.glyph = { ...positioned.glyph, layerName: 'Bold' }), 150);
+    }""")
+    p.evaluate(f"{toast}.querySelector('button').click()")
+    p.wait_for_function("comments.draft !== null")
+    assert p.evaluate("window.wentNearest")
+    assert p.evaluate("comments.draft.point") == {"x": 120, "y": 450}
+    assert p.evaluate("comments.draft.source.layer") == "Bold"
 
 
 def test_the_tool_leaves_other_glyphs_to_fontra(page):
