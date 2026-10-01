@@ -21,6 +21,7 @@ def test_account_pages_link_hives_icon():
 
 def test_landing_images_exist_and_are_served_with_their_type():
     html = (ACCOUNT / "login.html").read_text(encoding="utf-8")
+    html = re.sub(r"<!--.*?-->", "", html, flags=re.S)  # a figure still to come
     images = re.findall(r'src="/hive/landing/([^"]+)"', html)
     assert len(images) >= 4
     for name in images:
