@@ -617,3 +617,58 @@ def test_ufo_kerning_when_masters_have_different_groups(tmp_path):
         plistlib.loads(remote_store.read_file(tip, f"src/{OTHER_UFO}/groups.plist"))
         == other_groups
     )
+
+
+@needs_designspace
+def test_ufo_only_the_font_is_unpacked(tmp_path, monkeypatch):
+    """A repository holding much else (proofs, archives, other fonts): only
+    the designspace, the UFOs it names (here in another folder) and the
+    feature files are unpacked; everything else stays as it is."""
+    files = {}
+    for path, data in foreign_ufo_files(tmp_path).items():
+        if path.endswith(".designspace"):
+            files[path] = data.replace(
+                b'filename="Font_', b'filename="../masters/Font_'
+            )
+        else:
+            files[path.replace("src/Font_", "masters/Font_")] = data
+    extras = {
+        "proofs/Tosh-Bold.indd": b"\0" * 4096,
+        "old/Other.ufo/metainfo.plist": b"<plist/>",
+        "old/Other.ufo/glyphs/contents.plist": b"<plist/>",
+        "features/shared.fea": b"# shared\n",
+        "README.md": b"# A font\n",
+    }
+    files.update(extras)
+    remote_store = make_remote(tmp_path, files)
+    remote = Remote(str(remote_store.path), path="src/Font.designspace")
+    unpacked = []
+    real = hive_remote._materialize
+
+    def recording(store, entries, dest):
+        unpacked.append(set(entries))
+        return real(store, entries, dest)
+
+    monkeypatch.setattr(hive_remote, "_materialize", recording)
+    store = GitRepoStore.create(tmp_path / "project.git")
+    store.commit({"README": b"x"}, message="New project", author=ALICE)
+    pulled = pull(store, remote, allow_local=True)
+    assert {"A", "B"} <= set(pulled.glyphs)
+    store.fast_forward("main", "upstream/main")
+    before = remote_store.head("main")
+    edit_branch(store, "main", tmp_path, move_first_point)
+    result = push(store, remote, message="Fix A", author=BOB, allow_local=True)
+    assert result.pushed
+    assert remote_changed_files(remote_store) == [
+        f"masters/{DEFAULT_UFO}/glyphs/A_.glif"
+    ]
+    for paths in unpacked:  # the pull, then the push
+        assert "src/Font.designspace" in paths and "features/shared.fea" in paths
+        assert any(p.startswith(f"masters/{DEFAULT_UFO}/") for p in paths)
+        assert not any(
+            p.startswith(("proofs/", "old/")) or p == "README.md" for p in paths
+        )
+    tip = remote_store.head("main")
+    for path, data in extras.items():
+        assert remote_store.read_file(tip, path) == data
+    assert len(remote_store.list_tree(tip)) == len(remote_store.list_tree(before))

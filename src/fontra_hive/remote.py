@@ -52,6 +52,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import pathlib
+import posixpath
 import re
 import socket
 import stat
@@ -372,6 +373,48 @@ def _read_folder(folder: pathlib.Path) -> dict[str, bytes]:
     }
 
 
+def _designspace_sources(data: bytes) -> list[str]:
+    """The ``filename`` of each ``<source>`` of a designspace document."""
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError as error:
+        raise RemoteError(f"The designspace cannot be read: {error}")
+    return [s.get("filename") for s in root.iter("source") if s.get("filename")]
+
+
+def font_entries(
+    store: GitRepoStore, remote: Remote, entries: Mapping[str, tuple]
+) -> dict[str, tuple]:
+    """The part of a remote tree a UFO/designspace font needs: the
+    designspace, the UFOs it names (wherever they are in the repository),
+    or the one ``.ufo``; plus every ``.fea`` file of the repository (feature
+    files ``include`` each other across folders). Only this is unpacked:
+    a repository may hold much else (proofs, archives, other fonts)."""
+    keep: set[str] = set()
+
+    def add_folder(folder: str) -> None:
+        prefix = folder.strip("/") + "/"
+        keep.update(p for p in entries if p.startswith(prefix))
+
+    if remote.path.lower().endswith(".ufo"):
+        add_folder(remote.path)
+    else:
+        if remote.path not in entries:
+            raise RemoteError(f"{remote.path} is not in the remote repository.")
+        keep.add(remote.path)
+        base = posixpath.dirname(remote.path)
+        data = store.repo[entries[remote.path][1]].data
+        for filename in _designspace_sources(data):
+            target = posixpath.normpath(posixpath.join(base, filename))
+            if target == ".." or target.startswith("../") or target.startswith("/"):
+                continue  # outside the repository
+            add_folder(target)
+    keep.update(p for p in entries if p.lower().endswith(".fea"))
+    return {p: entries[p] for p in sorted(keep)}
+
+
 def remote_as_fontra(
     store: GitRepoStore, remote: Remote, remote_sha: str
 ) -> dict[str, bytes]:
@@ -396,7 +439,7 @@ def remote_as_fontra(
         raise RemoteError(f"{remote.path} is not in the remote repository.")
     with tempfile.TemporaryDirectory(prefix="hive-pull-") as tmp:
         work = pathlib.Path(tmp) / "repo"
-        _materialize(store, entries, work)
+        _materialize(store, font_entries(store, remote, entries), work)
         converted = pathlib.Path(tmp) / "converted.fontra"
         try:
             _run(_copy_font(work / remote.path, converted))
@@ -730,7 +773,8 @@ def _ufo_changes(
     with tempfile.TemporaryDirectory(prefix="hive-push-") as tmp:
         tmp = pathlib.Path(tmp)
         work = tmp / "repo"
-        _materialize(store, remote_entries, work)
+        checked_out = font_entries(store, remote, remote_entries)
+        _materialize(store, checked_out, work)
         new_fontra = tmp / "new.fontra"
         store.export(head, new_fontra)
         old_fontra = None
@@ -739,6 +783,7 @@ def _ufo_changes(
             store.export(base_head, old_fontra)
         _run(
             _write_ufo(
+                work,
                 work / remote.path,
                 new_fontra,
                 old_fontra,
@@ -747,7 +792,7 @@ def _ufo_changes(
                 kerning_changed,
             )
         )
-        changes = _collect(store, remote_entries, work, codepoints_changed)
+        changes = _collect(store, remote_entries, checked_out, work, codepoints_changed)
     return changes, sent, skipped
 
 
@@ -756,7 +801,7 @@ GROUPS_PLIST = "groups.plist"
 
 
 async def _write_ufo(
-    target, new_fontra, old_fontra, put_names, delete_names, kerning_changed
+    root, target, new_fontra, old_fontra, put_names, delete_names, kerning_changed
 ):
     from fontra.backends import getFileSystemBackend
 
@@ -765,7 +810,7 @@ async def _write_ufo(
     async with aclosing(hive), aclosing(ufo):
         glyph_map = await hive.getGlyphMap()
         if kerning_changed:
-            folders = _ufo_folders(target)
+            folders = _ufo_folders(root, target)
             original = _read_plists(folders)
             old_kerning = {}
             if old_fontra is not None:
@@ -828,10 +873,11 @@ async def _empty_kerning(hive):
     }
 
 
-def _ufo_folders(target: pathlib.Path) -> list[pathlib.Path]:
+def _ufo_folders(root: pathlib.Path, target: pathlib.Path) -> list[pathlib.Path]:
+    """The UFOs unpacked for the push (only the font's: see font_entries)."""
     if target.suffix.lower() == ".ufo":
         return [target]
-    return sorted(p for p in target.parent.rglob("*.ufo") if p.is_dir())
+    return sorted(p for p in root.rglob("*.ufo") if p.is_dir())
 
 
 def _read_plists(folders) -> dict[pathlib.Path, dict | None]:
@@ -891,10 +937,11 @@ def _write_plists(original, written_old, written_new) -> None:
 
 
 def _collect(
-    store, remote_entries, work, codepoints_changed
+    store, remote_entries, checked_out, work, codepoints_changed
 ) -> dict[str, bytes | None]:
     """The files of the checkout that differ from the remote commit, after
-    the safeguards."""
+    the safeguards. Only what was unpacked (``checked_out``) can have been
+    deleted; the rest of the repository stays as it is."""
     changes: dict[str, bytes | None] = {}
     seen = set()
     for file in sorted(work.rglob("*")):
@@ -919,7 +966,7 @@ def _collect(
             if template is not None:
                 data = match_formatting(store.repo[template].data, data)
             changes[path] = data
-    for path, (mode, _sha) in remote_entries.items():
+    for path, (mode, _sha) in checked_out.items():
         if path not in seen and not stat.S_ISLNK(mode) and mode != GITLINK_MODE:
             changes[path] = None
     return changes
