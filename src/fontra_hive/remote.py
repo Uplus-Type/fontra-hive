@@ -58,7 +58,7 @@ import stat
 import tempfile
 import time
 import urllib.parse
-from contextlib import aclosing
+from contextlib import aclosing, contextmanager
 from dataclasses import dataclass, field
 from typing import Iterable, Mapping
 
@@ -770,13 +770,14 @@ async def _write_ufo(
                 old_backend = getFileSystemBackend(old_fontra)
                 async with aclosing(old_backend):
                     old_kerning = await old_backend.getKerning()
-            if old_kerning:
-                await ufo.putKerning(old_kerning)
-            else:
-                await ufo.putKerning(await _empty_kerning(hive))
-            written_old = _read_plists(folders)
-            await ufo.putKerning(await hive.getKerning())
-            written_new = _read_plists(folders)
+            with _unvalidated_kerning_writes():
+                if old_kerning:
+                    await ufo.putKerning(old_kerning)
+                else:
+                    await ufo.putKerning(await _empty_kerning(hive))
+                written_old = _read_plists(folders)
+                await ufo.putKerning(await hive.getKerning())
+                written_new = _read_plists(folders)
             _write_plists(original, written_old, written_new)
         for name in put_names:
             glyph = await hive.getGlyph(name)
@@ -787,6 +788,29 @@ async def _write_ufo(
                 await ufo.deleteGlyph(name)
             except KeyError:
                 pass
+
+
+@contextmanager
+def _unvalidated_kerning_writes():
+    """Let Fontra's ``putKerning`` write what it was given even when ufoLib
+    would refuse it (a glyph in two kerning groups of the same side: seen in
+    real sources). Its output is only compared, old against new; the files
+    Hive writes are patched from the originals by :func:`_write_plists`."""
+    from fontTools.ufoLib import UFOWriter
+
+    write_groups, write_kerning = UFOWriter.writeGroups, UFOWriter.writeKerning
+
+    def groups(self, groups, validate=None):
+        return write_groups(self, groups, validate=False)
+
+    def kerning(self, kerning, validate=None):
+        return write_kerning(self, kerning, validate=False)
+
+    UFOWriter.writeGroups, UFOWriter.writeKerning = groups, kerning
+    try:
+        yield
+    finally:
+        UFOWriter.writeGroups, UFOWriter.writeKerning = write_groups, write_kerning
 
 
 async def _empty_kerning(hive):
@@ -889,11 +913,32 @@ def _collect(
             if data != old:
                 changes[path] = data
         else:
+            template = _sibling(remote_entries, path)
+            if template is not None:
+                data = match_formatting(store.repo[template].data, data)
             changes[path] = data
     for path, (mode, _sha) in remote_entries.items():
         if path not in seen and not stat.S_ISLNK(mode) and mode != GITLINK_MODE:
             changes[path] = None
     return changes
+
+
+def _sibling(remote_entries, path: str):
+    """A file of the same kind in the same folder (or, for a new layer
+    folder, the same UFO): the formatting a new file should follow."""
+    suffix = pathlib.PurePosixPath(path).suffix
+    if suffix not in (".glif", ".plist"):
+        return None
+    folder = path.rpartition("/")[0]
+    ufo = folder.rpartition("/")[0] if suffix == ".glif" else folder
+    fallback = None
+    for other, (_mode, sha) in remote_entries.items():
+        if other.endswith(suffix):
+            if other.rpartition("/")[0] == folder:
+                return sha
+            if fallback is None and other.startswith(ufo + "/"):
+                fallback = sha
+    return fallback
 
 
 # --- formatting safeguards ------------------------------------------------------

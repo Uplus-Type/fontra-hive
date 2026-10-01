@@ -575,3 +575,45 @@ def test_restore_glif_details():
     assert b'<advance width="12"/>' in fixed
     # Code points changed in Hive: the new <unicode> stays.
     assert b"<unicode" in restore_glif_details(old, new, {"A"})
+
+
+@needs_designspace
+def test_ufo_kerning_when_masters_have_different_groups(tmp_path):
+    """Real sources (roman and italic masters in one designspace) put a glyph
+    in different kerning groups per master. Fontra merges the groups, then
+    ufoLib refuses to write them ("occurs in too many kerning groups"); Hive
+    still sends the pair, and each master keeps its own groups."""
+    from fontTools.misc import plistlib
+
+    files = foreign_ufo_files(tmp_path)
+    other_groups = {
+        "accents": ["A"],
+        "public.kern1.A": ["A"],
+        "public.kern1.Alt": ["A.alt"],
+    }
+    files[f"src/{OTHER_UFO}/groups.plist"] = plistlib.dumps(other_groups)
+    files[f"src/{OTHER_UFO}/kerning.plist"] = plistlib.dumps(
+        {"public.kern1.Alt": {"B": -5}}
+    )
+    remote_store = make_remote(tmp_path, files)
+    remote = Remote(str(remote_store.path), path="src/Font.designspace")
+    store = GitRepoStore.create(tmp_path / "project.git")
+    store.commit({"README": b"x"}, message="New project", author=ALICE)
+    pull(store, remote, allow_local=True)
+    store.fast_forward("main", "upstream/main")
+
+    async def edit_kerning(backend):
+        kerning = await backend.getKerning()
+        table = kerning["kern"]
+        table.values["@A"]["B"][table.sourceIdentifiers.index("5bea6334")] = -35
+        await backend.putKerning(kerning)
+
+    edit_branch(store, "main", tmp_path, edit_kerning)
+    result = push(store, remote, message="Kern AB", author=BOB, allow_local=True)
+    assert result.pushed
+    assert remote_changed_files(remote_store) == [f"src/{DEFAULT_UFO}/kerning.plist"]
+    tip = remote_store.head("main")
+    assert (
+        plistlib.loads(remote_store.read_file(tip, f"src/{OTHER_UFO}/groups.plist"))
+        == other_groups
+    )
