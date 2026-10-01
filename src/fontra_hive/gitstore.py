@@ -183,6 +183,7 @@ def swap_ref(refs, ref: bytes, old: bytes | None, new: bytes) -> bool:
 SNAPSHOT_TAG_PREFIX = "snapshot/"
 GLYPH_SNAPSHOT_TAG_PREFIX = "glyph-snapshot/"
 ARCHIVE_TAG_PREFIX = "archive/"
+UPSTREAM_BRANCH_PREFIX = "upstream/"  # mirrors of remote branches (remote.py)
 HIVE_META_REF = b"refs/hive/meta"
 BRANCH_INFO_FILE = "branches.json"
 
@@ -192,6 +193,7 @@ _RESERVED_BRANCH_PREFIXES = (
     SNAPSHOT_TAG_PREFIX,
     GLYPH_SNAPSHOT_TAG_PREFIX,
     ARCHIVE_TAG_PREFIX,
+    UPSTREAM_BRANCH_PREFIX,
 )
 
 

@@ -28,7 +28,10 @@ the open-source, browser-based font editor. It is the open part of
 - Comments on glyphs: numbered topics pinned to a point of a glyph's source,
   kept on `refs/hive/comments` (see below).
 - `fontra-hive` — a small CLI: `init`, `import`, `export`, `log`, `branches`,
-  `branch`, `tag`, `diff`, `snapshot`.
+  `branch`, `tag`, `diff`, `snapshot`, `pull`, `push`, `remote-status`.
+- `fontra_hive.remote` — remote git repositories (GitHub, GitLab…): pull a
+  remote branch into `upstream/<branch>`, push a branch's changes back as one
+  commit (see "Remote git repositories" below). Engine only, no interface yet.
 
 Fontra itself is not modified: the plug-in registers through the
 `fontra.projectmanagers` entry point and uses public backend APIs only.
@@ -578,6 +581,52 @@ To change the demo font: convert a font to `.fontra` with Fontra
 `getUnitsPerEm`, `getFontInfo`, `getKerning`, `getFeatures`,
 `getCustomData`, `getConditionalSubstitutions`), unstructured with
 `fontra.core.classes.unstructure`.
+
+## Remote git repositories (engine)
+
+A project can mirror a branch of a remote repository holding the same font,
+as a `.fontra` package or as UFO/designspace sources.
+
+- **Pull** fetches the remote branch (shallow when the transport allows it)
+  and records it as a "Pull from …" commit on the Hive branch
+  `upstream/<remote branch>`, converted to `.fontra` for UFO remotes. The
+  first pull forks that branch from the branch it is pulled for; it is then
+  merged like any other branch (three-way merge, `merge.py`).
+- **Push** sends what changed on a branch since the last sync as one commit
+  on top of the remote branch: the message is the caller's (a snapshot's
+  title), the author the Hive user, with `Co-authored-by:` lines for the
+  others. It refuses when the remote moved since the last pull, and when the
+  last pull is not merged into the branch. A `Hive-Push` commit on
+  `upstream/<branch>` records what was sent.
+- Trailers: `Hive-Upstream: <remote sha>` (the remote commit a state of
+  `upstream/…` corresponds to), `Hive-Pull`, `Hive-Push`. Branch names
+  starting with `upstream/` are reserved.
+- **UFO/designspace remotes: glyphs and kerning only.** Fontra's designspace
+  backend writes the changed glyphs into a checkout of the remote; then a
+  file whose content did not change keeps its bytes, a changed `.glif` or
+  `.plist` keeps the original's XML declaration, indentation and final
+  newline, the `<unicode>` elements of other masters and the guidelines Hive
+  did not change are put back. Kerning is written key by key (only the pairs
+  and `public.kern*` groups Hive changed). Other font-level changes (font
+  info, features, axes, sources) are not sent and are listed in
+  `PushResult.skipped`. Measured on MutatorSans: moving one point and
+  changing one kerning pair gives a two-file commit with one changed line in
+  each.
+- Addresses: HTTPS to public hosts only (`check_url`, against SSRF), unless
+  `allow_local` (tests, the CLI with a local path). Credentials are passed by
+  the caller (`Remote(username=…, password=token)`), never stored here.
+
+```bash
+export GITHUB_TOKEN=github_pat_…   # fine-grained, one repository, Contents: read & write
+fontra-hive pull repos/MyFont.git https://github.com/me/MyFont.git --path sources/MyFont.designspace
+# merge upstream/main into main (branch menu), edit, then:
+fontra-hive push repos/MyFont.git https://github.com/me/MyFont.git --path sources/MyFont.designspace -m "Proofs for the client"
+fontra-hive remote-status repos/MyFont.git https://github.com/me/MyFont.git --path sources/MyFont.designspace
+```
+
+Not yet: the interface (Settings › Git remote, push from the branch menu),
+credentials and webhooks in hive-api, pull requests, a first push to an empty
+UFO repository, `.glyphs` sources.
 
 ## Tests
 

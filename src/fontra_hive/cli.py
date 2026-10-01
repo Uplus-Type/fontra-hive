@@ -8,6 +8,13 @@ Examples::
     fontra-hive branch repos/MyFont.git bold-extension
     fontra-hive snapshot repos/MyFont.git "Proofs sent to client"
     fontra-hive log   repos/MyFont.git --snapshots
+    fontra-hive pull  repos/MyFont.git https://github.com/me/MyFont.git \\
+                      --path MyFont.designspace
+    fontra-hive push  repos/MyFont.git https://github.com/me/MyFont.git \\
+                      --path MyFont.designspace -m "Proofs for the client"
+
+``pull``/``push``/``remote-status`` read a token from ``$GITHUB_TOKEN`` (or
+the variable named by ``--token-env``), never from the command line.
 
 With hive-api, a project ``owner/name`` lives in ``<root>/<uid>.git``;
 ``repo-of`` prints that name, to use with the commands above::
@@ -95,6 +102,34 @@ def main(argv: list[str] | None = None) -> int:
         "--service-key", default=os.environ.get("HIVE_SERVICE_KEY", "dev-service-key")
     )
 
+    def remote_args(p):
+        p.add_argument("repo", type=pathlib.Path)
+        p.add_argument("url", help="https://… or, for tests, a local path")
+        p.add_argument("--remote-branch", default="main")
+        p.add_argument(
+            "--path",
+            default="",
+            help="the font in the remote: X.designspace, X.ufo, X.fontra "
+            "(default: the repository root is a .fontra package)",
+        )
+        p.add_argument("--token-env", default="GITHUB_TOKEN")
+        p.add_argument("--username", default="x-access-token")
+
+    p = sub.add_parser(
+        "pull", help="fetch a remote git branch into upstream/<remote branch>"
+    )
+    remote_args(p)
+    p.add_argument("--base", default=DEFAULT_BRANCH, help="first pull: fork from")
+
+    p = sub.add_parser("push", help="send a branch's changes to a remote git branch")
+    remote_args(p)
+    p.add_argument("--branch", default=DEFAULT_BRANCH)
+    p.add_argument("-m", "--message", required=True)
+
+    p = sub.add_parser("remote-status", help="a branch against a remote git branch")
+    remote_args(p)
+    p.add_argument("--branch", default=DEFAULT_BRANCH)
+
     p = sub.add_parser("diff", help="list files that differ between two refs")
     p.add_argument("repo", type=pathlib.Path)
     p.add_argument("old")
@@ -162,11 +197,68 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "tag":
             sha = store.create_tag(args.name, args.ref, args.message, tagger=author)
             print(f"{args.name} -> {sha}")
+        elif args.command in ("pull", "push", "remote-status"):
+            return _remote(store, args, author)
         elif args.command == "diff":
             for change in store.diff(args.old, args.new):
                 print(f"{change.kind:<7} {change.path}")
     finally:
         store.close()
+    return 0
+
+
+def _remote(store, args, author) -> int:
+    from . import remote as hive_remote
+
+    token = os.environ.get(args.token_env)
+    remote = hive_remote.Remote(
+        args.url,
+        branch=args.remote_branch,
+        path=args.path,
+        username=args.username if token else None,
+        password=token,
+    )
+    # A command run by hand on one's own machine may use local addresses.
+    local = not args.url.startswith("https://")
+    try:
+        if args.command == "pull":
+            r = hive_remote.pull(
+                store, remote, base_branch=args.base, allow_local=local
+            )
+            if r.commit is None:
+                print(f"{r.branch}: up to date ({(r.remote_sha or 'empty')[:10]})")
+            else:
+                print(f"{r.branch} at {r.commit} ({len(r.glyphs)} glyphs changed)")
+                print(f"merge it: the branch menu, or {r.branch} into {args.base}")
+        elif args.command == "push":
+            r = hive_remote.push(
+                store,
+                remote,
+                branch=args.branch,
+                message=args.message,
+                author=author,
+                allow_local=local,
+            )
+            if r.pushed:
+                print(f"{remote.branch} at {r.remote_sha}: {len(r.files)} files")
+                for path in r.files:
+                    print(f"  {path}")
+            else:
+                print("nothing to push")
+            for path in r.skipped:
+                print(f"  not sent (not supported for UFO yet): {path}")
+        else:
+            s = hive_remote.status(store, remote, args.branch, allow_local=local)
+            print(f"remote {remote.branch}: {s.remote_sha}")
+            print(f"last sync:  {s.synced_sha}")
+            if s.remote_moved:
+                print("the remote has new commits: pull")
+            if s.unmerged:
+                print(f"the last pull is not merged into {args.branch}")
+            print(f"{len(s.pending)} files to push")
+    except hive_remote.RemoteError as error:
+        print(f"fontra-hive: {error}", file=sys.stderr)
+        return 1
     return 0
 
 
