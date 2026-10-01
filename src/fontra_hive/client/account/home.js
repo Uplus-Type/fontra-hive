@@ -443,6 +443,304 @@ function branchesPanel(project, data) {
   return panel;
 }
 
+// --- remote git repository (GitHub…) --------------------------------------------------
+// Configured in hive-api (/api/github/…, /api/projects/…/remote); pull, push and
+// status are the Fontra server's (/api/hive/projects/…/remote…).
+
+const GITHUB_NOTICES = {
+  connected: "GitHub is connected: choose the repository below.",
+  requested: "The installation was sent to an owner of the GitHub organization for approval. Come back here once they have approved it.",
+  cancelled: "GitHub was not connected.",
+  failed: "GitHub did not complete the connection. Please try again.",
+  "wrong-account": "That GitHub connection was started from another Hive account.",
+  restart: "Start the GitHub connection from a project's settings in Hive.",
+};
+
+// The notice GitHub's return left in the address (?github=…), once.
+export function takeGitHubNotice() {
+  const params = new URLSearchParams(location.search);
+  const code = params.get("github");
+  if (!code) return null;
+  params.delete("github");
+  params.delete("project");
+  const query = params.toString();
+  history.replaceState(null, "", location.pathname + (query ? `?${query}` : "") + location.hash);
+  return GITHUB_NOTICES[code] || null;
+}
+
+// The Fontra server's remote routes: errors are {message} or text.
+async function remoteCall(path, method = "GET", body) {
+  const response = await fetch(path, {
+    method,
+    credentials: "same-origin",
+    headers: body !== undefined ? { "Content-Type": "application/json" } : {},
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const text = await response.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch (error) {
+    data = null;
+  }
+  if (!response.ok) {
+    const error = new Error(data?.message || text || `Error ${response.status}`);
+    error.code = data?.error;
+    error.status = response.status;
+    throw error;
+  }
+  return data;
+}
+
+// What a push to a UFO/designspace repository does not send (the .fontra
+// files other than glyphs, glyph-info.csv and kerning.csv).
+export function notSentToUFO(pending) {
+  return pending.filter(
+    (p) => !(p.startsWith("glyphs/") && p.endsWith(".json")) && p !== "kerning.csv" && p !== "glyph-info.csv"
+  );
+}
+
+function remoteSummary(status, defaultBranch) {
+  if (status.unmerged) {
+    return `The changes pulled from the repository are not merged into ${defaultBranch} yet.`;
+  }
+  const parts = [];
+  if (status.remoteMoved) parts.push("The repository has new commits: pull them.");
+  if (status.pendingCount) {
+    parts.push(`${status.pendingCount} file${status.pendingCount === 1 ? "" : "s"} changed in Hive since the last sync.`);
+  }
+  return parts.join(" ") || "Up to date.";
+}
+
+async function remoteConnectForm(project, panel) {
+  const projectPath = hiveApiProjectPath(project.id);
+  let github = null;
+  try {
+    github = await get("/api/github/status");
+  } catch (error) {
+    github = null;
+  }
+  const back = location.pathname + location.hash;
+  const connectURL = (mode) =>
+    "/api/github/connect?" + new URLSearchParams({ project: project.id, next: back, ...(mode ? { mode } : {}) });
+  const path = el("input", { placeholder: "e.g. sources/MyFont.designspace", maxlength: 300, autocomplete: "off" });
+  const pathField = field(
+    "Font in the repository",
+    path,
+    "A .designspace, a .ufo or a .fontra folder. Leave empty when the repository itself is a .fontra package."
+  );
+  const branch = el("input", { placeholder: "the repository's default branch", maxlength: 100, autocomplete: "off" });
+  const children = [];
+  if (!github || !github.configured) {
+    children.push(el("p", { class: "note" }, ["GitHub is not set up on this server."]));
+  } else if (!github.connected) {
+    children.push(
+      el("p", { class: "note" }, [
+        "Connect GitHub, then choose which repositories Hive may use. Only those, and only to read and write their contents.",
+      ]),
+      el("a", { href: connectURL() }, [el("button", {}, ["Connect GitHub"])])
+    );
+  } else {
+    let repos = [];
+    let problem = null;
+    try {
+      repos = (await get("/api/github/repositories")).repositories;
+    } catch (error) {
+      problem = error.message;
+    }
+    const choice = el("select", { "aria-label": "Repository" }, repos.map((r) =>
+      el("option", { value: r.fullName }, [r.fullName + (r.private ? " (private)" : "")])
+    ));
+    children.push(
+      el("p", { class: "note" }, [
+        `Signed in to GitHub as ${github.login}. `,
+        el("a", { href: `${github.installUrl}/installations/new`, target: "_blank", rel: "noopener" }, [
+          "Add or remove repositories",
+        ]),
+        " · ",
+        el("a", { href: connectURL("authorize") }, ["Sign in to GitHub again"]),
+      ])
+    );
+    if (problem) children.push(el("div", { class: "error" }, [problem]));
+    if (repos.length) {
+      children.push(
+        form([field("Repository", choice), field("Branch", branch), pathField], "Connect this repository", async () => {
+          await call(`${projectPath}/remote`, {
+            repository: choice.value,
+            branch: branch.value.trim(),
+            path: path.value.trim(),
+          }, "PUT");
+          route();
+        })
+      );
+    } else if (!problem) {
+      children.push(el("p", { class: "note" }, ["No repository yet: add one to the Fontra Hive app on GitHub."]));
+    }
+  }
+  // Any other git host, by address and token.
+  const url = el("input", { type: "url", placeholder: "https://gitlab.com/you/your-font.git", maxlength: 300 });
+  const token = el("input", { type: "password", autocomplete: "off", maxlength: 300 });
+  const otherPath = el("input", { placeholder: "e.g. sources/MyFont.designspace", maxlength: 300, autocomplete: "off" });
+  const otherBranch = el("input", { placeholder: "main", maxlength: 100, autocomplete: "off" });
+  children.push(
+    el("details", { class: "other-host" }, [
+      el("summary", {}, ["Another git host (GitLab…)"]),
+      form([
+        field("Repository address", url),
+        field("Access token", token, "With read and write access to that repository only. Kept encrypted."),
+        field("Branch", otherBranch),
+        field("Font in the repository", otherPath),
+      ], "Connect this repository", async () => {
+        await call(`${projectPath}/remote`, {
+          provider: "git",
+          url: url.value.trim(),
+          token: token.value.trim(),
+          branch: otherBranch.value.trim(),
+          path: otherPath.value.trim(),
+        }, "PUT");
+        route();
+      }),
+    ])
+  );
+  panel.append(...children);
+}
+
+async function remotePanel(project, defaultBranch) {
+  const caps = project.capabilities;
+  const admin = caps.includes("administer");
+  let remote = null;
+  try {
+    remote = (await get(`${hiveApiProjectPath(project.id)}/remote`)).remote;
+  } catch (error) {
+    remote = null;
+  }
+  if (!remote && !admin) return null;
+  const panel = el("div", { class: "panel remote" }, [
+    el("h3", { style: "margin-top:0" }, ["Git repository"]),
+  ]);
+  if (!remote) {
+    panel.append(
+      el("p", { class: "note" }, [
+        "Keep the project in step with a repository on GitHub: pull what is pushed there, push what the team does here.",
+      ])
+    );
+    await remoteConnectForm(project, panel);
+    return panel;
+  }
+
+  const where = remote.repository || remote.url;
+  const formatNote = remote.format === "ufo"
+    ? " UFO and designspace are in beta: glyphs and kerning are sent, other font-level changes are not."
+    : "";
+  panel.append(
+    el("p", {}, [
+      el("b", {}, [where]),
+      ` · branch ${remote.branch}` + (remote.path ? ` · ${remote.path}` : ""),
+    ]),
+    formatNote ? el("p", { class: "note" }, [formatNote.trim()]) : null
+  );
+  const error = el("div", { class: "error" });
+  const ok = el("div", { class: "ok" });
+  const hive = `/api/hive/projects/${encodeURIComponent(project.id)}/remote`;
+
+  if (remote.status !== "ok") {
+    panel.append(el("div", { class: "error notice" }, [remote.statusReason || "The repository is disconnected."]));
+  } else {
+    const state = el("p", { class: "remote-state" }, ["Checking the repository…"]);
+    const actions = el("div", { class: "row" });
+    const skipped = el("p", { class: "note skipped" });
+    panel.append(state, skipped, actions);
+    try {
+      const status = await remoteCall(hive);
+      state.textContent = remoteSummary(status, defaultBranch);
+      const notSent = remote.format === "ufo" ? notSentToUFO(status.pending) : [];
+      if (notSent.length) {
+        skipped.textContent = `Not sent to the repository: ${notSent.join(", ")}.`;
+      }
+      if (status.unmerged && caps.includes("merge")) {
+        actions.append(
+          el("button", {
+            onclick: () => openMergeDialog(project.id, {
+              from: status.upstreamBranch,
+              into: defaultBranch,
+              onDone: () => route(),
+            }),
+          }, [`Merge ${status.upstreamBranch}…`])
+        );
+      }
+      if (caps.includes("branch")) {
+        actions.append(
+          el("button", {
+            class: "secondary",
+            onclick: async (event) => {
+              event.target.disabled = true;
+              error.textContent = ok.textContent = "";
+              try {
+                const result = await remoteCall(`${hive}/pull`, "POST");
+                notice = result.commit
+                  ? `Pulled into ${result.branch}` + (result.glyphs.length ? ` (${result.glyphs.length} glyphs changed).` : ".")
+                  : "Nothing new in the repository.";
+                route();
+              } catch (e) {
+                error.textContent = e.message;
+                event.target.disabled = false;
+              }
+            },
+          }, ["Pull"])
+        );
+      }
+      if (caps.includes("merge") && status.pendingCount) {
+        const message = el("input", {
+          maxlength: 300,
+          placeholder: "Message (default: the latest snapshot's title)",
+          "aria-label": "Commit message",
+        });
+        actions.append(
+          message,
+          el("button", {
+            disabled: !status.canPush,
+            title: status.canPush ? "" : "Pull and merge first",
+            onclick: async (event) => {
+              event.target.disabled = true;
+              error.textContent = ok.textContent = "";
+              try {
+                const result = await remoteCall(`${hive}/push`, "POST", { message: message.value.trim() });
+                notice = result.pushed
+                  ? `Pushed ${result.files.length} file${result.files.length === 1 ? "" : "s"} to ${where}.` +
+                    (result.skipped.length ? ` Not sent: ${result.skipped.join(", ")}.` : "")
+                  : "Nothing to push" + (result.skipped.length ? ` (not sent: ${result.skipped.join(", ")}).` : ".");
+                route();
+              } catch (e) {
+                error.textContent = e.message;
+                event.target.disabled = false;
+              }
+            },
+          }, [`Push to ${remote.provider === "github" ? "GitHub" : "the repository"}`])
+        );
+      }
+    } catch (e) {
+      state.textContent = "";
+      error.textContent = e.message;
+    }
+  }
+  panel.append(error, ok);
+  if (admin) {
+    panel.append(
+      el("div", { class: "row" }, [
+        el("button", {
+          class: "danger",
+          onclick: async () => {
+            if (!confirm(`Disconnect ${where}? Nothing is deleted, here or there.`)) return;
+            await call(`${hiveApiProjectPath(project.id)}/remote`, undefined, "DELETE");
+            route();
+          },
+        }, ["Disconnect"]),
+      ])
+    );
+  }
+  return panel;
+}
+
 // --- comments on glyphs -------------------------------------------------------------
 
 async function loadComments(projectId) {
@@ -658,6 +956,8 @@ async function projectSection(projectId) {
       branches = null;
     }
     if (branches) content.push(branchesPanel(project, branches));
+    const remote = await remotePanel(project, branches?.default || project.defaultBranch || "main");
+    if (remote) content.push(remote);
     const comments = await loadComments(project.id);
     if (comments) content.push(commentsPanel(project, comments));
   }
@@ -1005,6 +1305,7 @@ export async function start() {
     return;
   }
   window.addEventListener("hashchange", route);
+  notice = takeGitHubNotice() || notice;
   await Promise.all([showInvitations(), route()]);
 }
 

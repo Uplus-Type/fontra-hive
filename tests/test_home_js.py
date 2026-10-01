@@ -646,3 +646,194 @@ def test_project_cards_count_open_comments(browser_and_url):  # noqa: F811
     page.click("[data-comments='jeremie/Sketches']")
     page.wait_for_function("location.hash === '#project/jeremie/Sketches/comments'")
     page.close()
+
+
+def remote_project(role="admin"):
+    p = project("uplustype", "Mutator", role)
+    p["capabilities"] = {
+        "admin": ["read", "edit", "branch", "merge", "export", "invite", "administer"],
+        "designer": ["read", "edit", "branch"],
+    }[role]
+    return p
+
+
+def remote_answers(role="admin", remote=None, github=None, status=None):
+    hive = "/api/hive/projects/uplustype%2FMutator"
+    answers = {
+        "GET /api/projects/uplustype/Mutator": [200, {"project": remote_project(role)}],
+        f"GET {hive}/repository": [200, {"exists": True}],
+        f"GET {hive}/branches": [200, BRANCHES],
+        "GET /api/projects/uplustype/Mutator/remote": [200, {"remote": remote}],
+        "GET /api/github/status": [
+            200,
+            github
+            or {
+                "configured": True,
+                "connected": False,
+                "login": None,
+                "installUrl": "https://github.com/apps/fontra-hive",
+            },
+        ],
+        "GET /api/github/repositories": [
+            200,
+            {
+                "login": "jhornus",
+                "repositories": [
+                    {
+                        "fullName": "Uplus-Type/Galien",
+                        "private": True,
+                        "defaultBranch": "main",
+                    },
+                    {
+                        "fullName": "Uplus-Type/Tosh",
+                        "private": False,
+                        "defaultBranch": "main",
+                    },
+                ],
+            },
+        ],
+        "PUT /api/projects/uplustype/Mutator/remote": [200, {"remote": remote}],
+        "DELETE /api/projects/uplustype/Mutator/remote": [200, {"remote": None}],
+        f"GET {hive}/remote": [200, status or {}],
+        f"POST {hive}/remote/pull": [
+            200,
+            {
+                "branch": "upstream/main",
+                "remoteHead": "a" * 40,
+                "commit": "b" * 40,
+                "glyphs": ["A"],
+            },
+        ],
+        f"POST {hive}/remote/push": [
+            200,
+            {
+                "pushed": True,
+                "remoteHead": "c" * 40,
+                "previous": "a" * 40,
+                "files": ["src/A.ufo/glyphs/A_.glif"],
+                "glyphs": ["A"],
+                "skipped": ["font-data.json"],
+            },
+        ],
+    }
+    return answers
+
+
+GALIEN = {
+    "provider": "github",
+    "url": "https://github.com/Uplus-Type/Galien.git",
+    "repository": "Uplus-Type/Galien",
+    "branch": "main",
+    "path": "Sources/Galien.designspace",
+    "format": "ufo",
+    "status": "ok",
+    "statusReason": None,
+}
+
+
+def test_remote_connect_github(browser_and_url):  # noqa: F811
+    page = open_home(browser_and_url, "#project/uplustype/Mutator", remote_answers())
+    page.wait_for_selector("text=Connect GitHub")
+    href = page.get_attribute(".panel.remote a[href^='/api/github/connect']", "href")
+    assert href.startswith("/api/github/connect?project=uplustype%2FMutator&next=")
+    assert "%23project%2Fuplustype%2FMutator" in href
+    assert page.errors == []
+    page.close()
+
+
+def test_remote_choose_a_repository(browser_and_url):  # noqa: F811
+    github = {
+        "configured": True,
+        "connected": True,
+        "login": "jhornus",
+        "installUrl": "https://github.com/apps/fontra-hive",
+    }
+    page = open_home(
+        browser_and_url, "#project/uplustype/Mutator", remote_answers(github=github)
+    )
+    page.wait_for_selector("select[aria-label='Repository']")
+    assert "Signed in to GitHub as jhornus" in page.inner_text(".panel.remote")
+    page.select_option("select[aria-label='Repository']", "Uplus-Type/Tosh")
+    page.fill(
+        "input[placeholder='e.g. sources/MyFont.designspace']",
+        "Sources/Tosh.designspace",
+    )
+    page.click(".panel.remote form >> text=Connect this repository")
+    page.wait_for_function("calls.some(c => c.method === 'PUT')")
+    put = page.evaluate("calls.find(c => c.method === 'PUT')")
+    assert put["body"] == {
+        "repository": "Uplus-Type/Tosh",
+        "branch": "",
+        "path": "Sources/Tosh.designspace",
+    }
+    assert page.errors == []
+    page.close()
+
+
+def test_remote_status_merge_pull_push(browser_and_url):  # noqa: F811
+    status = {
+        "upstreamBranch": "upstream/main",
+        "remoteMoved": False,
+        "unmerged": False,
+        "pending": ["font-data.json", "glyphs/A^1.json"],
+        "pendingCount": 2,
+        "canPush": True,
+    }
+    page = open_home(
+        browser_and_url,
+        "#project/uplustype/Mutator",
+        remote_answers(remote=GALIEN, status=status),
+    )
+    page.on("dialog", lambda dialog: dialog.accept())
+    page.wait_for_selector("text=2 files changed in Hive since the last sync.")
+    text = page.inner_text(".panel.remote")
+    assert "Uplus-Type/Galien" in text and "Sources/Galien.designspace" in text
+    assert "Not sent to the repository: font-data.json." in text
+    page.fill("input[aria-label='Commit message']", "Proofs")
+    page.click("text=Push to GitHub")
+    page.wait_for_function("calls.some(c => c.path.endsWith('/remote/push'))")
+    push = page.evaluate("calls.find(c => c.path.endsWith('/remote/push'))")
+    assert push["body"] == {"message": "Proofs"}
+    page.wait_for_selector(
+        "text=Pushed 1 file to Uplus-Type/Galien. Not sent: font-data.json."
+    )
+    page.click(".panel.remote >> text=Pull")
+    page.wait_for_selector("text=Pulled into upstream/main (1 glyphs changed).")
+    page.click(".panel.remote >> text=Disconnect")
+    page.wait_for_function("calls.some(c => c.method === 'DELETE')")
+    assert page.errors == []
+    page.close()
+
+
+def test_remote_unmerged_and_designer(browser_and_url):  # noqa: F811
+    status = {
+        "upstreamBranch": "upstream/main",
+        "remoteMoved": False,
+        "unmerged": True,
+        "pending": [],
+        "pendingCount": 0,
+        "canPush": False,
+    }
+    page = open_home(
+        browser_and_url,
+        "#project/uplustype/Mutator",
+        remote_answers(role="designer", remote=GALIEN, status=status),
+    )
+    page.wait_for_selector("text=not merged into main yet")
+    text = page.inner_text(".panel.remote")
+    assert "Merge upstream/main" not in text  # designers do not merge
+    assert "Pull" in text and "Push" not in text and "Disconnect" not in text
+    assert page.errors == []
+    page.close()
+
+
+def test_github_notice_after_the_trip(browser_and_url):  # noqa: F811
+    page = open_home(
+        browser_and_url,
+        "?project=uplustype%2FMutator&github=requested#project/uplustype/Mutator",
+        remote_answers(),
+    )
+    page.wait_for_selector("text=sent to an owner of the GitHub organization")
+    assert "github=" not in page.url
+    assert page.errors == []
+    page.close()

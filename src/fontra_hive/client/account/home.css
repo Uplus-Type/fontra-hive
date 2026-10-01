@@ -92,3 +92,10 @@ table.comments tr.resolved td { opacity: 0.65; }
 .comment-count { font-size: 0.85em; opacity: 0.75; cursor: pointer; }
 .comment-count:empty { display: none; }
 .comment-count:hover { text-decoration: underline; }
+
+/* a project's git repository */
+.panel.remote .row { flex-wrap: wrap; gap: 0.5em; align-items: center; }
+.panel.remote .row input { width: auto; flex: 1; min-width: 14em; margin: 0; }
+.panel.remote .remote-state { margin: 0.4em 0; }
+details.other-host { margin-top: 0.8em; }
+details.other-host summary { cursor: pointer; opacity: 0.75; }
