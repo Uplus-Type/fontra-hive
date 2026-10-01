@@ -713,6 +713,31 @@ install chromium`) and is skipped otherwise.
   diff between the known and the new head yields exactly the glyphs to reload,
   through the same code path Fontra uses for changed files on disk.
 
+## How this is built
+
+Fontra Hive is designed and directed by Jérémie Hornus (U+Type), a type
+designer who has written Python scripts, JavaScript and HTML/CSS for years,
+but not a software developer. The code is written with Claude, Anthropic's AI
+model, under that direction. Every commit after the initial one says so in a
+`Co-Authored-By: Claude` line, and the history is kept as it was written, not squashed or rewritten.
+
+In practice:
+
+- **Decisions are made by a person.** What Hive does, in what order, and the
+  principles of this README (the git tree is the `.fontra` package, Fontra
+  stays unmodified) are Jérémie's choices; Claude proposes, explains and
+  implements.
+- **Everything is tested before it ships.** The test suite (see "Tests") runs
+  on every change, and new features are tried by hand on real font projects
+  before they reach fontrahive.com.
+- **No developer has reviewed it yet.** Jérémie follows and tests what goes
+  in, but the code has not been reviewed line by line by an experienced
+  software developer. If you read it and something looks wrong, clumsy or
+  surprising, please open an issue: it is the most useful feedback this
+  project can get.
+- **Upstream first.** When Fontra or another project would need a change, it
+  is proposed to them as an issue, never patched here.
+
 ## Licence
 
 GPLv3, like Fontra. See `LICENSE`.
