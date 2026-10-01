@@ -624,9 +624,23 @@ fontra-hive push repos/MyFont.git https://github.com/me/MyFont.git --path source
 fontra-hive remote-status repos/MyFont.git https://github.com/me/MyFont.git --path sources/MyFont.designspace
 ```
 
+On the server (`fontra hive`), `fontra_hive.remotesync` runs these for a
+project with the remote and the credentials hive-api gives
+(`/api/internal/remote`: for GitHub, a one-hour token for that repository
+only), one operation at a time per repository:
+
+| Route | Who | What |
+|---|---|---|
+| `GET /api/hive/projects/{name}/remote[?branch=]` | anyone on the project | ahead (`pending`), behind (`remoteMoved`), last pull not merged (`unmerged`) |
+| `POST /api/hive/projects/{name}/remote/pull` | designers and up | fetch into `upstream/<branch>` |
+| `POST /api/hive/projects/{name}/remote/push` `{message?}` | managers and admins | the default branch; message: the given one, else the latest snapshot's title since the last sync; co-authors: everyone whose commits go out |
+
+Refusals answer 409 with `{"error": "remote-moved" \| "not-merged" \| "remote-not-usable", "message"}`.
+Every minute the server asks hive-api which remotes GitHub said moved
+(push webhooks) and pulls them.
+
 Not yet: the interface (Settings › Git remote, push from the branch menu),
-credentials and webhooks in hive-api, pull requests, a first push to an empty
-UFO repository, `.glyphs` sources.
+pull requests, a first push to an empty UFO repository, `.glyphs` sources.
 
 ## Tests
 

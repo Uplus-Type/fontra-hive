@@ -22,6 +22,7 @@ import aiohttp
 import jwt
 
 from .access import CAPABILITIES, Access, HiveUser
+from .remotesync import RemoteNotUsable
 
 logger = logging.getLogger(__name__)
 
@@ -244,6 +245,54 @@ class HiveApi:
     async def project(self, project: str) -> dict | None:
         """A project's id, repository and default branch (no user needed)."""
         return await self._get("/api/internal/project", project=project)
+
+    # --- remote git repositories ---------------------------------------------
+
+    async def _call(self, method: str, path: str, *, params=None, json=None):
+        """An internal route: (status, decoded JSON or text)."""
+        try:
+            async with self.session.request(
+                method,
+                self.url + path,
+                params=params,
+                json=json,
+                headers={"Authorization": f"Bearer {self.serviceKey}"},
+            ) as response:
+                if response.content_type == "application/json":
+                    data = await response.json()
+                else:
+                    data = await response.text()
+                return response.status, data
+        except aiohttp.ClientError as error:
+            raise HiveApiUnavailable(f"{path}: {error}") from error
+
+    async def remote(self, project: str) -> dict | None:
+        """A project's remote repository with credentials to use now (None:
+        no remote). Raises :class:`RemoteNotUsable` when hive-api knows it
+        cannot be used (app uninstalled, access lost)."""
+        status, data = await self._call(
+            "GET", "/api/internal/remote", params={"project": project}
+        )
+        if status == 404:
+            return None
+        if status == 409:
+            detail = data.get("detail") if isinstance(data, dict) else data
+            raise RemoteNotUsable(str(detail or "The remote cannot be used."))
+        if status != 200:
+            raise HiveApiUnavailable(f"/api/internal/remote: HTTP {status}")
+        return data
+
+    async def remotesMoved(self) -> list[dict]:
+        """Remotes GitHub says have commits not pulled yet."""
+        data = await self._get("/api/internal/remotes/moved")
+        return (data or {}).get("remotes", [])
+
+    async def remoteSynced(self, project: str, sha: str) -> None:
+        status, _ = await self._call(
+            "POST", "/api/internal/remote/synced", json={"project": project, "sha": sha}
+        )
+        if status not in (200, 404):
+            raise HiveApiUnavailable(f"/api/internal/remote/synced: HTTP {status}")
 
     async def members(self, project: str, ttl: float = 30.0) -> list[dict]:
         """Everyone with a role on a project: username, name, uid, avatar,

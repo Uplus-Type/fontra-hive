@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import pathlib
@@ -35,6 +36,7 @@ from fontra.core.fonthandler import FontHandler
 from multidict import CIMultiDict
 
 from . import importer
+from . import remote as git_remote
 from .access import Access
 from .gitstore import DEFAULT_BRANCH, SERVER_SIGNATURE, GitRepoStore
 from .hiveapi import (
@@ -44,6 +46,7 @@ from .hiveapi import (
     ProjectAccess,
     token_for_uid,
 )
+from .remotesync import NoRemote, RemoteNotUsable, RemoteSync
 from .projectmanager import DevHiveProjectManager, _htmlResponse, _sameOrigin
 
 logger = logging.getLogger(__name__)
@@ -123,6 +126,8 @@ class HiveProjectManagerFactory:
 
 
 SWEEP_INTERVAL = 15 * 60  # seconds
+# How often to ask hive-api which remotes GitHub says moved (webhooks).
+REMOTE_POLL_INTERVAL = 60  # seconds
 
 
 def _isRepoName(repo: str) -> bool:
@@ -149,6 +154,7 @@ class HiveProjectManager(DevHiveProjectManager):
         api: HiveApi,
         commitDelay: float = 2.0,
         proxy: bool = True,
+        remoteAllowLocal: bool = False,
     ):
         super().__init__(rootPath, commitDelay=commitDelay, author=SERVER_SIGNATURE)
         self.api = api
@@ -157,10 +163,20 @@ class HiveProjectManager(DevHiveProjectManager):
         self._proxySession: aiohttp.ClientSession | None = None
         self._sweepLock = asyncio.Lock()
         self._sweepTask: asyncio.Task | None = None
+        self._remoteTask: asyncio.Task | None = None
+        # Remote git repositories (GitHub…): credentials from hive-api.
+        self.remoteSync = RemoteSync(
+            api,
+            allowLocal=remoteAllowLocal,
+            beforeWrite=self._flushBranch,
+            afterWrite=self._branchChangedOnDisk,
+        )
 
     async def aclose(self) -> None:
         if self._sweepTask is not None:
             self._sweepTask.cancel()
+        if self._remoteTask is not None:
+            self._remoteTask.cancel()
         await super().aclose()
         await self.api.aclose()
         if self._proxySession is not None:
@@ -305,8 +321,127 @@ class HiveProjectManager(DevHiveProjectManager):
 
         async def startSweeping(app):
             self._sweepTask = asyncio.create_task(self._sweepPeriodically())
+            self._remoteTask = asyncio.create_task(self._pullMovedPeriodically())
 
         server.httpApp.on_startup.append(startSweeping)
+
+    # --- remote git repositories ------------------------------------------------
+    # The remote and its credentials come from hive-api (/api/internal/remote);
+    # the git work is fontra_hive.remote's, run by RemoteSync.
+
+    def _openBackend(self, repoPath: pathlib.Path, branch: str):
+        fontHandler = self.fontHandlers.get(self._handlerKey(repoPath, branch))
+        return fontHandler.backend if fontHandler is not None else None
+
+    def _flushBranch(self, repoPath: pathlib.Path, branch: str) -> None:
+        backend = self._openBackend(repoPath, branch)
+        if backend is not None:
+            backend.flush()  # pending edits go out with the push
+
+    async def _branchChangedOnDisk(self, repoPath: pathlib.Path, branch: str) -> None:
+        backend = self._openBackend(repoPath, branch)
+        if backend is not None:
+            await backend.check_external_changes()
+
+    async def _pullMovedPeriodically(self) -> None:
+        while True:
+            await asyncio.sleep(REMOTE_POLL_INTERVAL)
+            try:
+                await self.remoteSync.pullMoved(
+                    lambda repo: self.rootPath / repo if _isRepoName(repo) else None
+                )
+            except HiveApiUnavailable as error:
+                logger.warning("hive-api unavailable: %s", error)
+            except Exception:  # never stop
+                logger.exception("pulling remotes that moved")
+
+    async def _remoteCall(self, coroutine):
+        """Run a RemoteSync call, its refusals as HTTP answers."""
+        try:
+            return web.json_response(await coroutine)
+        except NoRemote:
+            raise web.HTTPNotFound(text="This project has no remote repository.")
+        except RemoteNotUsable as error:
+            return web.json_response(
+                {"error": "remote-not-usable", "message": str(error)}, status=409
+            )
+        except git_remote.RemoteMovedError as error:
+            return web.json_response(
+                {"error": "remote-moved", "message": str(error)}, status=409
+            )
+        except git_remote.NotMergedError as error:
+            return web.json_response(
+                {"error": "not-merged", "message": str(error)}, status=409
+            )
+        except git_remote.RemoteError as error:
+            return web.json_response(
+                {"error": "remote", "message": str(error)}, status=502
+            )
+        except HiveApiUnavailable as error:
+            logger.warning("hive-api unavailable: %s", error)
+            raise web.HTTPServiceUnavailable(
+                text="The accounts service does not answer."
+            )
+
+    async def remoteStatusHandler(self, request: web.Request) -> web.Response:
+        """Where a branch (``?branch=``, default: the default branch) stands
+        against the project's remote: ahead (``pending``), behind
+        (``remoteMoved``), last pull not merged (``unmerged``)."""
+        projectAccess = await self._projectAccess(request, request.match_info["name"])
+        repoPath = self._ensureRepo(projectAccess)
+        branch = request.query.get("branch") or projectAccess.defaultBranch
+        return await self._remoteCall(
+            self.remoteSync.status(repoPath, projectAccess.projectId, branch)
+        )
+
+    async def remotePullHandler(self, request: web.Request) -> web.Response:
+        """Fetch the remote branch into ``upstream/<branch>`` (designers and
+        up: it only adds a branch to merge)."""
+        projectAccess = await self._projectAccess(request, request.match_info["name"])
+        access = projectAccess.access
+        if self.readOnly or not access.can("branch"):
+            raise web.HTTPForbidden(text=f"{access.role} cannot pull")
+        repoPath = self._ensureRepo(projectAccess)
+        return await self._remoteCall(
+            self.remoteSync.pull(
+                repoPath,
+                projectAccess.projectId,
+                projectAccess.defaultBranch,
+                author=access.user.signature,
+            )
+        )
+
+    async def remotePushHandler(self, request: web.Request) -> web.Response:
+        """Send the default branch's changes since the last sync as one
+        commit (JSON ``{message?}``; default: the latest snapshot's title).
+        Managers and admins. Other branches: pull requests, later."""
+        projectAccess = await self._projectAccess(request, request.match_info["name"])
+        access = projectAccess.access
+        if self.readOnly or not access.can("merge"):
+            raise web.HTTPForbidden(text=f"{access.role} cannot push")
+        text = await request.text()
+        try:
+            body = json.loads(text) if text.strip() else {}
+        except ValueError:
+            raise web.HTTPBadRequest(text="Not JSON.")
+        if not isinstance(body, dict):
+            raise web.HTTPBadRequest(text="Expected a JSON object.")
+        branch = (body or {}).get("branch") or projectAccess.defaultBranch
+        if branch != projectAccess.defaultBranch:
+            raise web.HTTPUnprocessableEntity(
+                text="Only the default branch can be pushed for now."
+            )
+        message = str((body or {}).get("message") or "").strip()[:5000] or None
+        repoPath = self._ensureRepo(projectAccess)
+        return await self._remoteCall(
+            self.remoteSync.push(
+                repoPath,
+                projectAccess.projectId,
+                branch,
+                author=access.user.signature,
+                message=message,
+            )
+        )
 
     async def sweepHandler(self, request: web.Request) -> web.Response:
         if await self.authorize(request) is None:
@@ -460,6 +595,9 @@ class HiveProjectManager(DevHiveProjectManager):
             web.post("/api/hive/projects/{name}/import", self.importHandler),
             web.get("/api/hive/projects/{name}/repository", self.repositoryHandler),
             web.post("/api/hive/sweep-deleted", self.sweepHandler),
+            web.get("/api/hive/projects/{name}/remote", self.remoteStatusHandler),
+            web.post("/api/hive/projects/{name}/remote/pull", self.remotePullHandler),
+            web.post("/api/hive/projects/{name}/remote/push", self.remotePushHandler),
             *self.projectRoutes(),
         ]
         if self.proxy:
