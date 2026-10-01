@@ -313,7 +313,6 @@ async function startBranches() {
   try {
     const views = await import("/hive/views/hive-views.js");
     await views.startTry();
-    views.fixEarlyTranslations();
   } catch (error) {
     console.error(error);
   }
