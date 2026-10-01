@@ -142,12 +142,6 @@ def test_request_an_invitation_from_the_sign_in_page(browser_and_url):
         "message": "Two designers, one variable family.",
         "website": "",
     }
-    # The "More features to come" link opens it too.
-    page.evaluate("location.hash = ''")
-    assert (
-        page.evaluate("document.querySelector('.coming a').getAttribute('href')")
-        == "#request"
-    )
     assert page.errors == []
     page.close()
 

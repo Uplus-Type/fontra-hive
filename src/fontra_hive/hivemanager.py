@@ -610,11 +610,26 @@ class HiveProjectManager(DevHiveProjectManager):
             .read_text(encoding="utf-8")
         )
 
+    def landingPage(self) -> str:
+        """The page of a visitor who is not signed in: the deployment's own
+        landing when $HIVE_LANDING_FILE names one (fontrahive.com's is in
+        hive-api, deploy/site/landing.html, with the same sign-in and waiting
+        list elements), otherwise the plug-in's plain sign-in page."""
+        landing = os.environ.get("HIVE_LANDING_FILE", "")
+        if landing:
+            try:
+                return pathlib.Path(landing).read_text(encoding="utf-8")
+            except OSError as error:
+                logger.warning(
+                    "HIVE_LANDING_FILE unreadable, sign-in page instead: %s", error
+                )
+        return self.accountFile("login.html")
+
     async def rootDocumentHandler(self, request: web.Request) -> web.Response:
         """Signed in: Hive's home (projects, organizations, profile);
-        otherwise the sign-in page."""
+        otherwise the landing or the sign-in page."""
         if await self.authorize(request) is None:
-            return _htmlResponse(self.accountFile("login.html"))
+            return _htmlResponse(self.landingPage())
         return _htmlResponse(self.accountFile("home.html"))
 
     async def accountPageHandler(self, request: web.Request) -> web.Response:

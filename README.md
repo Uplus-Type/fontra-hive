@@ -208,7 +208,11 @@ fontra --launch hive repos --api http://127.0.0.1:8001
   what they say; `/hive/logout` signs out. hive-api sets two HttpOnly
   cookies; this server checks the short one (`hive_access`, 15 min) with
   hive-api's public key and asks hive-api for the role, kept 10 s. The views
-  renew the cookie every 10 minutes while open.
+  renew the cookie every 10 minutes while open. A deployment can show its
+  own landing page at `/` instead of the plain sign-in page:
+  `$HIVE_LANDING_FILE` names an HTML file that keeps the sign-in and
+  waiting-list elements (`#login`, `#request`…) and loads
+  `/hive/account/account.js` (fontrahive.com's is in hive-api).
 - **File › Share…** invites by username or email (an email with a link),
   changes roles up to your own, cancels invitations, removes people.
 - This server relays `/api/*` (except its own `/api/hive/*` and hive-api's

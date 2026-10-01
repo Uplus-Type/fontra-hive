@@ -1,19 +1,9 @@
 <!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Fontra Hive — Fontra for Teams</title>
-<meta name="description" content="Fontra Hive: the Fontra font editor for type teams. Version history, snapshots, branches, comments on glyphs, roles, hosted in Europe.">
-<!-- Link previews (iMessage, Slack, social networks): the Hive logo, not a screenshot. -->
-<meta property="og:type" content="website">
-<meta property="og:site_name" content="Fontra Hive">
-<meta property="og:title" content="Fontra Hive — Fontra for Teams">
-<meta property="og:description" content="The Fontra font editor for type teams: version history, snapshots, branches, comments on glyphs, roles. Hosted in Europe.">
-<meta property="og:url" content="https://fontrahive.com/">
-<meta property="og:image" content="https://fontrahive.com/hive/icons/og-image.png">
-<meta property="og:image:width" content="1200">
-<meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="The Fontra Hive logo: a white F in a honey hexagon, and the words Fontra Hive, Fontra for Teams">
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:image" content="https://fontrahive.com/hive/icons/og-image.png">
+<!-- The plug-in's sign-in page, at / for visitors not signed in. A deployment
+     shows its own landing there instead with $HIVE_LANDING_FILE (U+ TYPE's:
+     hive-api/deploy/site/landing.html), keeping these elements for account.js. -->
+<title>Fontra Hive — sign in</title>
 <link rel="icon" href="/hive/icons/hive-icon.svg" type="image/svg+xml">
 <link rel="icon" href="/favicon.ico" sizes="48x48">
 <link rel="apple-touch-icon" href="/hive/icons/apple-touch-icon.png">
@@ -23,21 +13,6 @@
 <script type="module" src="/hive/account/account.js"></script>
 </head>
 <body data-page="login">
-  <!-- site-header -->
-  <header class="site-header">
-    <a class="brand" href="/"><img src="/hive/icons/hive-icon.svg" alt="" width="30" height="30"><span>Fontra Hive</span></a>
-    <nav class="site-nav" aria-label="Site">
-      <a href="/#features">Features</a>
-      <a href="/pricing">Pricing</a>
-      <a href="/charter">Your fonts stay yours</a>
-      <a href="/try">Try Fontra</a>
-    </nav>
-    <div class="site-actions">
-      <a class="signin" href="#login">Sign in</a>
-      <a class="cta" href="/#request">Join the waiting list</a>
-    </div>
-  </header>
-  <!-- /site-header -->
   <img class="logo" src="/hive/icons/hive-icon.svg" alt="">
   <h1>Fontra Hive <span class="beta">Beta</span></h1>
   <p class="tagline">Fontra for Teams</p>
@@ -51,7 +26,7 @@
   <div class="links"><a href="/forgot-password">Forgot your password?</a></div>
   <p class="try">New to Fontra? <a href="/try">Try the editor in your browser</a>, no account needed.</p>
   <div id="waitlist" class="waitlist">
-    <p class="offer">Fontra Hive is a paid service on top of <a href="https://fontra.xyz">Fontra</a>, for type teams, from €9 per designer per month excl. VAT, reviewers free (<a href="/pricing">see pricing</a>). The public beta opens in a few weeks, with a 21-day free trial. Join the waiting list to be among the first invited.</p>
+    <p class="offer">Fontra Hive is in beta, by invitation. Join the waiting list to be among the first invited.</p>
     <button type="button" id="request-open" class="secondary">Join the waiting list</button>
     <form id="request" class="hidden">
       <label>Email <input name="email" type="email" autocomplete="email" required maxlength="254"></label>
@@ -64,188 +39,5 @@
     </form>
     <div id="request-sent" class="card hidden"></div>
   </div>
-
-  <svg class="sprite" aria-hidden="true" focusable="false">
-    <!-- Icons: Tabler Icons (MIT), https://tabler.io/icons — see /hive/plugin/TABLER-ICONS-LICENSE.txt -->
-    <symbol id="i-history" viewBox="0 0 24 24"><path d="M12 8l0 4l2 2" /><path d="M3.05 11a9 9 0 1 1 .5 4m-.5 5v-5h5" /></symbol>
-    <symbol id="i-bookmarks" viewBox="0 0 24 24"><path d="M15 10v11l-5 -3l-5 3v-11a3 3 0 0 1 3 -3h4a3 3 0 0 1 3 3" /><path d="M11 3h5a3 3 0 0 1 3 3v11" /></symbol>
-    <symbol id="i-branch" viewBox="0 0 24 24"><path d="M5 18a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M5 6a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M15 6a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M7 8l0 8" /><path d="M9 18h6a2 2 0 0 0 2 -2v-5" /><path d="M14 14l3 -3l3 3" /></symbol>
-    <symbol id="i-merge" viewBox="0 0 24 24"><path d="M5 18a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M5 6a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M15 12a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M7 8l0 8" /><path d="M7 8a4 4 0 0 0 4 4h4" /></symbol>
-    <symbol id="i-comment" viewBox="0 0 24 24"><path d="M12.007 19.98a9.869 9.869 0 0 1 -4.307 -.98l-4.7 1l1.3 -3.9c-2.324 -3.437 -1.426 -7.872 2.1 -10.374c3.526 -2.501 8.59 -2.296 11.845 .48c1.992 1.7 2.93 4.04 2.747 6.34" /><path d="M16 19h6" /><path d="M19 16v6" /></symbol>
-    <symbol id="i-users" viewBox="0 0 24 24"><path d="M10 13a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" /><path d="M8 21v-1a2 2 0 0 1 2 -2h4a2 2 0 0 1 2 2v1" /><path d="M15 5a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" /><path d="M17 10h2a2 2 0 0 1 2 2v1" /><path d="M5 5a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" /><path d="M3 13v-1a2 2 0 0 1 2 -2h2" /></symbol>
-    <symbol id="i-import" viewBox="0 0 24 24"><path d="M14 3v4a1 1 0 0 0 1 1h4" /><path d="M5 13v-8a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2h-5.5m-9.5 -2h7m-3 -3l3 3l-3 3" /></symbol>
-    <symbol id="i-download" viewBox="0 0 24 24"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2" /><path d="M7 11l5 5l5 -5" /><path d="M12 4l0 12" /></symbol>
-    <symbol id="i-git" viewBox="0 0 24 24"><path d="M15 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" /><path d="M11 8a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" /><path d="M11 16a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" /><path d="M12 15v-6" /><path d="M15 11l-2 -2" /><path d="M11 7l-1.9 -1.9" /><path d="M13.446 2.6l7.955 7.954a2.045 2.045 0 0 1 0 2.892l-7.955 7.955a2.045 2.045 0 0 1 -2.892 0l-7.955 -7.955a2.045 2.045 0 0 1 0 -2.892l7.955 -7.955a2.045 2.045 0 0 1 2.892 0" /></symbol>
-    <symbol id="i-europe" viewBox="0 0 24 24"><path d="M20.972 11.291a9 9 0 1 0 -8.322 9.686" /><path d="M3.6 9h16.8" /><path d="M3.6 15h8.9" /><path d="M11.5 3a17 17 0 0 0 0 18" /><path d="M12.5 3a16.986 16.986 0 0 1 2.578 9.018" /><path d="M21.121 20.121a3 3 0 1 0 -4.242 0c.418 .419 1.125 1.045 2.121 1.879c1.051 -.89 1.759 -1.516 2.121 -1.879" /><path d="M19 18v.01" /></symbol>
-    <symbol id="i-open" viewBox="0 0 24 24"><path d="M12 3a9 9 0 0 1 3.618 17.243l-2.193 -5.602a3 3 0 1 0 -2.849 0l-2.193 5.603a9 9 0 0 1 3.617 -17.244" /></symbol>
-    <symbol id="i-hexagon" viewBox="0 0 24 24"><path d="M19.875 6.27a2.225 2.225 0 0 1 1.125 1.948v7.284c0 .809 -.443 1.555 -1.158 1.948l-6.75 4.27a2.269 2.269 0 0 1 -2.184 0l-6.75 -4.27a2.225 2.225 0 0 1 -1.158 -1.948v-7.285c0 -.809 .443 -1.554 1.158 -1.947l6.75 -3.98a2.33 2.33 0 0 1 2.25 0l6.75 3.98h-.033" /></symbol>
-  </svg>
-
-  <section class="features" id="features" aria-labelledby="features-title">
-    <header class="features-head">
-      <p class="eyebrow">What Hive adds to Fontra</p>
-      <h2 id="features-title">Fontra, ready for a whole team</h2>
-      <p class="intro">The full Fontra editor in your browser, nothing to install. Hive adds what a type team needs around it: a memory of every change, room to explore, review where the work is, and one shared home for your fonts.</p>
-    </header>
-
-    <nav class="glance" aria-label="Features at a glance">
-      <a href="#f-history"><svg class="i"><use href="#i-history"/></svg><strong>Every change kept</strong><span>Go back to any version of any glyph.</span></a>
-      <a href="#f-snapshots"><svg class="i"><use href="#i-bookmarks"/></svg><strong>Named milestones</strong><span>Mark the states that matter: a proof, a delivery.</span></a>
-      <a href="#f-branches"><svg class="i"><use href="#i-branch"/></svg><strong>Branches &amp; merge</strong><span>Explore without touching main, merge what works.</span></a>
-      <a href="#f-comments"><svg class="i"><use href="#i-comment"/></svg><strong>Review on the glyph</strong><span>Post-its and a red pen, right on the outline.</span></a>
-      <a href="#f-together"><svg class="i"><use href="#i-users"/></svg><strong>Live, with roles</strong><span>One font, the whole team, the right rights.</span></a>
-      <a href="#f-files"><svg class="i"><use href="#i-download"/></svg><strong>Your files, both ways</strong><span>Import any format, leave with sources or fonts.</span></a>
-      <a href="#f-git"><svg class="i"><use href="#i-git"/></svg><strong>In step with GitHub</strong><span>Your repository and Hive, kept in sync: what is pushed there comes in, your team's work goes back.</span></a>
-    </nav>
-
-    <article class="feature" id="f-history">
-      <div class="copy">
-        <div class="text">
-          <p class="kicker"><svg class="i"><use href="#i-history"/></svg>Version history</p>
-          <h3>Every change is kept</h3>
-          <p>Each edit becomes a version, signed by who made it, with the sources it touched. Open a glyph's history, hover a version to see it drawn over the current outline, click to keep it on the canvas, and restore it in one step.</p>
-        </div>
-        <div class="aside">
-          <p class="why"><strong>Why it matters.</strong> Experiment without fear: last week's good curve is never lost, and you always know who changed what, and when.</p>
-          <ul class="points"><li>Preview on hover</li><li>One-click restore</li><li>Whole-font history</li></ul>
-        </div>
-      </div>
-      <figure class="shot"><img src="/hive/landing/history.webp" width="758" height="407" alt="The Glyph history panel: versions of a signed by Ana, Mei and Leo, and the version commented in #1 drawn in amber over the current outline" loading="lazy"></figure>
-    </article>
-
-    <article class="feature" id="f-snapshots">
-      <div class="copy">
-        <div class="text">
-          <p class="kicker"><svg class="i"><use href="#i-bookmarks"/></svg>Snapshots</p>
-          <h3>Name the moments that matter</h3>
-          <p>Give a name to the state of the whole font (“Proof for the client”, “v1.0”) or to a single glyph (“Approved by the AD”). The changes made since the previous snapshot are grouped under it, with who made them and the comments resolved in between.</p>
-        </div>
-        <div class="aside">
-          <p class="why"><strong>Why it matters.</strong> Your history reads like a project diary: find the version you sent, see what changed since, go back to it if needed.</p>
-          <ul class="points"><li>Font and glyph snapshots</li><li>Changes grouped by milestone</li><li>Nothing ever rewritten</li></ul>
-        </div>
-      </div>
-      <figure class="shot"><img src="/hive/landing/snapshots.webp" width="705" height="518" alt="The Glyph history panel with two snapshots, sent-to-client and validated, grouping the versions made between them" loading="lazy"></figure>
-    </article>
-
-    <article class="feature" id="f-branches">
-      <div class="copy">
-        <div class="text">
-          <p class="kicker"><svg class="i"><use href="#i-branch"/></svg>Branches &amp; merge</p>
-          <h3>Explore on a branch, merge when it's right</h3>
-          <p>Start a branch from main or from a snapshot to try a bolder weight, new alternates or a spacing pass, and switch branches without leaving your glyph. When it works, merge it into main: Hive merges source by source, kerning pair by kerning pair, and draws real conflicts side by side so you pick the right drawing.</p>
-        </div>
-        <div class="aside">
-          <p class="why"><strong>Why it matters.</strong> Designers explore in parallel without stepping on each other, and main stays clean for everyone else.</p>
-          <ul class="points"><li>Ahead / behind main</li><li>Automatic merge per source</li><li>Deleted branches restorable</li></ul>
-        </div>
-      </div>
-      <figure class="shot duo"><img src="/hive/landing/branches.webp" width="456" height="384" alt="The branch menu: main, LeosTake, MyStuff and Mei_s-Branch, how far each is ahead or behind main, who is on it, and Merge into main" loading="lazy"><img src="/hive/landing/merge.webp" width="680" height="384" alt="The Merge LeosTake into main dialog: one conflict on a, both drawings side by side, Take LeosTake chosen" loading="lazy"></figure>
-    </article>
-
-    <article class="feature" id="f-comments">
-      <div class="copy">
-        <div class="text">
-          <p class="kicker"><svg class="i"><use href="#i-comment"/></svg>Comments &amp; review</p>
-          <h3>Review right on the glyph</h3>
-          <p>Pin a comment to a point of a glyph's source, discuss it in a thread, assign it, label it, resolve it. Sketch on the outline with a red pen, with a mouse or a stylus. Every comment of the project is listed on one page with filters, and opens the editor on the right glyph, source and point.</p>
-        </div>
-        <div class="aside">
-          <p class="why"><strong>Why it matters.</strong> Feedback lands exactly where the problem is, no more screenshots in emails. And reviewers are free: invite your client or art director.</p>
-          <ul class="points"><li>Post-its and red pen</li><li>Assign, label, resolve</li><li>Linked to the version commented</li></ul>
-        </div>
-      </div>
-      <figure class="shot stack"><img src="/hive/landing/comments.webp" width="1037" height="476" alt="A comment pinned on the glyph a, with red pen strokes, a thread between Ana and Mei, and the Comments panel" loading="lazy"><img src="/hive/landing/comments-list.webp" width="1025" height="287" alt="The comments page of the project, with filters by state, glyph, person and label" loading="lazy"></figure>
-    </article>
-
-    <article class="feature" id="f-together">
-      <div class="copy">
-        <div class="text">
-          <p class="kicker"><svg class="i"><use href="#i-users"/></svg>Real-time collaboration</p>
-          <h3>Draw together, each with the right role</h3>
-          <p>Everyone works on the same font at the same time and sees who is there. Share a project by username or email with a role: observer, reviewer, designer, manager or admin. Organizations have owners and members, and can keep their projects to their members.</p>
-        </div>
-        <div class="aside">
-          <p class="why"><strong>Why it matters.</strong> The whole team, and your client, in one place, and everyone changes only what they are meant to.</p>
-          <ul class="points"><li>Live presence</li><li>Five roles</li><li>Read-only for reviewers</li></ul>
-        </div>
-      </div>
-      <figure class="shot duo"><img src="/hive/landing/share.webp" width="561" height="411" alt="The Share dialog: Ana and Mei managers, Leo designer, Sam reviewer, Noor observer" loading="lazy"><img src="/hive/landing/presence.webp" width="348" height="411" alt="The user menu: Ana, Mei and Noor in the editor, Sam editing a" loading="lazy"></figure>
-    </article>
-
-    <article class="feature" id="f-files">
-      <div class="copy">
-        <div class="text">
-          <p class="kicker"><svg class="i"><use href="#i-import"/></svg>Import &amp; download</p>
-          <h3>Bring your fonts, take them anywhere</h3>
-          <p>Start a project from any format Fontra reads: .designspace with its UFOs, .ufo, .glyphs, .glyphspackage, .fontra, or a compiled .ttf, .otf or .woff2. Import again later and it becomes a new version. Download the sources from any branch, or fonts built on the server the way Fontra Pak builds them.</p>
-        </div>
-        <div class="aside">
-          <p class="why"><strong>Why it matters.</strong> No lock-in: Hive fits in with the tools and the pipeline you already have, in both directions.</p>
-          <ul class="points"><li>.fontra · Designspace + UFO</li><li>.otf · .ttf · .woff2</li><li>Any branch</li></ul>
-        </div>
-      </div>
-      <figure class="shot stack"><img src="/hive/landing/download.webp" width="1026" height="163" alt="The Download panel: pick a branch, then .fontra, Designspace + UFOs, OpenType, TrueType or Webfont" loading="lazy"><img src="/hive/landing/import.webp" width="1026" height="175" alt="Import a font: replaces the font as a new version, the history before it stays" loading="lazy"></figure>
-    </article>
-
-    <article class="feature" id="f-git">
-      <div class="copy">
-        <div class="text">
-          <p class="kicker"><svg class="i"><use href="#i-git"/></svg>Git repositories</p>
-          <h3>Keep your Git repository in step</h3>
-          <p>Connect a project to a GitHub repository, public or private, in two clicks with the Fontra Hive GitHub app. Hive brings in what others push, on an upstream branch you review and merge, and sends your team's work back as one clean commit, with everyone who drew it credited as co-author. .fontra is fully supported; UFO and designspace are in beta (glyphs and kerning).</p>
-        </div>
-        <div class="aside">
-          <p class="why"><strong>Why it matters.</strong> Developers, build pipelines and font libraries keep working from the repository; designers stay in Hive.</p>
-          <ul class="points"><li>Only the repositories you choose</li><li>Pushes arrive on their own</li><li>.fontra · UFO in beta</li></ul>
-          <p class="more"><a href="/git">How it works →</a></p>
-        </div>
-      </div>
-      <figure class="shot stack"><img src="/hive/landing/git-panel.webp" width="1040" height="192" alt="The Git repository panel of a project connected to Uplus-Type/HexaSerif on GitHub: 3 files changed in Hive since the last sync, a commit message, Pull and Push to GitHub" loading="lazy"><img src="/hive/landing/git-commit.webp" width="1040" height="655" alt="The commit in the repository: Touch-up work on A and T plus kerning, by Ana with Mei as co-author, committed by Fontra Hive, three files changed, a glyph's points moved in the diff" loading="lazy"></figure>
-    </article>
-
-    <div class="foundation">
-      <div><svg class="i"><use href="#i-git"/></svg><strong>Stored as git</strong><span>Every project is a complete .fontra package in its own git repository. The whole history, nothing locked in, and <a href="#f-git">in step with GitHub</a> if you like.</span></div>
-      <div><svg class="i"><use href="#i-europe"/></svg><strong>Hosted in Europe</strong><span>Servers in Paris, an encrypted backup every night in another EU country. <a href="/charter#en">Your fonts stay yours</a>.</span></div>
-      <div><svg class="i"><use href="#i-hexagon"/></svg><strong>Built on Fontra</strong><span>The open-source, browser-based font editor, used as it is released.</span></div>
-      <div><svg class="i"><use href="#i-open"/></svg><strong>Open plug-in</strong><span>The Fontra Hive plug-in is open source (GPLv3), <a href="https://github.com/Uplus-Type/fontra-hive">on GitHub</a>.</span></div>
-    </div>
-
-    <p class="coming"><strong>More features to come.</strong> This is the first beta: what you see here is only the start, and Hive grows with the teams who use it. Tell us what yours needs when you <a href="#request">join the waiting list</a>.</p>
-  </section>
-  <!-- site-footer -->
-  <footer class="site-foot">
-    <div class="foot-grid">
-      <div class="foot-brand">
-        <a class="brand" href="/"><img src="/hive/icons/hive-icon.svg" alt="" width="30" height="30"><span>Fontra Hive</span></a>
-        <p>Fontra for Teams. The open-source Fontra editor, hosted for type teams, with history, branches and roles.</p>
-        <p>A service by U+ TYPE, France. <a href="mailto:info@uplustype.com">info@uplustype.com</a></p>
-      </div>
-      <nav aria-label="Product">
-        <p class="foot-title">Product</p>
-        <a href="/#features">Features</a>
-        <a href="/pricing">Pricing</a>
-        <a href="/git">Connect a Git repository</a>
-        <a href="/try">Try Fontra in your browser</a>
-        <a href="/#request">Join the waiting list</a>
-        <a href="/">Sign in</a>
-      </nav>
-      <nav aria-label="Your fonts and data">
-        <p class="foot-title">Your fonts</p>
-        <a href="/charter">Font charter · Charte de confidentialité</a>
-        <a href="/legal#en-data">Privacy · Données personnelles</a>
-        <a href="/plain-terms">Terms in plain words</a>
-        <a href="/terms">Terms · Conditions générales</a>
-        <a href="/legal">Legal notice · Mentions légales</a>
-      </nav>
-      <nav aria-label="Open source">
-        <p class="foot-title">Open source</p>
-        <a href="https://fontra.xyz">Fontra</a>
-        <a href="https://github.com/Uplus-Type/fontra-hive">Fontra Hive plug-in on GitHub</a>
-        <a href="https://github.com/fontra/fontra">Fontra on GitHub</a>
-      </nav>
-    </div>
-    <p class="foot-base"><span>© 2026 U+ TYPE</span><span>Hosted in Paris · encrypted backups in the EU · no trackers, no ads</span></p>
-  </footer>
-  <!-- /site-footer -->
+  <footer class="site-footer">© U+ TYPE · <a href="/pricing">Pricing</a> · <a href="/legal">Mentions légales · Legal notice</a> · <a href="/terms">Conditions générales · Terms</a> · <a href="/legal#fr-donnees">Données personnelles · Privacy</a></footer>
 </body></html>

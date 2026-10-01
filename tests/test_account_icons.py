@@ -19,21 +19,7 @@ def test_account_pages_link_hives_icon():
             assert (ACCOUNT.parent / "icons" / src).is_file(), (page.name, src)
 
 
-def test_landing_images_exist_and_are_served_with_their_type():
-    html = (ACCOUNT / "login.html").read_text(encoding="utf-8")
-    html = re.sub(r"<!--.*?-->", "", html, flags=re.S)  # a figure still to come
-    images = re.findall(r'src="/hive/landing/([^"]+)"', html)
-    assert len(images) >= 4
-    for name in images:
-        assert (ACCOUNT.parent / "landing" / name).is_file(), name
-    from fontra_hive.projectmanager import CLIENT_CONTENT_TYPES
-
-    for name in images:
-        assert name.rsplit(".", 1)[-1] in CLIENT_CONTENT_TYPES, name
-    assert CLIENT_CONTENT_TYPES["webp"] == "image/webp"
-
-
-def test_landing_and_home_link_the_legal_pages():
+def test_sign_in_and_home_link_the_legal_pages():
     # /legal and /terms are served by the deployment (hive-api/deploy/site,
     # through Caddy), not by this plug-in: they are U+ TYPE's, not the plug-in's.
     for page in ("login.html", "home.html", "invitation.html"):
@@ -41,3 +27,13 @@ def test_landing_and_home_link_the_legal_pages():
         assert 'href="/terms' in html and 'href="/legal' in html, page
     for page in ("login.html", "home.html"):
         assert 'href="/pricing"' in (ACCOUNT / page).read_text(encoding="utf-8"), page
+
+
+def test_the_sign_in_page_is_the_plugins_own():
+    # fontrahive.com's landing (features, screenshots) is U+ TYPE's, in
+    # hive-api (deploy/site/landing.html), shown through $HIVE_LANDING_FILE.
+    html = (ACCOUNT / "login.html").read_text(encoding="utf-8")
+    assert 'class="features"' not in html and "fontrahive.com" not in html
+    for element in ("login", "request", "request-open", "request-sent", "waitlist"):
+        assert f'id="{element}"' in html, element
+    assert not (ACCOUNT.parent / "landing").exists()
