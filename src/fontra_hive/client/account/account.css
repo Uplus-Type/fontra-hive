@@ -130,6 +130,12 @@ body:not([data-page="home"]) a:hover { color: var(--fontra-red-color, #f11759); 
 }
 .glance strong { font-weight: normal; font-size: 1.05rem; }
 .glance span { font-size: 0.9rem; opacity: 0.65; line-height: 1.4; }
+/* A last card alone on its row spans it, icon beside the text. */
+.glance a:last-child:nth-child(3n+1) {
+  grid-column: 1 / -1; display: grid; grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 1rem; align-items: center;
+}
+.glance a:last-child:nth-child(3n+1) .i { grid-row: span 2; margin-bottom: 0; }
 
 /* One block per feature: what it does and why it matters side by side,
    then a large screenshot, so the interface stays readable. */
@@ -189,6 +195,9 @@ body:not([data-page="home"]) a:hover { color: var(--fontra-red-color, #f11759); 
   .feature { padding: 2.5rem 0; }
   .feature .copy { grid-template-columns: minmax(0, 1fr); margin-bottom: 1.5rem; }
   .glance { margin-bottom: 3rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .glance a:last-child:nth-child(3n+1) { grid-column: auto; display: flex; align-items: stretch; }
+  .glance a:last-child:nth-child(odd) { grid-column: 1 / -1; }
+  .glance a:last-child:nth-child(3n+1) .i { margin-bottom: 0.5rem; }
 }
 @media (max-width: 700px) {
   .shot.duo { flex-direction: column; }
@@ -196,6 +205,7 @@ body:not([data-page="home"]) a:hover { color: var(--fontra-red-color, #f11759); 
 }
 @media (max-width: 560px) {
   .glance { grid-template-columns: minmax(0, 1fr); }
+  .glance a:last-child:nth-child(odd) { grid-column: auto; }
 }
 @media (prefers-reduced-motion: reduce) { .glance a { transition: none; } }
 
