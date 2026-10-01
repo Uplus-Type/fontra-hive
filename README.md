@@ -561,8 +561,9 @@ axes) and WOFF2, made in the browser by fontc (googlefonts/fontc) built
 for WebAssembly as a WASI program (`tools/build-fontc-wasm.sh`: pinned
 revision, `wasm32-wasip1`, without rayon so without threads; about 15 MB).
 It runs in a worker of its own (`try-fontc-worker.js`), on files in
-memory given by a small WASI host (`try-wasi.js`). fontc does not read
-`.fontra` yet (its reader is a stub): the font goes through designspace +
+memory given by a small WASI host (`try-wasi.js`). At the pinned
+revision, fontc parses `.fontra` but cannot compile it yet (that is
+googlefonts/fontc#2068, in progress): the font goes through designspace +
 UFOs first (as File › Export as designspace), then
 `hive_try_convert.fontcSources` makes one designspace per combination of
 discrete axis values (fontc takes none: an italic axis 0/1 gives an

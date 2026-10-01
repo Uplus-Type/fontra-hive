@@ -1,8 +1,11 @@
 #!/bin/sh
 # Fontra Hive, "Try Fontra": build fontc (googlefonts/fontc) for the browser,
-# as a WASI program (wasm32-wasip1). The page runs it in a worker, on the
-# font's .fontra package in memory (client/try/try-fontc.js), to export
-# TTF, OTF and WOFF2 without a server.
+# as a WASI program (wasm32-wasip1). The page runs it in a worker
+# (client/try/try-fontc-worker.js, on the in-memory WASI host of
+# client/try/try-wasi.js) to export TTF and WOFF2 without a server.
+# fontc reads the font as designspace + UFOs, prepared by
+# client/try/py/hive_try_convert.py (fontcSources): it cannot compile
+# .fontra yet at this revision. No OTF: fontc writes TrueType outlines.
 #
 # Usage: tools/build-fontc-wasm.sh [output-folder]   (default: ./build)
 # Needs rustup (https://rustup.rs) and git. Takes a few minutes.
