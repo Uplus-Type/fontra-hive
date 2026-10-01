@@ -874,6 +874,35 @@ def test_remote_font_menu_choices(browser_and_url):  # noqa: F811
     page.wait_for_selector("text=No font found in this branch")
     assert page.is_hidden(menu) and page.is_visible(typed)
     assert page.is_enabled(connect)
+    # The font pushed meanwhile: "Look again", or back to this tab.
+    answers_now = f"{fonts}?branch=empty"
+    page.evaluate(
+        "(key) => { window.answers[key] = [200, {branch: 'empty',"
+        " fonts: ['Sources/HexaSerif.fontra'], found: true}]; }",
+        answers_now,
+    )
+    page.click(".panel.remote a.look-again")
+    page.wait_for_selector(f"{menu}:not([disabled])")
+    assert page.input_value(menu) == "Sources/HexaSerif.fontra"
+    page.evaluate(
+        "(key) => { window.answers[key] = [200, {branch: 'empty',"
+        " fonts: [], found: true}]; }",
+        answers_now,
+    )
+    page.fill(branch, "main")
+    page.dispatch_event(branch, "change")
+    page.wait_for_selector(f"{menu}:not([disabled])")
+    page.fill(branch, "empty")
+    page.dispatch_event(branch, "change")
+    page.wait_for_selector("text=No font found in this branch")
+    page.evaluate(
+        "(key) => { window.answers[key] = [200, {branch: 'empty',"
+        " fonts: ['Sources/HexaSerif.fontra'], found: true}]; }",
+        answers_now,
+    )
+    page.fill(typed, "")  # a path typed meanwhile is kept, not looked over
+    page.evaluate("window.dispatchEvent(new Event('focus'))")
+    page.wait_for_selector(f"{menu}:not([disabled])")
     # GitHub must be connected again: said, nothing to connect.
     page.fill(branch, "gone")
     page.dispatch_event(branch, "change")
@@ -1108,5 +1137,34 @@ def test_new_project_from_a_git_repository(browser_and_url):  # noqa: F811
     page.click(".panel.remote form >> text=Connect this repository")
     page.wait_for_function("calls.some(c => c.path.endsWith('/remote/pull'))")
     page.wait_for_selector("text=is now the project's (2 glyphs changed)")
+    assert page.errors == []
+    page.close()
+
+
+def test_remote_fontra_repository_has_no_beta_note(browser_and_url):  # noqa: F811
+    """A .fontra repository: no beta note, and nothing in its place."""
+    hexa = dict(
+        GALIEN,
+        url="https://github.com/Uplus-Type/HexaSerif.git",
+        repository="Uplus-Type/HexaSerif",
+        path="Sources/HexaSerif.fontra",
+        format="fontra",
+    )
+    status = {
+        "upstreamBranch": "upstream/main",
+        "remoteMoved": False,
+        "unmerged": False,
+        "pending": [],
+        "pendingCount": 0,
+        "canPush": True,
+    }
+    page = open_home(
+        browser_and_url,
+        "#project/uplustype/Mutator",
+        remote_answers(remote=hexa, status=status),
+    )
+    page.wait_for_selector("text=Up to date.")
+    text = page.inner_text(".panel.remote")
+    assert "null" not in text and "beta" not in text
     assert page.errors == []
     page.close()

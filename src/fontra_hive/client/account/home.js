@@ -705,6 +705,17 @@ function githubConnectForm(project, repos, choice, withFont) {
     autocomplete: "off",
   });
   const fontsNote = el("small", { class: "fonts-note" });
+  // Nothing found yet (a push still on its way, say): look again on demand,
+  // or when one comes back to this tab.
+  const again = el("a", {
+    href: "#",
+    class: "look-again",
+    onclick: (event) => {
+      event.preventDefault();
+      lookForFonts();
+    },
+  }, ["Look again"]);
+  let nothingFound = false;
   const fontsField = el("label", {}, [
     "Font in the repository",
     el("small", {}, [".fontra is fully supported. UFO and designspace are in beta: glyphs and kerning only."]),
@@ -736,14 +747,17 @@ function githubConnectForm(project, repos, choice, withFont) {
     if (fonts.value === OTHER_PATH) path.focus();
   });
 
+  let looked = null; // the repository and branch of the latest search
   async function lookForFonts() {
     const mine = ++search;
     const name = branch.value.trim();
+    looked = `${choice.value}\n${name}`;
     fonts.classList.remove("hidden");
     fonts.disabled = true;
     fonts.replaceChildren(el("option", {}, ["Looking for fonts…"]));
     fontsNote.textContent = "";
     fontsNote.classList.remove("error");
+    nothingFound = false;
     showPath(false);
     setReady(false);
     let answer;
@@ -764,12 +778,15 @@ function githubConnectForm(project, repos, choice, withFont) {
     if (mine !== search) return;
     if (!answer.found) {
       fonts.replaceChildren(el("option", {}, [`No branch “${name}” in this repository`]));
+      fontsNote.append(again);
+      nothingFound = true;
       return;
     }
     if (!answer.fonts.length) {
       fonts.replaceChildren();
       fonts.classList.add("hidden");
-      fontsNote.textContent = "No font found in this branch: type its path.";
+      fontsNote.append("No font found in this branch: type its path, or push the font, then ", again, ".");
+      nothingFound = true;
       showPath(true);
       setReady(true);
       return;
@@ -789,7 +806,12 @@ function githubConnectForm(project, repos, choice, withFont) {
     lookForFonts();
   };
   choice.addEventListener("change", repoChanged);
-  branch.addEventListener("change", lookForFonts);
+  branch.addEventListener("change", () => {
+    if (`${choice.value}\n${branch.value.trim()}` !== looked) lookForFonts();
+  });
+  window.addEventListener("focus", () => {
+    if (nothingFound && f.isConnected && !path.value.trim()) lookForFonts();
+  });
   repoChanged();
   return f;
 }
@@ -850,7 +872,7 @@ async function remotePanel(project, defaultBranch, withFont = true) {
       el("b", {}, [where]),
       ` · branch ${remote.branch}` + (remote.path ? ` · ${remote.path}` : ""),
     ]),
-    formatNote ? el("p", { class: "note" }, [formatNote.trim()]) : null
+    ...(formatNote ? [el("p", { class: "note" }, [formatNote.trim()])] : [])
   );
   const error = el("div", { class: "error" });
   const ok = el("div", { class: "ok" });

@@ -109,4 +109,5 @@ button.busy { display: inline-flex; align-items: center; gap: 0.5em; }
 @keyframes hive-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
 .panel.remote .fonts-note:empty { display: none; }
+.panel.remote .fonts-note .look-again { margin-left: 0.3em; }
 .panel.remote label select:disabled { opacity: 0.7; }
