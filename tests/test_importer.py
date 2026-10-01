@@ -109,3 +109,22 @@ def test_the_designspace_wins_over_its_ufos(tmp_path):
     # A UFO inside a .fontra package is part of that package, not a font.
     (tmp_path / "Other.fontra" / "x.ufo").mkdir(parents=True)
     assert importer.findFont(tmp_path, extensions).name == "Other.fontra"
+
+
+def test_a_new_font_has_a_source_and_a_glyph_set(tmp_path):
+    """A project started "with an empty font" opens on glyphs to draw, not
+    on an empty page."""
+    import asyncio
+    import json
+
+    from fontra_hive.importer import newFont
+
+    async def inside_a_running_loop():
+        newFont(tmp_path / "font.fontra")  # the server calls it from its loop
+
+    asyncio.run(inside_a_running_loop())
+    data = json.loads((tmp_path / "font.fontra" / "font-data.json").read_text())
+    sources = list(data["sources"].values())
+    assert [s["name"] for s in sources] == ["Regular"]
+    glyph_sets = data["customData"]["fontra.projectGlyphSets"]
+    assert glyph_sets[0]["name"] == "GF Latin Kernel"

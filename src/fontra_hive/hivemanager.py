@@ -246,17 +246,16 @@ class HiveProjectManager(DevHiveProjectManager):
         message: str | None = None,
     ) -> pathlib.Path:
         """The project's repository, created the first time with ``font``
-        (a .fontra package), or an empty font. Built aside, then moved in
+        (a .fontra package), or a new font (a source and a glyph set to
+        draw, see :func:`importer.newFont`). Built aside, then moved in
         place: never half-made."""
         path = self._repoPathFor(projectAccess)
         if path.is_dir():
             return path
-        from fontra.backends.fontra import FontraBackend
-
         with tempfile.TemporaryDirectory(dir=self.rootPath, prefix=".new-") as tmp:
             if font is None:
                 font = pathlib.Path(tmp) / "font.fontra"
-                FontraBackend.createFromPath(font)
+                importer.newFont(font)
             building = pathlib.Path(tmp) / projectAccess.repo
             store = GitRepoStore.create(building)
             try:

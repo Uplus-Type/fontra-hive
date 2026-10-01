@@ -133,3 +133,22 @@ def convertToFontra(
         logger.exception("could not convert %s", source.name)
         raise ImportError_(f"Could not read {source.name}: {error}")
     return destination
+
+
+def newFont(path: pathlib.Path) -> None:
+    """A new font to start from, as Fontra Pak makes one: a "Regular" source
+    with usual line metrics, and the Google Fonts "Latin Kernel" glyph set
+    as the project's glyph set, so that the font overview shows the glyphs
+    to draw (each one made by a double-click) instead of an empty page.
+    Blocking; safe to call from a running event loop."""
+    try:
+        from fontra.backends.populate import createNewFontAndPopulate
+    except ImportError:  # an older Fontra: an empty font
+        from fontra.backends.fontra import FontraBackend
+
+        FontraBackend.createFromPath(path)
+        return
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(1) as pool:
+        pool.submit(asyncio.run, createNewFontAndPopulate(path)).result()

@@ -298,7 +298,7 @@ async function newProjectSection() {
       field("Name", name, "letters, digits, '-', '_' and '.'"),
       field("Description", description, "optional"),
       el("div", { class: "choices" }, [
-        el("label", {}, [empty, "Start with an empty font"]),
+        el("label", {}, [empty, "Start a new font (with a basic Latin glyph set to draw)"]),
         el("label", {}, [fromFont, "Import a font"]),
         el("label", {}, [fromGit, "Connect to an existing Git repository (GitHub…)"]),
       ]),
@@ -307,7 +307,7 @@ async function newProjectSection() {
     ],
     "Create the project",
     async () => {
-      if (fromFont.checked && !file.files[0]) throw new Error("Choose a font file, or start with an empty font.");
+      if (fromFont.checked && !file.files[0]) throw new Error("Choose a font file, or start a new font.");
       const { project } = await call("/api/projects", {
         name: name.value.trim(),
         owner: owner.value,
@@ -988,7 +988,7 @@ async function projectSection(projectId) {
       el("div", { class: "panel no-font" }, [
         el("h3", { style: "margin-top:0" }, ["No font yet"]),
         admin
-          ? el("p", { class: "note" }, ["Import a font below, connect a Git repository, or start with an empty font."])
+          ? el("p", { class: "note" }, ["Import a font below, connect a Git repository, or start a new font."])
           : el("p", { class: "note" }, ["The project's admins have not added its font yet."]),
         admin
           ? el("button", {
@@ -1002,7 +1002,7 @@ async function projectSection(projectId) {
                   event.target.disabled = false;
                 }
               },
-            }, ["Start with an empty font"])
+            }, ["Start a new font"])
           : null,
       ])
     );
