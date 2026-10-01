@@ -189,9 +189,11 @@ def remote_head(remote: Remote, *, allow_local: bool = False) -> str | None:
     """The sha of the remote branch (None: the branch or repository is empty)."""
     client, path = _client(remote, allow_local)
     try:
-        refs = client.get_refs(path)
+        result = client.get_refs(path)
     except Exception as error:
         raise RemoteError(f"Could not reach {remote.url}: {error}") from error
+    # dulwich >= 0.23 returns an LsRemoteResult (refs in .refs), older a dict.
+    refs = getattr(result, "refs", result)
     sha = refs.get(remote.ref)
     return sha.decode() if sha else None
 
