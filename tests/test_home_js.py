@@ -732,11 +732,32 @@ GALIEN = {
 
 
 def test_remote_connect_github(browser_and_url):  # noqa: F811
+    """GitHub opens in a tab of its own; this page updates when that tab says
+    it is done, or when one comes back to it."""
     page = open_home(browser_and_url, "#project/uplustype/Mutator", remote_answers())
     page.wait_for_selector("text=Connect GitHub")
-    href = page.get_attribute(".panel.remote a[href^='/api/github/connect']", "href")
-    assert href.startswith("/api/github/connect?project=uplustype%2FMutator&next=")
-    assert "%23project%2Fuplustype%2FMutator" in href
+    page.evaluate(
+        "() => { window.opened = [];"
+        " window.open = (url) => { window.opened.push(String(url)); return {}; }; }"
+    )
+    page.click(".panel.remote button:text('Connect GitHub')")
+    opened = page.evaluate("() => window.opened")
+    assert len(opened) == 1
+    assert opened[0].startswith("/api/github/connect?project=uplustype%2FMutator&next=")
+    assert "%23project%2Fuplustype%2FMutator" in opened[0] and "tab=1" in opened[0]
+    link = page.get_attribute(".panel.remote a", "href")
+    assert "mode=authorize" in link  # "Already installed the app? Sign in to GitHub"
+    # Back to this tab: it asks again.
+    before = page.evaluate("calls.filter(c => c.path === '/api/github/status').length")
+    page.evaluate("window.dispatchEvent(new Event('focus'))")
+    page.wait_for_function(
+        f"calls.filter(c => c.path === '/api/github/status').length > {before}"
+    )
+    # The GitHub tab says it is done.
+    page.evaluate(
+        "window.postMessage({hive: 'github', result: 'connected'}, location.origin)"
+    )
+    page.wait_for_selector("text=GitHub is connected")
     assert page.errors == []
     page.close()
 

@@ -465,6 +465,32 @@ const GITHUB_NOTICES = {
   restart: "Start the GitHub connection from a project's settings in Hive.",
 };
 
+// The trip to GitHub runs in a tab of its own (GitHub does not always send
+// people back: after a change of repositories on its own settings page, for
+// one). This page updates when that tab says it is done, or when one comes
+// back to it.
+let githubTripPending = false;
+
+export function openGitHubTab(url) {
+  githubTripPending = true;
+  const tab = window.open(url, "_blank");
+  if (!tab) location.href = url; // pop-up blocked: the same tab, then back here
+}
+
+export function listenForGitHub() {
+  window.addEventListener("message", (event) => {
+    if (event.origin !== location.origin || event.data?.hive !== "github") return;
+    githubTripPending = false;
+    notice = GITHUB_NOTICES[event.data.result] || null;
+    route();
+  });
+  window.addEventListener("focus", () => {
+    if (!githubTripPending) return;
+    githubTripPending = false;
+    route();
+  });
+}
+
 // The notice GitHub's return left in the address (?github=…), once.
 export function takeGitHubNotice() {
   const params = new URLSearchParams(location.search);
@@ -531,7 +557,16 @@ async function remoteConnectForm(project, panel, withFont) {
   }
   const back = location.pathname + location.hash;
   const connectURL = (mode) =>
-    "/api/github/connect?" + new URLSearchParams({ project: project.id, next: back, ...(mode ? { mode } : {}) });
+    "/api/github/connect?" +
+    new URLSearchParams({ project: project.id, next: back, tab: "1", ...(mode ? { mode } : {}) });
+  const tripLink = (label, mode) =>
+    el("a", {
+      href: connectURL(mode),
+      onclick: (event) => {
+        event.preventDefault();
+        openGitHubTab(connectURL(mode));
+      },
+    }, [label]);
   const path = el("input", { placeholder: "e.g. sources/MyFont.designspace", maxlength: 300, autocomplete: "off" });
   const pathField = field(
     "Font in the repository",
@@ -547,7 +582,14 @@ async function remoteConnectForm(project, panel, withFont) {
       el("p", { class: "note" }, [
         "Connect GitHub, then choose which repositories Hive may use. Only those, and only to read and write their contents.",
       ]),
-      el("a", { href: connectURL() }, [el("button", {}, ["Connect GitHub"])])
+      el("div", { class: "row" }, [
+        el("button", { onclick: () => openGitHubTab(connectURL()) }, ["Connect GitHub"]),
+      ]),
+      el("p", { class: "note" }, [
+        "GitHub opens in a new tab; this page updates when you come back. Already installed the app? ",
+        tripLink("Sign in to GitHub", "authorize"),
+        ".",
+      ])
     );
   } else {
     let repos = [];
@@ -563,9 +605,9 @@ async function remoteConnectForm(project, panel, withFont) {
     children.push(
       el("p", { class: "note" }, [
         `Signed in to GitHub as ${github.login}. `,
-        el("a", { href: connectURL() }, ["Add or remove repositories"]),
+        tripLink("Add or remove repositories"),
         " · ",
-        el("a", { href: connectURL("authorize") }, ["Sign in to GitHub again"]),
+        tripLink("Sign in to GitHub again", "authorize"),
       ])
     );
     if (problem) children.push(el("div", { class: "error" }, [problem]));
@@ -1338,6 +1380,7 @@ export async function start() {
     return;
   }
   window.addEventListener("hashchange", route);
+  listenForGitHub();
   notice = takeGitHubNotice() || notice;
   await Promise.all([showInvitations(), route()]);
 }
