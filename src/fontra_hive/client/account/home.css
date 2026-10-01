@@ -99,3 +99,14 @@ table.comments tr.resolved td { opacity: 0.65; }
 .panel.remote .remote-state { margin: 0.4em 0; }
 details.other-host { margin-top: 0.8em; }
 details.other-host summary { cursor: pointer; opacity: 0.75; }
+/* a button at work (busy() in home.js) */
+button.busy { display: inline-flex; align-items: center; gap: 0.5em; }
+.spinner {
+  width: 0.9em; height: 0.9em; flex: none; box-sizing: border-box;
+  border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+  animation: hive-spin 0.8s linear infinite;
+}
+@keyframes hive-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
+.panel.remote .fonts-note:empty { display: none; }
+.panel.remote label select:disabled { opacity: 0.7; }

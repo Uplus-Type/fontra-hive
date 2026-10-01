@@ -657,6 +657,15 @@ def remote_project(role="admin"):
     return p
 
 
+# As hive-api orders them: .fontra, designspaces, then UFOs.
+GALIEN_FONTS = [
+    "",
+    "Sources/Galien.fontra",
+    "Sources/Galien.designspace",
+    "Sources/Extra/Galien-Display.ufo",
+]
+
+
 def remote_answers(role="admin", remote=None, github=None, status=None):
     hive = "/api/hive/projects/uplustype%2FMutator"
     answers = {
@@ -691,6 +700,14 @@ def remote_answers(role="admin", remote=None, github=None, status=None):
                     },
                 ],
             },
+        ],
+        "GET /api/github/repositories/Uplus-Type/Galien/fonts?branch=main": [
+            200,
+            {"branch": "main", "fonts": GALIEN_FONTS, "found": True},
+        ],
+        "GET /api/github/repositories/Uplus-Type/Tosh/fonts?branch=main": [
+            200,
+            {"branch": "main", "fonts": ["Sources/Tosh.designspace"], "found": True},
         ],
         "PUT /api/projects/uplustype/Mutator/remote": [200, {"remote": remote}],
         "DELETE /api/projects/uplustype/Mutator/remote": [200, {"remote": None}],
@@ -774,19 +791,186 @@ def test_remote_choose_a_repository(browser_and_url):  # noqa: F811
     )
     page.wait_for_selector("select[aria-label='Repository']")
     assert "Signed in to GitHub as jhornus" in page.inner_text(".panel.remote")
+    menu = "select[aria-label='Font in the repository']"
+    # The first repository's fonts, in hive-api's order, the first chosen.
+    page.wait_for_selector(f"{menu}:not([disabled])")
+    assert page.input_value("form input[placeholder^='the repository']") == "main"
+    labels = page.eval_on_selector_all(
+        f"{menu} option", "os => os.map(o => o.textContent)"
+    )
+    assert labels == [
+        ".fontra package at the root (recommended)",
+        "Sources/Galien.fontra (recommended)",
+        "Sources/Galien.designspace (beta)",
+        "Sources/Extra/Galien-Display.ufo (beta)",
+        "Other path…",
+    ]
+    assert page.input_value(menu) == ""
+    assert page.is_hidden("input[aria-label='Path of the font in the repository']")
+    # Another repository: its default branch, its fonts.
     page.select_option("select[aria-label='Repository']", "Uplus-Type/Tosh")
-    page.fill(
-        "input[placeholder='e.g. sources/MyFont.designspace']",
-        "Sources/Tosh.designspace",
+    page.wait_for_function(
+        "document.querySelector(\"select[aria-label='Font in the repository']\")"
+        ".value === 'Sources/Tosh.designspace'"
     )
     page.click(".panel.remote form >> text=Connect this repository")
     page.wait_for_function("calls.some(c => c.method === 'PUT')")
     put = page.evaluate("calls.find(c => c.method === 'PUT')")
     assert put["body"] == {
         "repository": "Uplus-Type/Tosh",
-        "branch": "",
+        "branch": "main",
         "path": "Sources/Tosh.designspace",
     }
+    assert page.errors == []
+    page.close()
+
+
+def test_remote_font_menu_choices(browser_and_url):  # noqa: F811
+    """ "Other path…", a branch that does not exist, one without fonts, and
+    GitHub to connect again."""
+    github = {
+        "configured": True,
+        "connected": True,
+        "login": "jhornus",
+        "installUrl": "https://github.com/apps/fontra-hive",
+    }
+    answers = remote_answers(github=github)
+    fonts = "GET /api/github/repositories/Uplus-Type/Galien/fonts"
+    answers[f"{fonts}?branch=drafts"] = [
+        200,
+        {"branch": "drafts", "fonts": [], "found": False},
+    ]
+    answers[f"{fonts}?branch=empty"] = [
+        200,
+        {"branch": "empty", "fonts": [], "found": True},
+    ]
+    answers[f"{fonts}?branch=gone"] = [
+        409,
+        {"detail": "The GitHub connection expired: connect GitHub again."},
+    ]
+    page = open_home(browser_and_url, "#project/uplustype/Mutator", answers)
+    menu = "select[aria-label='Font in the repository']"
+    typed = "input[aria-label='Path of the font in the repository']"
+    branch = "form input[placeholder^='the repository']"
+    connect = ".panel.remote form button[type=submit]"
+    page.wait_for_selector(f"{menu}:not([disabled])")
+    # "Other path…" shows the text field, which is what is sent.
+    page.select_option(menu, "*other*")
+    assert page.is_visible(typed)
+    page.fill(typed, "fonts/Galien-Italic.ufo")
+    # A branch that does not exist: said in the menu, nothing to connect.
+    page.fill(branch, "drafts")
+    page.dispatch_event(branch, "change")
+    page.wait_for_function(
+        "document.querySelector(\"select[aria-label='Font in the repository']\")"
+        ".textContent === 'No branch “drafts” in this repository'"
+    )
+    assert page.is_disabled(menu) and page.is_disabled(connect)
+    assert page.is_hidden(typed)
+    # A branch without fonts: the path is typed.
+    page.fill(branch, "empty")
+    page.dispatch_event(branch, "change")
+    page.wait_for_selector("text=No font found in this branch")
+    assert page.is_hidden(menu) and page.is_visible(typed)
+    assert page.is_enabled(connect)
+    # GitHub must be connected again: said, nothing to connect.
+    page.fill(branch, "gone")
+    page.dispatch_event(branch, "change")
+    page.wait_for_selector("text=The GitHub connection expired")
+    assert page.is_disabled(connect) and page.is_hidden(typed)
+    # Back to main, then a typed path.
+    page.fill(branch, "main")
+    page.dispatch_event(branch, "change")
+    page.wait_for_selector(f"{menu}:not([disabled])")
+    page.select_option(menu, "*other*")
+    page.fill(typed, "fonts/Galien-Italic.ufo")
+    page.click(connect)
+    page.wait_for_function("calls.some(c => c.method === 'PUT')")
+    put = page.evaluate("calls.find(c => c.method === 'PUT')")
+    assert put["body"] == {
+        "repository": "Uplus-Type/Galien",
+        "branch": "main",
+        "path": "fonts/Galien-Italic.ufo",
+    }
+    assert page.errors == []
+    page.close()
+
+
+# Holds the answers to the paths given until window.release() (a slow server).
+HOLD = """(paths) => {
+  const fetchNow = window.fetch;
+  const held = [];
+  window.release = () => held.splice(0).forEach((go) => go());
+  window.fetch = (url, options) => {
+    const path = new URL(url, location.href).pathname;
+    if (!paths.some((p) => path.endsWith(p))) return fetchNow(url, options);
+    return new Promise((go) => held.push(go)).then(() => fetchNow(url, options));
+  };
+}"""
+
+
+def test_remote_busy_while_connecting(browser_and_url):  # noqa: F811
+    github = {
+        "configured": True,
+        "connected": True,
+        "login": "jhornus",
+        "installUrl": "https://github.com/apps/fontra-hive",
+    }
+    answers = remote_answers(github=github)
+    answers["PUT /api/projects/uplustype/Mutator/remote"] = [
+        400,
+        {"detail": "No such branch."},
+    ]
+    page = open_home(browser_and_url, "#project/uplustype/Mutator", answers)
+    page.wait_for_selector(
+        "select[aria-label='Font in the repository']:not([disabled])"
+    )
+    page.evaluate(HOLD, ["/remote"])
+    connect = ".panel.remote form button[type=submit]"
+    page.click(connect)
+    page.wait_for_selector(f"{connect}.busy >> text=Saving the connection…")
+    assert page.is_disabled(connect)
+    assert page.get_attribute(".panel.remote", "aria-busy") == "true"
+    assert page.query_selector(f"{connect} .spinner") is not None
+    page.evaluate("window.release()")
+    # An error: the button as it was.
+    page.wait_for_selector(".panel.remote form .error >> text=No such branch.")
+    assert page.inner_text(connect) == "Connect this repository"
+    assert page.is_enabled(connect)
+    assert page.get_attribute(".panel.remote", "aria-busy") is None
+    assert page.errors == []
+    page.close()
+
+
+def test_remote_busy_pull_and_push(browser_and_url):  # noqa: F811
+    status = {
+        "upstreamBranch": "upstream/main",
+        "remoteMoved": False,
+        "unmerged": False,
+        "pending": ["glyphs/A^1.json"],
+        "pendingCount": 1,
+        "canPush": True,
+    }
+    answers = remote_answers(remote=GALIEN, status=status)
+    hive = "/api/hive/projects/uplustype%2FMutator"
+    answers[f"POST {hive}/remote/push"] = [
+        409,
+        {"error": "remote-moved", "message": "The repository moved: pull first."},
+    ]
+    page = open_home(browser_and_url, "#project/uplustype/Mutator", answers)
+    page.wait_for_selector("text=1 file changed in Hive since the last sync.")
+    page.evaluate(HOLD, ["/remote/push", "/remote/pull"])
+    push = ".panel.remote button:has-text('Push to GitHub')"
+    page.click(push)
+    page.wait_for_selector("button.busy >> text=Pushing to GitHub…")
+    assert page.is_disabled("button.busy")
+    page.evaluate("window.release()")
+    page.wait_for_selector("text=The repository moved: pull first.")
+    assert page.is_enabled(push) and page.query_selector("button.busy") is None
+    page.click(".panel.remote button:text('Pull')")
+    page.wait_for_selector("button.busy >> text=Pulling…")
+    page.evaluate("window.release()")
+    page.wait_for_selector("text=Pulled into upstream/main (1 glyphs changed).")
     assert page.errors == []
     page.close()
 
@@ -915,8 +1099,8 @@ def test_new_project_from_a_git_repository(browser_and_url):  # noqa: F811
     assert all(
         link.startswith("/api/github/connect?") for link in links
     )  # same tab, back here
-    page.fill(
-        "input[placeholder='e.g. sources/MyFont.designspace']",
+    page.select_option(
+        ".panel.remote select[aria-label='Font in the repository']",
         "Sources/Galien.designspace",
     )
     page.click(".panel.remote form >> text=Connect this repository")

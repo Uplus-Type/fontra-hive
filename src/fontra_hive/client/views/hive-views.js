@@ -674,6 +674,8 @@ export function openMergeDialog(projectName, { from, into, onMerged, onDone, tit
     const error = el("div", { class: "error" }, [errorText || ""]);
     merge.addEventListener("click", async () => {
       merge.disabled = true;
+      merge.textContent = "Merging…";
+      body.setAttribute("aria-busy", "true");
       error.textContent = "";
       try {
         const query = new URLSearchParams({ from, into, fromHead: preview.fromHead, intoHead: preview.intoHead });
@@ -688,7 +690,10 @@ export function openMergeDialog(projectName, { from, into, onMerged, onDone, tit
           ? "The branches changed meanwhile: look again before merging."
           : e.message.replace(/^\d+ /, "");
         footer.prepend(el("button", { class: "pill plain", onclick: load }, ["Look again"]));
+        merge.textContent = "Merge";
         update();
+      } finally {
+        body.removeAttribute("aria-busy");
       }
     });
     update();

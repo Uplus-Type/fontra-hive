@@ -535,6 +535,47 @@ export function notSentToUFO(pending) {
   );
 }
 
+// A button at work: disabled (no second click), a spinner by its label, the
+// panel aria-busy. work(step) runs; step("…") changes the label (the server
+// gives no percentage, so the stages are named). Everything comes back as it
+// was afterwards, after an error too.
+export async function busy(button, label, work, panel = button.closest(".panel")) {
+  const before = [...button.childNodes];
+  const wasDisabled = button.disabled;
+  const text = el("span", {}, [label]);
+  button.disabled = true;
+  button.classList.add("busy");
+  button.replaceChildren(el("span", { class: "spinner", "aria-hidden": "true" }), text);
+  panel?.setAttribute("aria-busy", "true");
+  try {
+    return await work((next) => {
+      text.textContent = next;
+    });
+  } finally {
+    button.replaceChildren(...before);
+    button.classList.remove("busy");
+    button.disabled = wasDisabled;
+    panel?.removeAttribute("aria-busy");
+  }
+}
+
+// The "Font in the repository" menu: what hive-api found in a branch
+// (.fontra first, then designspaces, then UFOs; "" = a .fontra package at the
+// root of the repository).
+const OTHER_PATH = "*other*";
+
+export function fontLabel(path) {
+  const lower = path.toLowerCase();
+  if (path === "") return ".fontra package at the root (recommended)";
+  if (lower.endsWith(".fontra")) return `${path} (recommended)`;
+  return `${path} (beta)`;
+}
+
+function fontsURL(fullName, branch) {
+  const [owner, repo] = fullName.split("/").map(encodeURIComponent);
+  return `/api/github/repositories/${owner}/${repo}/fonts?${new URLSearchParams({ branch })}`;
+}
+
 function remoteSummary(status, defaultBranch) {
   if (status.unmerged) {
     return `The changes pulled from the repository are not merged into ${defaultBranch} yet.`;
@@ -567,13 +608,6 @@ async function remoteConnectForm(project, panel, withFont) {
         openGitHubTab(connectURL(mode));
       },
     }, [label]);
-  const path = el("input", { placeholder: "e.g. sources/MyFont.designspace", maxlength: 300, autocomplete: "off" });
-  const pathField = field(
-    "Font in the repository",
-    path,
-    "A .designspace, a .ufo or a .fontra folder. Leave empty when the repository itself is a .fontra package."
-  );
-  const branch = el("input", { placeholder: "the repository's default branch", maxlength: 100, autocomplete: "off" });
   const children = [];
   if (!github || !github.configured) {
     children.push(el("p", { class: "note" }, ["GitHub is not set up on this server."]));
@@ -612,16 +646,7 @@ async function remoteConnectForm(project, panel, withFont) {
     );
     if (problem) children.push(el("div", { class: "error" }, [problem]));
     if (repos.length) {
-      children.push(
-        form([field("Repository", choice), field("Branch", branch), pathField], "Connect this repository", async () => {
-          await call(`${projectPath}/remote`, {
-            repository: choice.value,
-            branch: branch.value.trim(),
-            path: path.value.trim(),
-          }, "PUT");
-          await firstPull(project, withFont);
-        })
-      );
+      children.push(githubConnectForm(project, repos, choice, withFont));
     } else if (!problem) {
       children.push(el("p", { class: "note" }, ["No repository yet: add one to the Fontra Hive app on GitHub."]));
     }
@@ -639,19 +664,134 @@ async function remoteConnectForm(project, panel, withFont) {
         field("Access token", token, "With read and write access to that repository only. Kept encrypted."),
         field("Branch", otherBranch),
         field("Font in the repository", otherPath),
-      ], "Connect this repository", async () => {
-        await call(`${projectPath}/remote`, {
-          provider: "git",
-          url: url.value.trim(),
-          token: token.value.trim(),
-          branch: otherBranch.value.trim(),
-          path: otherPath.value.trim(),
-        }, "PUT");
-        await firstPull(project, withFont);
-      }),
+      ], "Connect this repository", (f) =>
+        connecting(f, "the repository", async () => {
+          await call(`${projectPath}/remote`, {
+            provider: "git",
+            url: url.value.trim(),
+            token: token.value.trim(),
+            branch: otherBranch.value.trim(),
+            path: otherPath.value.trim(),
+          }, "PUT");
+        }, project, withFont)
+      ),
     ])
   );
   panel.append(...children);
+}
+
+// Connecting: save the connection, then the first pull (a shallow fetch, and
+// for a UFO a conversion: several seconds on a big repository).
+function connecting(f, from, save, project, withFont) {
+  const button = f.querySelector("button[type=submit]");
+  return busy(button, "Saving the connection…", async (step) => {
+    await save();
+    step(`Fetching the font from ${from}…`);
+    await firstPull(project, withFont);
+  });
+}
+
+// GitHub: repository, branch (its default one to start with) and a menu of
+// the fonts hive-api finds in that branch; "Other path…" for anything else.
+function githubConnectForm(project, repos, choice, withFont) {
+  const projectPath = hiveApiProjectPath(project.id);
+  const branch = el("input", { placeholder: "the repository's default branch", maxlength: 100, autocomplete: "off" });
+  const fonts = el("select", { "aria-label": "Font in the repository" });
+  const path = el("input", {
+    class: "hidden",
+    "aria-label": "Path of the font in the repository",
+    placeholder: "e.g. sources/MyFont.designspace",
+    maxlength: 300,
+    autocomplete: "off",
+  });
+  const fontsNote = el("small", { class: "fonts-note" });
+  const fontsField = el("label", {}, [
+    "Font in the repository",
+    el("small", {}, [".fontra is fully supported. UFO and designspace are in beta: glyphs and kerning only."]),
+    fonts,
+    path,
+    fontsNote,
+  ]);
+  let search = 0; // the latest search; older answers are dropped
+  let ready = false;
+  const f = form([field("Repository", choice), field("Branch", branch), fontsField], "Connect this repository", () =>
+    connecting(f, "GitHub", async () => {
+      if (!ready) throw new Error("Choose the font in the repository first.");
+      const manual = fonts.classList.contains("hidden") || fonts.value === OTHER_PATH;
+      await call(`${projectPath}/remote`, {
+        repository: choice.value,
+        branch: branch.value.trim(),
+        path: manual ? path.value.trim() : fonts.value,
+      }, "PUT");
+    }, project, withFont)
+  );
+  const submit = f.querySelector("button[type=submit]");
+  const setReady = (value) => {
+    ready = value;
+    submit.disabled = !value;
+  };
+  const showPath = (shown) => path.classList.toggle("hidden", !shown);
+  fonts.addEventListener("change", () => {
+    showPath(fonts.value === OTHER_PATH);
+    if (fonts.value === OTHER_PATH) path.focus();
+  });
+
+  async function lookForFonts() {
+    const mine = ++search;
+    const name = branch.value.trim();
+    fonts.classList.remove("hidden");
+    fonts.disabled = true;
+    fonts.replaceChildren(el("option", {}, ["Looking for fonts…"]));
+    fontsNote.textContent = "";
+    fontsNote.classList.remove("error");
+    showPath(false);
+    setReady(false);
+    let answer;
+    try {
+      answer = await get(fontsURL(choice.value, name));
+    } catch (error) {
+      if (mine !== search) return;
+      fonts.replaceChildren();
+      fonts.classList.add("hidden");
+      fontsNote.textContent = error.message;
+      fontsNote.classList.add("error");
+      // 409: GitHub must be connected again, nothing to connect; otherwise
+      // the path can still be typed.
+      showPath(error.status !== 409);
+      setReady(error.status !== 409);
+      return;
+    }
+    if (mine !== search) return;
+    if (!answer.found) {
+      fonts.replaceChildren(el("option", {}, [`No branch “${name}” in this repository`]));
+      return;
+    }
+    if (!answer.fonts.length) {
+      fonts.replaceChildren();
+      fonts.classList.add("hidden");
+      fontsNote.textContent = "No font found in this branch: type its path.";
+      showPath(true);
+      setReady(true);
+      return;
+    }
+    fonts.replaceChildren(
+      ...answer.fonts.map((p) => el("option", { value: p }, [fontLabel(p)])),
+      el("option", { value: OTHER_PATH }, ["Other path…"])
+    );
+    fonts.value = answer.fonts[0];
+    fonts.disabled = false;
+    setReady(true);
+  }
+
+  const repoChanged = () => {
+    const repo = repos.find((r) => r.fullName === choice.value);
+    branch.value = repo?.defaultBranch || "";
+    lookForFonts();
+  };
+  choice.addEventListener("change", repoChanged);
+  branch.addEventListener("change", lookForFonts);
+  repoChanged();
+  return f;
 }
 
 function pullNotice(result, where) {
@@ -744,15 +884,13 @@ async function remotePanel(project, defaultBranch, withFont = true) {
           el("button", {
             class: "secondary",
             onclick: async (event) => {
-              event.target.disabled = true;
               error.textContent = ok.textContent = "";
               try {
-                const result = await remoteCall(`${hive}/pull`, "POST");
+                const result = await busy(event.currentTarget, "Pulling…", () => remoteCall(`${hive}/pull`, "POST"));
                 notice = pullNotice(result, where);
                 route();
               } catch (e) {
                 error.textContent = e.message;
-                event.target.disabled = false;
               }
             },
           }, ["Pull"])
@@ -770,10 +908,12 @@ async function remotePanel(project, defaultBranch, withFont = true) {
             disabled: !status.canPush,
             title: status.canPush ? "" : "Pull and merge first",
             onclick: async (event) => {
-              event.target.disabled = true;
               error.textContent = ok.textContent = "";
+              const to = remote.provider === "github" ? "GitHub" : "the repository";
               try {
-                const result = await remoteCall(`${hive}/push`, "POST", { message: message.value.trim() });
+                const result = await busy(event.currentTarget, `Pushing to ${to}…`, () =>
+                  remoteCall(`${hive}/push`, "POST", { message: message.value.trim() })
+                );
                 notice = result.pushed
                   ? `Pushed ${result.files.length} file${result.files.length === 1 ? "" : "s"} to ${where}.` +
                     (result.skipped.length ? ` Not sent: ${result.skipped.join(", ")}.` : "")
@@ -781,7 +921,6 @@ async function remotePanel(project, defaultBranch, withFont = true) {
                 route();
               } catch (e) {
                 error.textContent = e.message;
-                event.target.disabled = false;
               }
             },
           }, [`Push to ${remote.provider === "github" ? "GitHub" : "the repository"}`])
@@ -798,10 +937,17 @@ async function remotePanel(project, defaultBranch, withFont = true) {
       el("div", { class: "row" }, [
         el("button", {
           class: "danger",
-          onclick: async () => {
+          onclick: async (event) => {
             if (!confirm(`Disconnect ${where}? Nothing is deleted, here or there.`)) return;
-            await call(`${hiveApiProjectPath(project.id)}/remote`, undefined, "DELETE");
-            route();
+            error.textContent = "";
+            try {
+              await busy(event.currentTarget, "Disconnecting…", () =>
+                call(`${hiveApiProjectPath(project.id)}/remote`, undefined, "DELETE")
+              );
+              route();
+            } catch (e) {
+              error.textContent = e.message;
+            }
           },
         }, ["Disconnect"]),
       ])
