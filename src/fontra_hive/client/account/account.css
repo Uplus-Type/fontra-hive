@@ -159,6 +159,9 @@ body:not([data-page="home"]) a:hover { color: var(--fontra-red-color, #f11759); 
   border: 1px solid var(--line); background: #ffffff08;
 }
 .points li::before { content: "✓ "; color: var(--honey); }
+.feature .more { margin: 0.9rem 0 0; font-size: 0.9rem; }
+.feature .more a { color: var(--honey); text-decoration: none; }
+.feature .more a:hover { text-decoration: underline; }
 
 /* Screenshots share one frame, at most their size on screen (they are
    taken at 2x): the interface stays sharp and readable. */

@@ -762,7 +762,8 @@ def test_remote_connect_github(browser_and_url):  # noqa: F811
     assert len(opened) == 1
     assert opened[0].startswith("/api/github/connect?project=uplustype%2FMutator&next=")
     assert "%23project%2Fuplustype%2FMutator" in opened[0] and "tab=1" in opened[0]
-    link = page.get_attribute(".panel.remote a", "href")
+    assert page.get_attribute(".panel.remote a", "href") == "/git"  # How it works
+    link = page.get_attribute(".panel.remote a[href^='/api/github']", "href")
     assert "mode=authorize" in link  # "Already installed the app? Sign in to GitHub"
     # Back to this tab: it asks again.
     before = page.evaluate("calls.filter(c => c.path === '/api/github/status').length")
@@ -1094,7 +1095,8 @@ def test_new_project_from_a_git_repository(browser_and_url):  # noqa: F811
     titles = page.eval_on_selector_all(".panel h3", "hs => hs.map(h => h.textContent)")
     assert titles[:3] == ["No font yet", "Git repository", "People"]
     links = page.eval_on_selector_all(
-        ".panel.remote a", "as => as.map(a => a.getAttribute('href'))"
+        ".panel.remote a:not([href='/git'])",
+        "as => as.map(a => a.getAttribute('href'))",
     )
     assert all(
         link.startswith("/api/github/connect?") for link in links

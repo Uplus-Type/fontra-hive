@@ -832,7 +832,9 @@ async function remotePanel(project, defaultBranch, withFont = true) {
   if (!remote) {
     panel.append(
       el("p", { class: "note" }, [
-        "Keep the project in step with a repository on GitHub: pull what is pushed there, push what the team does here.",
+        "Keep the project in step with a repository on GitHub: pull what is pushed there, push what the team does here. ",
+        el("a", { href: "/git", target: "_blank" }, ["How it works"]),
+        ".",
       ])
     );
     await remoteConnectForm(project, panel, withFont);
