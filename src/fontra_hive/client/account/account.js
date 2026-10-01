@@ -188,6 +188,8 @@ async function invitationPage() {
     const form = $("#signup");
     form.classList.remove("hidden");
     form.querySelector(".email").textContent = inv.email;
+    // A guest invitation (from an admin or an organization owner): reviewer or observer only.
+    if (inv.accountType === "guest") form.querySelector(".guest").classList.remove("hidden");
     form.addEventListener("submit", (event) => {
       event.preventDefault();
       busy(form, async () => {

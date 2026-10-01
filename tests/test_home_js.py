@@ -1168,3 +1168,43 @@ def test_remote_fontra_repository_has_no_beta_note(browser_and_url):  # noqa: F8
     assert "null" not in text and "beta" not in text
     assert page.errors == []
     page.close()
+
+
+def guest_answers():
+    return {
+        "GET /api/me": [200, {"user": {**ME, "staff": False, "accountType": "guest"}}],
+        "GET /api/me/projects?trashed=true": [200, {"projects": []}],
+    }
+
+
+def test_a_guest_sees_no_create_buttons(browser_and_url):  # noqa: F811
+    page = open_home(browser_and_url, extra=guest_answers())
+    page.wait_for_selector(".project-card")
+    assert page.query_selector("a[href='#new']") is None
+    assert "free guest account" in page.inner_text(".guest-note")
+    page.evaluate("location.hash = '#new'")
+    page.wait_for_selector("main .guest-note")
+    assert page.query_selector("form select[name=owner]") is None
+    page.evaluate("location.hash = '#orgs'")
+    page.wait_for_function(
+        "document.querySelector('main h2').textContent === 'Organizations'"
+    )
+    assert "New organization" not in page.inner_text("main")
+    assert page.errors == []
+    page.close()
+
+
+def test_organization_page_new_addresses_as_guests(browser_and_url):  # noqa: F811
+    members = answers()["GET /api/orgs/uplustype/members"]
+    members[1]["inviteNew"] = ["member"]
+    members[1]["members"][1]["guest"] = True
+    page = open_home(
+        browser_and_url, "#org/uplustype", {"GET /api/orgs/uplustype/members": members}
+    )
+    page.wait_for_selector("table.people tr[data-username=fabio]")
+    assert "guest" in page.inner_text("tr[data-username=fabio]")
+    # A guest cannot be made owner: no role menu for them.
+    assert page.query_selector("select[aria-label='Role of Fabio Rossi']") is None
+    assert "free guest account" in page.inner_text("main")
+    assert page.errors == []
+    page.close()

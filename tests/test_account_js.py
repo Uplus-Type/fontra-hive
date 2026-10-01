@@ -365,3 +365,122 @@ def test_share_dialog_with_hive_api(browser_and_url):
     ]
     assert errors == []
     page.close()
+
+
+def test_invitation_page_says_a_guest_account(browser_and_url):
+    lookup = {
+        "invitation": {
+            "email": "zoe@example.com",
+            "project": "uplustype/Mutator",
+            "organization": None,
+            "role": "reviewer",
+            "target": "project uplustype/Mutator",
+            "invitedBy": {"username": "jeremie", "name": "Jérémie Hornus"},
+            "accountType": "guest",
+        },
+        "hasAccount": False,
+    }
+    answers = {
+        "POST /api/invitations/lookup": [200, lookup],
+        "GET /api/me": [401, {"detail": "Unauthorized"}],
+        "POST /api/auth/refresh": [401, {"detail": "Please sign in again."}],
+    }
+    page = account_page(browser_and_url, "invitation.html", answers, "#tok")
+    page.evaluate("""async () => {
+          document.body.dataset.page = 'invitation';
+          window.__hiveAccountNoAutoStart = false;
+          await import('/account/account.js?start=3');
+        }""")
+    page.wait_for_selector("#signup:not(.hidden)")
+    assert page.is_visible("#signup .guest")
+    assert "free guest account" in page.inner_text("#signup .guest")
+    assert page.is_visible("#signup a[href='/charter']")
+    assert page.errors == []
+    page.close()
+
+
+def open_share(browser_and_url, answers):
+    browser, base = browser_and_url
+    page = browser.new_page()
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    html = VIEW_PAGE % {"mock": MOCK, "answers": json.dumps(answers)}
+    page.route(
+        lambda url: "/editor.html" in url,
+        lambda route: route.fulfill(content_type="text/html", body=html),
+    )
+    page.goto(f"{base}/editor.html?project=uplustype/Mutator")
+    page.evaluate("""async () => {
+        const m = await import('/views/hive-views.js');
+        window.hive = await m.start();
+      }""")
+    page.evaluate("editorController.getFileMenuItems()[0].callback()")
+    page.wait_for_selector(".hive-dialog .add input")
+    page.errors = errors
+    return page
+
+
+def test_share_dialog_admins_invite_new_addresses_as_guests(browser_and_url):
+    answers = share_answers()
+    members = answers[f"GET {BASE}/members"][1]
+    members["roles"] = ["observer", "reviewer", "designer", "manager", "admin"]
+    members["inviteNew"] = ["observer", "reviewer"]
+    members["members"][2]["guest"] = True  # Ana: a guest, reviewer at most
+    page = open_share(browser_and_url, answers)
+    ana = page.inner_text(".hive-member[data-username='ana']")
+    assert "guest" in ana
+    choices = page.evaluate(
+        "[...document.querySelectorAll(\"select[aria-label='Role of Ana López'] option\")]"
+        ".map(o => o.value)"
+    )
+    assert choices == ["observer", "reviewer"]
+    assert page.is_hidden(".hive-dialog .guest-line")
+    page.fill(".hive-dialog .add input", "new@example.com")
+    page.wait_for_selector(".hive-dialog .guest-line:not([hidden])")
+    # Default role designer: a new address needs reviewer or observer.
+    assert "only be invited as reviewer or observer" in page.inner_text(".guest-line")
+    page.select_option(".hive-dialog .add select", "reviewer")
+    assert "will get a free guest account" in page.inner_text(".guest-line")
+    page.click(".hive-dialog .add button")
+    page.wait_for_function(
+        f"calls.some(c => c.path === '{BASE}/invitations' && c.method === 'POST')"
+    )
+    post = page.evaluate(
+        f"calls.find(c => c.path === '{BASE}/invitations' && c.method === 'POST')"
+    )
+    assert post["body"] == {"email": "new@example.com", "role": "reviewer"}
+    assert page.errors == []
+    page.close()
+
+
+def test_share_dialog_managers_see_no_guest_line(browser_and_url):
+    answers = share_answers()
+    answers[f"GET {BASE}/members"][1]["inviteNew"] = []
+    page = open_share(browser_and_url, answers)
+    page.fill(".hive-dialog .add input", "new@example.com")
+    assert page.is_hidden(".hive-dialog .guest-line")
+    assert "already have a Hive account" in page.inner_text(
+        ".hive-dialog .note:not(.guest-line)"
+    )
+    page.close()
+
+
+def test_guest_badge_in_the_user_menu(browser_and_url):
+    answers = share_answers()
+    answers["GET /api/me"] = [
+        200,
+        {
+            "user": {
+                "username": "fabio",
+                "name": "Fabio Rossi",
+                "email": "f@x",
+                "accountType": "guest",
+            }
+        },
+    ]
+    page = open_share(browser_and_url, answers)
+    page.keyboard.press("Escape")
+    page.click(".hive-chip")
+    page.wait_for_selector(".hive-menu .hive-guest-badge")
+    assert page.inner_text(".hive-menu .hive-guest-badge") == "Guest"
+    page.close()

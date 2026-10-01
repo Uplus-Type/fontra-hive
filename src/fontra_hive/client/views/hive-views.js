@@ -300,6 +300,9 @@ const STYLE = `
   .hive-member { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid #0000000d; }
   .hive-member .who { flex: 1; line-height: 1.2; min-width: 0; }
   .hive-member .who small { display: block; opacity: 0.6; font-size: 0.85em; overflow: hidden; text-overflow: ellipsis; }
+  .hive-guest-badge { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 8px; font-size: 0.75em; font-weight: normal; background: #3b82f622; vertical-align: 1px; }
+  .hive-dialog .guest-line { margin: 4px 0 0; }
+  .hive-dialog .guest-line[hidden] { display: none; }
   .hive-member .role { font-size: 0.92em; opacity: 0.8; }
   .hive-dialog select, .hive-dialog input { font: inherit; font-size: 0.95em; border: none; border-radius: 0.25em;
                  padding: 5px 8px; background: var(--text-input-background-color, #eee);
@@ -874,7 +877,12 @@ export class HiveViews {
     const role = this.access?.role;
     this.menu = el("div", { class: "hive-menu" }, [
       el("div", { class: "who" }, [
-        el("b", {}, [this.me.name]),
+        el("b", {}, [
+          this.me.name,
+          this.me.accountType === "guest"
+            ? el("span", { class: "hive-guest-badge", title: "Free guest account: reviewer or observer only" }, ["Guest"])
+            : null,
+        ]),
         el("small", {}, [[this.me.username, this.me.email, role].filter(Boolean).join(" · ")]),
       ]),
       others.length ? el("hr") : null,
@@ -1367,7 +1375,9 @@ export function openShareDialog(projectName, { onClose } = {}) {
     dialog.replaceChildren(el("h3", {}, [`Share “${projectName}”`]));
     for (const m of data.members) {
       const isYou = m.username === data.you;
-      const editable = data.canManage && m.via === "collaborator" && data.roles.includes(m.role);
+      // A guest's role only goes between observer and reviewer.
+      const choices = m.guest ? data.roles.filter((r) => r === "observer" || r === "reviewer") : data.roles;
+      const editable = data.canManage && m.via === "collaborator" && choices.includes(m.role);
       const roleCell = editable
         ? el(
             "select",
@@ -1375,7 +1385,7 @@ export function openShareDialog(projectName, { onClose } = {}) {
               "aria-label": `Role of ${m.name}`,
               onchange: (e) => act(`${base}/collaborators/${encodeURIComponent(m.username)}`, json("PUT", { role: e.target.value })),
             },
-            data.roles.map((r) => el("option", { value: r, selected: r === m.role ? "" : null }, [r]))
+            choices.map((r) => el("option", { value: r, selected: r === m.role ? "" : null }, [r]))
           )
         : el("span", { class: "role", title: m.via === "collaborator" ? "" : `Role from: ${m.via}` }, [
             m.via === "collaborator" ? m.role : `${m.role} · ${m.via}`,
@@ -1386,6 +1396,7 @@ export function openShareDialog(projectName, { onClose } = {}) {
           avatar(m, 30),
           el("div", { class: "who" }, [
             `${m.name}${isYou ? " (you)" : ""}`,
+            m.guest ? el("span", { class: "hive-guest-badge", title: "Guest account: reviewer at most" }, ["guest"]) : null,
             el("small", {}, [[m.username, m.email].filter(Boolean).join(" · ")]),
           ]),
           roleCell,
@@ -1419,7 +1430,22 @@ export function openShareDialog(projectName, { onClose } = {}) {
       const role = el("select", { "aria-label": "Role" }, data.roles.map((r) =>
         el("option", { value: r, selected: r === "designer" ? "" : null }, [r])));
       const add = el("button", { class: "pill blue", disabled: "" }, ["Invite"]);
-      who.addEventListener("input", () => (add.disabled = !who.value.trim()));
+      // Admins may invite a new address as reviewer or observer: a free guest
+      // account (data.inviteNew: the roles a new address may get).
+      const inviteNew = data.inviteNew || [];
+      const guestLine = el("p", { class: "note guest-line", hidden: "" });
+      const updateGuestLine = () => {
+        const email = who.value.includes("@");
+        guestLine.hidden = !email || !inviteNew.length || inviteNew.length === data.roles.length;
+        guestLine.textContent = inviteNew.includes(role.value)
+          ? "If this address has no Hive account yet, this person will get a free guest account (reviewer or observer only)."
+          : "A new address can only be invited as reviewer or observer: it gets a free guest account.";
+      };
+      who.addEventListener("input", () => {
+        add.disabled = !who.value.trim();
+        updateGuestLine();
+      });
+      role.addEventListener("change", updateGuestLine);
       const invite = () => {
         const value = who.value.trim();
         if (!value) return;
@@ -1428,9 +1454,14 @@ export function openShareDialog(projectName, { onClose } = {}) {
       };
       add.addEventListener("click", invite);
       who.addEventListener("keydown", (e) => e.key === "Enter" && invite());
-      dialog.append(el("div", { class: "add" }, [who, role, add]));
+      dialog.append(el("div", { class: "add" }, [who, role, add]), guestLine);
       dialog.append(el("p", { class: "note" }, [
-        "People who already have a Hive account, by username or by the address of their account. " +
+        (inviteNew.length && inviteNew.length < data.roles.length
+          ? "People who already have a Hive account, by username or by the address of their account; " +
+            "anyone else by email, as reviewer or observer (a free guest account). "
+          : inviteNew.length
+          ? "Anyone, by username or email. "
+          : "People who already have a Hive account, by username or by the address of their account. ") +
           "They receive an email with a link, valid 7 days, and join when they accept.",
       ]));
     } else {
@@ -1495,7 +1526,12 @@ export async function start() {
   if (me.source === "hive-api") {
     try {
       const full = (await api("/api/me")).user; // email and photo, from hive-api
-      Object.assign(me.user, { name: full.name, email: full.email, avatar: full.avatar });
+      Object.assign(me.user, {
+        name: full.name,
+        email: full.email,
+        avatar: full.avatar,
+        accountType: full.accountType, // "guest": reviewer or observer only
+      });
     } catch (error) {
       // keep what the token says
     }

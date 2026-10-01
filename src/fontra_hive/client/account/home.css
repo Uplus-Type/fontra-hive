@@ -30,6 +30,8 @@ main h3 { font-size: 1.05em; margin: 1.8em 0 0.6em; }
 .project-card .foot { display: flex; align-items: center; justify-content: space-between; font-size: 0.85em; }
 .badge { font-size: 0.8em; padding: 0.1em 0.55em; border-radius: 1em; background: #8882; }
 .badge.admin { background: #c8922233; }
+.badge.guest { background: #3b82f622; color: inherit; margin-left: 0.4em; }
+.guest-note { margin: 0 0 1.2em; }
 .link-button { background: none; color: inherit; padding: 0.2em 0.4em; margin: 0; text-decoration: underline; opacity: 0.75; border-radius: 0.3em; }
 .link-button:hover { opacity: 1; background: #8882; }
 

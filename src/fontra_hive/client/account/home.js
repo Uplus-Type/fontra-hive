@@ -178,9 +178,15 @@ async function projectsSection() {
     get("/api/me/projects?trashed=true"),
   ]);
   const content = [
-    el("h2", {}, [el("span", { class: "grow" }, ["Projects"]), el("a", { href: "#new" }, [el("button", {}, ["New project"])])]),
+    el("h2", {}, [
+      el("span", { class: "grow" }, ["Projects"]),
+      isGuest() ? null : el("a", { href: "#new" }, [el("button", {}, ["New project"])]),
+    ]),
   ];
-  if (!projects.length) {
+  if (isGuest()) content.push(guestNote());
+  if (!projects.length && isGuest()) {
+    content.push(el("p", { class: "empty" }, ["No project yet: the projects you are invited to appear here."]));
+  } else if (!projects.length) {
     content.push(
       el("p", { class: "empty" }, [
         "No project yet. Create one, empty or from a font you already have,",
@@ -276,7 +282,26 @@ async function deleteForGood(ids, then = route) {
   return true;
 }
 
+// A guest account (invited as reviewer or observer by a full account) sees
+// and comments on what it is invited to; it creates nothing and invites no
+// one. hive-api refuses it anyway (403): this only keeps the buttons away.
+function isGuest() {
+  return me?.accountType === "guest";
+}
+
+function guestNote() {
+  return el("p", { class: "note guest-note" }, [
+    el("span", { class: "badge guest" }, ["Guest"]),
+    " Your free guest account lets you look at and comment on the projects you are invited to. " +
+      "To create your own projects, ask the Hive team to upgrade it.",
+  ]);
+}
+
 async function newProjectSection() {
+  if (isGuest()) {
+    main().replaceChildren(el("h2", {}, ["New project"]), guestNote());
+    return;
+  }
   const { organizations } = await get("/api/me/organizations");
   const owners = [me.username, ...organizations.filter((o) => o.role === "owner").map((o) => o.login)];
   const owner = el("select", { name: "owner" }, owners.map((o) => el("option", { value: o }, [o === me.username ? `${o} (you)` : o])));
@@ -1320,7 +1345,7 @@ async function orgsSection() {
             el("div", { class: "foot" }, [el("span", { class: "badge" }, [o.role])]),
           ])))
       : el("p", { class: "empty" }, ["You are not in any organization."]),
-    el("div", { class: "panel", style: "margin-top:1.5em" }, [
+    isGuest() ? guestNote() : el("div", { class: "panel", style: "margin-top:1.5em" }, [
       el("h3", { style: "margin-top:0" }, ["New organization"]),
       el("p", { class: "note" }, ["A studio or a team: its projects are shared by its members. You will be its owner."]),
       form([field("Short name", login, "in addresses: letters, digits, hyphens"), field("Full name", name)], "Create", async () => {
@@ -1340,9 +1365,9 @@ async function orgSection(login) {
   const rows = members.members.map((m) => {
     const isYou = m.username === me.username;
     return el("tr", { "data-username": m.username }, [
-      el("td", { class: "who" }, [avatar(m, 28), el("div", {}, [`${m.name}${isYou ? " (you)" : ""}`, el("small", {}, [[m.username, m.email].filter(Boolean).join(" · ")])])]),
+      el("td", { class: "who" }, [avatar(m, 28), el("div", {}, [`${m.name}${isYou ? " (you)" : ""}`, m.guest ? el("span", { class: "badge guest", title: "Guest account: reviewer at most" }, ["guest"]) : null, el("small", {}, [[m.username, m.email].filter(Boolean).join(" · ")])])]),
       el("td", {}, [
-        owner
+        owner && !m.guest
           ? roleSelect(["owner", "member"], m.role, {
               "aria-label": `Role of ${m.name}`,
               onchange: async (e) => {
@@ -1391,7 +1416,12 @@ async function orgSection(login) {
                 el("td", {}, [el("button", { class: "secondary", onclick: async () => { await call(`${base}/invitations/${inv.id}`, undefined, "DELETE"); route(); } }, ["Cancel"])]),
               ])))
           : null,
-        el("p", { class: "note" }, ["People who already have a Hive account, by the address of their account."]),
+        el("p", { class: "note" }, [
+          members.inviteNew?.includes("member")
+            ? "By email address. Someone without a Hive account yet gets a free guest account as a member: " +
+              "on the organization's projects they can review at most (comment and look, not edit)."
+            : "People who already have a Hive account, by the address of their account.",
+        ]),
         form([el("div", { class: "row" }, [field("Email", email), field("As", role)])], "Send the invitation", async () => {
           await call(`${base}/invitations`, { email: email.value.trim(), role: role.value });
           const sent = email.value.trim();
@@ -1455,6 +1485,7 @@ async function profileSection() {
 
   main().replaceChildren(
     el("h2", {}, ["Profile"]),
+    ...(isGuest() ? [guestNote()] : []),
     el("div", { class: "panel" }, [
       el("div", { class: "photo" }, [
         avatar(user, 64),

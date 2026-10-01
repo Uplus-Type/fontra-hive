@@ -29,6 +29,7 @@
     </form>
     <form id="signup" class="hidden">
       <p class="note">Create your account for <b class="email"></b>.</p>
+      <p class="note guest hidden">Your account will be a <b>free guest account</b>: you can look at and comment on the projects you are invited to. You cannot create projects or invite people with it; the Hive team can upgrade it later.</p>
       <label>Username <small>letters, digits and hyphens; how others will find you</small>
         <input name="username" autocomplete="username" required maxlength="39" pattern="[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}"></label>
       <label>Your name <small>as shown to your team</small>
@@ -36,7 +37,7 @@
       <label>Password <small>at least 10 characters</small>
         <input name="password" type="password" autocomplete="new-password" required minlength="10"></label>
       <label>Password, again <input name="password2" type="password" autocomplete="new-password" required></label>
-      <p class="note">By creating an account, you accept the <a href="/terms#en" target="_blank">Terms</a> and have read the <a href="/legal#en-data" target="_blank">Privacy policy</a>.</p>
+      <p class="note">By creating an account, you accept the <a href="/terms#en" target="_blank">Terms</a> and have read the <a href="/legal#en-data" target="_blank">Privacy policy</a> and the <a href="/charter" target="_blank">Confidentiality charter</a>.</p>
       <div class="error"></div>
       <button type="submit">Create the account</button>
     </form>
