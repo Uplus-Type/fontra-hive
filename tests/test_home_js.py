@@ -837,3 +837,69 @@ def test_github_notice_after_the_trip(browser_and_url):  # noqa: F811
     assert "github=" not in page.url
     assert page.errors == []
     page.close()
+
+
+def test_new_project_from_a_git_repository(browser_and_url):  # noqa: F811
+    """New project "from a Git repository": its page, without a font, shows
+    the Git repository panel first; connecting pulls the font at once."""
+    new_one = project("uplustype", "New-One", "admin")
+    new_one["capabilities"] = [
+        "read",
+        "edit",
+        "branch",
+        "merge",
+        "export",
+        "invite",
+        "administer",
+    ]
+    hive = "/api/hive/projects/uplustype%2FNew-One"
+    github = {
+        "configured": True,
+        "connected": True,
+        "login": "jhornus",
+        "installUrl": "https://github.com/apps/fontra-hive",
+    }
+    extra = remote_answers(github=github)
+    extra.update(
+        {
+            "GET /api/projects/uplustype/New-One": [200, {"project": new_one}],
+            f"GET {hive}/repository": [200, {"exists": False}],
+            "GET /api/projects/uplustype/New-One/remote": [200, {"remote": None}],
+            "PUT /api/projects/uplustype/New-One/remote": [200, {"remote": GALIEN}],
+            f"POST {hive}/remote/pull": [
+                200,
+                {
+                    "branch": "upstream/main",
+                    "remoteHead": "a" * 40,
+                    "commit": "b" * 40,
+                    "glyphs": ["A", "B"],
+                    "merged": "main",
+                },
+            ],
+        }
+    )
+    page = open_home(browser_and_url, "#new", extra)
+    page.wait_for_selector("form select[name=owner]")
+    page.fill("input[name=name]", "New-One")
+    page.check("input[value=git]")
+    page.click("form button[type=submit]")
+    page.wait_for_selector(".panel.remote select[aria-label='Repository']")
+    assert "Connect the repository below" in page.inner_text(".notice")
+    # Right under "No font yet", before People.
+    titles = page.eval_on_selector_all(".panel h3", "hs => hs.map(h => h.textContent)")
+    assert titles[:3] == ["No font yet", "Git repository", "People"]
+    links = page.eval_on_selector_all(
+        ".panel.remote a", "as => as.map(a => a.getAttribute('href'))"
+    )
+    assert all(
+        link.startswith("/api/github/connect?") for link in links
+    )  # same tab, back here
+    page.fill(
+        "input[placeholder='e.g. sources/MyFont.designspace']",
+        "Sources/Galien.designspace",
+    )
+    page.click(".panel.remote form >> text=Connect this repository")
+    page.wait_for_function("calls.some(c => c.path.endsWith('/remote/pull'))")
+    page.wait_for_selector("text=is now the project's (2 glyphs changed)")
+    assert page.errors == []
+    page.close()

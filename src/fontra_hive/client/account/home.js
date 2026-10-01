@@ -284,11 +284,13 @@ async function newProjectSection() {
   const description = el("input", { name: "description", maxlength: 300 });
   const empty = el("input", { type: "radio", name: "start", value: "empty", checked: true });
   const fromFont = el("input", { type: "radio", name: "start", value: "font" });
+  const fromGit = el("input", { type: "radio", name: "start", value: "git" });
   const { input: file, bar, elements: fontFields } = importFields();
   const fontBox = el("div", { class: "hidden" }, fontFields);
   const toggle = () => fontBox.classList.toggle("hidden", !fromFont.checked);
   empty.addEventListener("change", toggle);
   fromFont.addEventListener("change", toggle);
+  fromGit.addEventListener("change", toggle);
   const status = el("p", { class: "note" });
   const f = form(
     [
@@ -298,6 +300,7 @@ async function newProjectSection() {
       el("div", { class: "choices" }, [
         el("label", {}, [empty, "Start with an empty font"]),
         el("label", {}, [fromFont, "Import a font"]),
+        el("label", {}, [fromGit, "Connect to an existing Git repository (GitHub…)"]),
       ]),
       fontBox,
       status,
@@ -310,6 +313,12 @@ async function newProjectSection() {
         owner: owner.value,
         description: description.value.trim(),
       });
+      if (fromGit.checked) {
+        // The project's page connects the repository and pulls its font.
+        notice = "Connect the repository below: its font becomes the project's.";
+        location.hash = projectHash(project.id);
+        return;
+      }
       if (fromFont.checked) {
         try {
           await importWithProgress(project.id, file.files[0], bar, status);
@@ -512,7 +521,7 @@ function remoteSummary(status, defaultBranch) {
   return parts.join(" ") || "Up to date.";
 }
 
-async function remoteConnectForm(project, panel) {
+async function remoteConnectForm(project, panel, withFont) {
   const projectPath = hiveApiProjectPath(project.id);
   let github = null;
   try {
@@ -554,9 +563,7 @@ async function remoteConnectForm(project, panel) {
     children.push(
       el("p", { class: "note" }, [
         `Signed in to GitHub as ${github.login}. `,
-        el("a", { href: `${github.installUrl}/installations/new`, target: "_blank", rel: "noopener" }, [
-          "Add or remove repositories",
-        ]),
+        el("a", { href: connectURL() }, ["Add or remove repositories"]),
         " · ",
         el("a", { href: connectURL("authorize") }, ["Sign in to GitHub again"]),
       ])
@@ -570,7 +577,7 @@ async function remoteConnectForm(project, panel) {
             branch: branch.value.trim(),
             path: path.value.trim(),
           }, "PUT");
-          route();
+          await firstPull(project, withFont);
         })
       );
     } else if (!problem) {
@@ -598,14 +605,36 @@ async function remoteConnectForm(project, panel) {
           branch: otherBranch.value.trim(),
           path: otherPath.value.trim(),
         }, "PUT");
-        route();
+        await firstPull(project, withFont);
       }),
     ])
   );
   panel.append(...children);
 }
 
-async function remotePanel(project, defaultBranch) {
+function pullNotice(result, where) {
+  if (!result.commit) return "Nothing new in the repository.";
+  const glyphs = result.glyphs.length ? ` (${result.glyphs.length} glyphs changed)` : "";
+  if (result.merged) return `The font of ${where} is now the project's${glyphs}.`;
+  return `Pulled into ${result.branch}${glyphs}.`;
+}
+
+// Right after connecting: a project without its font takes the repository's
+// at once; another one gets upstream/<branch> to review and merge.
+async function firstPull(project, withFont) {
+  const hive = `/api/hive/projects/${encodeURIComponent(project.id)}/remote`;
+  if (!withFont || project.capabilities.includes("branch")) {
+    try {
+      const result = await remoteCall(`${hive}/pull`, "POST");
+      notice = pullNotice(result, "the repository");
+    } catch (error) {
+      notice = `The repository is connected, but the first pull failed: ${error.message}`;
+    }
+  }
+  route();
+}
+
+async function remotePanel(project, defaultBranch, withFont = true) {
   const caps = project.capabilities;
   const admin = caps.includes("administer");
   let remote = null;
@@ -624,7 +653,7 @@ async function remotePanel(project, defaultBranch) {
         "Keep the project in step with a repository on GitHub: pull what is pushed there, push what the team does here.",
       ])
     );
-    await remoteConnectForm(project, panel);
+    await remoteConnectForm(project, panel, withFont);
     return panel;
   }
 
@@ -677,9 +706,7 @@ async function remotePanel(project, defaultBranch) {
               error.textContent = ok.textContent = "";
               try {
                 const result = await remoteCall(`${hive}/pull`, "POST");
-                notice = result.commit
-                  ? `Pulled into ${result.branch}` + (result.glyphs.length ? ` (${result.glyphs.length} glyphs changed).` : ".")
-                  : "Nothing new in the repository.";
+                notice = pullNotice(result, where);
                 route();
               } catch (e) {
                 error.textContent = e.message;
@@ -919,7 +946,7 @@ async function projectSection(projectId) {
       el("div", { class: "panel no-font" }, [
         el("h3", { style: "margin-top:0" }, ["No font yet"]),
         admin
-          ? el("p", { class: "note" }, ["Import a font below, or start with an empty font."])
+          ? el("p", { class: "note" }, ["Import a font below, connect a Git repository, or start with an empty font."])
           : el("p", { class: "note" }, ["The project's admins have not added its font yet."]),
         admin
           ? el("button", {
@@ -939,6 +966,13 @@ async function projectSection(projectId) {
     );
   }
 
+  // The Git repository: right under "No font yet" for a project without
+  // its font (it can bring one), after the branches otherwise.
+  const remote = project.trashed
+    ? null
+    : await remotePanel(project, project.defaultBranch || "main", withFont);
+  if (remote && !withFont) content.push(remote);
+
   // People
   content.push(
     el("div", { class: "panel" }, [
@@ -956,7 +990,6 @@ async function projectSection(projectId) {
       branches = null;
     }
     if (branches) content.push(branchesPanel(project, branches));
-    const remote = await remotePanel(project, branches?.default || project.defaultBranch || "main");
     if (remote) content.push(remote);
     const comments = await loadComments(project.id);
     if (comments) content.push(commentsPanel(project, comments));

@@ -134,19 +134,28 @@ class RemoteSync:
             def work():
                 store = GitRepoStore.open(repoPath)
                 try:
-                    return git_remote.pull(
+                    result = git_remote.pull(
                         store,
                         remote,
                         base_branch=baseBranch,
                         author=author,
                         allow_local=self.allowLocal,
                     )
+                    adopted = False
+                    if result.commit and is_fresh_project(store, baseBranch):
+                        # A project made to hold this repository: nothing
+                        # to review, the repository's font becomes its own.
+                        store.fast_forward(baseBranch, result.branch)
+                        adopted = True
+                    return result, adopted
                 finally:
                     store.close()
 
-            result = await asyncio.to_thread(work)
+            result, adopted = await asyncio.to_thread(work)
             if result.commit and self.afterWrite is not None:
                 await _maybe_await(self.afterWrite(repoPath, result.branch))
+                if adopted:
+                    await _maybe_await(self.afterWrite(repoPath, baseBranch))
         if result.remote_sha:
             await self.api.remoteSynced(project, result.remote_sha)
         return {
@@ -154,6 +163,7 @@ class RemoteSync:
             "remoteHead": result.remote_sha,
             "commit": result.commit,
             "glyphs": list(result.glyphs),
+            "merged": baseBranch if adopted else None,
         }
 
     # --- push --------------------------------------------------------------------
@@ -223,6 +233,19 @@ class RemoteSync:
                     "pull of %s after a push on its remote: %s", project, error
                 )
         return pulled
+
+
+NEW_PROJECT_MESSAGE = "New project"
+
+
+def is_fresh_project(store: GitRepoStore, branch: str) -> bool:
+    """The branch is still the empty font a project starts with (one commit,
+    made by the server when the project was opened for the first time)."""
+    head = store.head(branch)
+    if head is None:
+        return False
+    info = store.commit_info(head)
+    return not info.parents and info.message.startswith(NEW_PROJECT_MESSAGE)
 
 
 async def _maybe_await(value):

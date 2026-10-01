@@ -643,7 +643,9 @@ In Hive's home page, a project's settings have a **Git repository** panel:
 admins connect GitHub (or another host, by address and token) and choose the
 repository, branch and font; everyone sees where the project stands (new
 commits to pull, changes to push, what a UFO push leaves out); designers pull,
-managers merge `upstream/<branch>` and push.
+managers merge `upstream/<branch>` and push. A new project can start
+"from an existing Git repository": the first pull of a project still on its
+empty font makes the repository's font its own, nothing to merge.
 
 Not yet: push from the editor's branch menu, pull requests, a first push to an
 empty UFO repository, `.glyphs` sources.

@@ -201,3 +201,41 @@ def test_one_operation_at_a_time(setup):
     first, second = run(both())
     # The second waited for the first, then found nothing new.
     assert [bool(first["commit"]), bool(second["commit"])].count(True) == 1
+
+
+def test_a_fresh_project_takes_the_repositorys_font(tmp_path):
+    """A project still on the empty font it was created with: the first pull
+    becomes its font, no merge to do."""
+    remote_store = GitRepoStore.create(tmp_path / "remote.git")
+    remote_store.commit(
+        {f"Font.fontra/{p}": d for p, d in files_of(FIXTURE).items()},
+        message="Initial",
+        author=OUTSIDER,
+    )
+    repo = tmp_path / "fresh.git"
+    store = GitRepoStore.create(repo)
+    store.commit(
+        {"font-data.json": b"{}\n"}, message=f"New project {PROJECT}", author=ALICE
+    )
+    store.close()
+    calls = []
+    sync = RemoteSync(
+        FakeApi(remote_store.path),
+        allowLocal=True,
+        afterWrite=lambda path, branch: calls.append(branch),
+    )
+    result = run(sync.pull(repo, PROJECT, "main"))
+    assert result["merged"] == "main"
+    assert calls == ["upstream/main", "main"]
+    store = GitRepoStore.open(repo)
+    try:
+        assert store.head("main") == store.head("upstream/main")
+        assert "glyphs/A^1.json" in store.list_tree(store.head("main"))
+    finally:
+        store.close()
+
+
+def test_a_project_with_work_is_not_taken_over(setup):
+    sync, api, repo, _, _ = setup
+    result = run(sync.pull(repo, PROJECT, "main"))  # the project was imported
+    assert result["merged"] is None
