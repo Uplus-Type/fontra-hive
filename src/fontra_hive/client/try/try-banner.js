@@ -363,7 +363,7 @@ function start() {
     // Fontra's icon on the demo (Fontra alone); Hive's once a font is kept
     // here, with Hive's history, branches and comments.
     el("img", {
-      src: isLocal ? "/hive/icons/hive-icon.svg" : "/images/fontra-icon.svg",
+      src: isLocal ? "/hive/icons/hive-icon.png" : "/images/fontra-icon.svg",
       alt: "",
       title: isLocal ? "Fontra with Fontra Hive" : "Fontra",
     }),

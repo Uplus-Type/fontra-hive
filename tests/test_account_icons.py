@@ -13,7 +13,7 @@ def test_account_pages_link_hives_icon():
     assert pages
     for page in pages:
         html = page.read_text(encoding="utf-8")
-        assert 'rel="icon" href="/hive/icons/hive-icon.svg"' in html, page.name
+        assert 'rel="icon" href="/hive/icons/hive-icon.png"' in html, page.name
         assert "fontra-icon.svg" not in html, page.name
         for src in re.findall(r'(?:src|href)="/hive/icons/([^"]+)"', html):
             assert (ACCOUNT.parent / "icons" / src).is_file(), (page.name, src)

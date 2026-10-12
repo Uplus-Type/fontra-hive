@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://fontrahive.com"><img src="src/fontra_hive/client/icons/hive-icon.svg" alt="Fontra Hive" width="160"></a>
+  <a href="https://fontrahive.com"><img src="src/fontra_hive/client/icons/hive-icon.png" alt="Fontra Hive" width="160"></a>
 </p>
 
 # fontra-hive

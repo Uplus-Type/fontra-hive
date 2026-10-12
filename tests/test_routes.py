@@ -308,7 +308,7 @@ def test_plugin_files_are_served_with_revalidation(manager):
         assert manifest.content_type == "application/json"
         # Hive's icon: the files the pages link to, and /favicon.ico.
         for path, contentType in [
-            ("icons/hive-icon.svg", "image/svg+xml"),
+            ("icons/hive-icon.png", "image/png"),
             ("icons/apple-touch-icon.png", "image/png"),
             ("icons/icon-192.png", "image/png"),
             ("icons/icon-512.png", "image/png"),

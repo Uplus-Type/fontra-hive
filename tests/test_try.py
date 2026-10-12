@@ -49,7 +49,7 @@ def test_inject_try_scripts():
     )
     assert page.index('src="/hive/try/try-engine.js"') < page.index("<title>")
     assert page.index('src="/hive/try/try-banner.js"') > page.index("<p>x</p>")
-    assert page.index('href="/hive/icons/hive-icon.svg"') < page.index("<title>")
+    assert page.index('href="/hive/icons/hive-icon.png"') < page.index("<title>")
     assert "register.js" not in page and "hive-views.js" not in page
     assert injectTryScripts("<p>x</p>").startswith(
         '<script src="/hive/try/fontra-format.js">'

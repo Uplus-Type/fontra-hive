@@ -1690,7 +1690,7 @@ HIVE_HEAD_SCRIPT = '<script src="/hive/views/register.js"></script>'
 # Hive's icon in the browser tab, on a phone's home screen, as an app. Also
 # written by hand in the account pages (client/account/*.html).
 HIVE_ICON_LINKS = (
-    '<link rel="icon" href="/hive/icons/hive-icon.svg" type="image/svg+xml">'
+    '<link rel="icon" href="/hive/icons/hive-icon.png" type="image/png">'
     '<link rel="icon" href="/favicon.ico" sizes="48x48">'
     '<link rel="apple-touch-icon" href="/hive/icons/apple-touch-icon.png">'
     '<link rel="manifest" href="/hive/icons/site.webmanifest">'
