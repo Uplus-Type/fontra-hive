@@ -1,5 +1,5 @@
 // Fontra Hive, "Try Fontra" — tour 3, "Font info and designspace": the
-// panels of Font Info, on MutatorSans (two axes, a source at each corner).
+// panels of Font Info, on whatever font is open.
 // Rules for the text: try-tour-steps.js.
 //
 // Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
@@ -44,9 +44,9 @@ export const fontInfo = {
       ...panel("axes-panel"),
       title: "Axes",
       text:
-        "MutatorSans has Weight and Width. Each axis has a range and a default; Axis values name " +
-        "places on it, the exported instances; the mapping graph bends user values into design " +
-        "values (avar).",
+        "An axis is a dimension the design varies along, like Weight. Give it a range and a " +
+        "default; Axis values name places on it, the exported instances. The mapping graph bends " +
+        "user values into design values: in the font, that is avar, the axis variations table.",
       learn: DOCS + "/reference/menu/font/axes",
     },
     {
@@ -54,9 +54,9 @@ export const fontInfo = {
       ...panel("sources-panel"),
       title: "Sources",
       text:
-        "Each source is a whole drawing at a place in the designspace: MutatorSans has one at " +
-        "each corner of Weight × Width. Line metrics are set per source; a sparse source draws " +
-        "only some glyphs.",
+        "A source is a whole drawing at one place of the designspace, given by its axis values; " +
+        "Fontra interpolates between sources. Line metrics are set per source. A sparse source " +
+        "draws only some glyphs, where they need it.",
       learn: DOCS + "/reference/menu/font/sources",
     },
     {
@@ -90,8 +90,9 @@ export const fontInfo = {
       ...panel("development-status-definitions-panel"),
       title: "Status definitions",
       text:
-        "The stages a glyph goes through, each with a colour: in progress, checking, finished. " +
-        "Give a glyph source its status in the Designspace panel; the Font overview colours its cells.",
+        "Empty at first: create the statuses your workflow needs, each with a name and a colour — " +
+        "in progress, to check, finished, or your own. Give a glyph source its status in the " +
+        "Designspace panel; the Font overview colours its cells.",
       learn: DOCS + "/reference/menu/font/status-colors",
     },
     {
