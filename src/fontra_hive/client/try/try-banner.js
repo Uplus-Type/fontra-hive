@@ -1,10 +1,11 @@
 // Fontra Hive, "Try Fontra": the bar at the bottom of the editor, and the
 // "Your fonts" panel: open a font (.fontra, UFO, designspace with its UFOs,
 // TrueType/OpenType; a file, a .zip or a folder), keep it in this browser,
-// download it (.fontra, or designspace + UFOs), delete it; or go back to the
-// demo font. .fontra is read in JavaScript; other formats by Fontra's own
-// Python code, in the browser (try-python-worker.js).
-// Loaded at the end of <body>; the engine is try-engine.js.
+// download it (.fontra, or designspace + UFOs), delete it; or a fresh copy
+// of the example font. .fontra is read in JavaScript; other formats by
+// Fontra's own Python code, in the browser (try-python-worker.js).
+// Loaded at the end of <body>; the engine is try-engine.js; the start page
+// (/try) is try-start.js.
 //
 // Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
 
@@ -58,24 +59,7 @@ const STYLE = `
 .hive-try-panel .top { display: flex; justify-content: space-between; align-items: start; gap: 8px; }
 `;
 
-const DEMO_URL = "/editor.html?project=demo%3AMutatorSans&text=%22HAMBURGEFONSTIV%22";
-
-function el(tag, attrs = {}, ...children) {
-  const node = document.createElement(tag);
-  for (const [key, value] of Object.entries(attrs)) {
-    if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
-    else node.setAttribute(key, value);
-  }
-  node.append(...children.filter((child) => child !== null && child !== undefined));
-  return node;
-}
-
-function editorURL(id, text) {
-  const url = new URL("/editor.html", location.href);
-  url.searchParams.set("project", "local:" + id);
-  if (text) url.searchParams.set("text", JSON.stringify(text));
-  return url.pathname + url.search;
-}
+import { EXAMPLE_NAME, EXAMPLE_TEXT, START_URL, editorURL, el, freeName } from "./try-common.js";
 
 // Something to show on the canvas: the font's own letters.
 export function sampleText(glyphMap) {
@@ -213,6 +197,23 @@ function openPanel() {
   fileInput.addEventListener("change", () => onPick(fileInput));
   folderInput.addEventListener("change", () => onPick(folderInput));
 
+  // A fresh copy of the example font, kept here under a free name.
+  async function openExample() {
+    error.textContent = "";
+    progress.textContent = "Setting up " + EXAMPLE_NAME + "…";
+    try {
+      const projects = Store.available() ? await Store.list() : [];
+      const id = await window.hiveTry.saveCopy(freeName(EXAMPLE_NAME, projects), (text) => {
+        progress.textContent = text;
+      });
+      go(editorURL(id, EXAMPLE_TEXT));
+    } catch (e) {
+      console.error(e);
+      progress.textContent = "";
+      error.textContent = e.message || String(e);
+    }
+  }
+
   async function fill() {
     list.replaceChildren();
     const projects = Store.available() ? await Store.list() : [];
@@ -237,7 +238,8 @@ function openPanel() {
               onclick: async () => {
                 if (!confirm(`Remove “${project.name}” from this browser? Its history, branches and comments here go with it; the files you opened it from are not touched. To keep what you did, export it first (File › Export as).`)) return;
                 await window.hiveTry.deleteLocal(project.id);
-                if (project.id === current) go(DEMO_URL);
+                // The start page opens the next font, or the example again.
+                if (project.id === current) go(START_URL);
                 else fill();
               },
             },
@@ -280,7 +282,11 @@ function openPanel() {
           { type: "button", class: "plain", title: "A .fontra, .ufo or .glyphspackage (these are folders), or the folder of a designspace and its UFOs", onclick: () => folderInput.click() },
           "Open a folder…"
         ),
-        el("button", { type: "button", class: "plain", onclick: () => go(DEMO_URL) }, "Demo font")
+        el(
+          "button",
+          { type: "button", class: "plain", title: "A fresh copy of the example font, MutatorSans", onclick: openExample },
+          "Example font"
+        )
       ),
       progress,
       error,
@@ -345,9 +351,10 @@ function start() {
         "history of every glyph, snapshots, branches, comments. No account needed.",
       onclick: async () => {
         try {
-          const id = await tryAPI.saveCopy("MutatorSans", (text) => (status.textContent = text));
+          const name = freeName(EXAMPLE_NAME, await window.HiveTryStore.list());
+          const id = await tryAPI.saveCopy(name, (text) => (status.textContent = text));
           tryAPI.TryFont.edited = false;
-          location.href = editorURL(id, "HAMBURGEFONSTIV");
+          location.href = editorURL(id, EXAMPLE_TEXT);
         } catch (e) {
           console.error(e);
           status.classList.add("error");
@@ -370,7 +377,9 @@ function start() {
     name,
     status,
     el("button", { type: "button", class: "plain", onclick: openPanel }, "Your fonts"),
-    isLocal ? null : keep,
+    // The demo without Hive is only seen where nothing can be kept (a
+    // private window), or at its own address: the offer is for the latter.
+    isLocal || !window.HiveTryStore.available() ? null : keep,
     el(
       "a",
       {

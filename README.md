@@ -468,17 +468,23 @@ GET    /api/hive/projects/<name>/comments/summary        {open, resolved}; never
 ## "Try Fontra" without a server
 
 `/try` opens Fontra's editor for anyone, with no account, and the font never
-reaches the server. On Fontra's pages (editor, font overview, font info) for
-the project `demo:MutatorSans` or `local:<id>`, Hive adds three classic
-scripts at the start of `<head>` and a notice at the end of `<body>`
-(`client/try/`). Nothing in Fontra is changed or rebuilt: the pages are
-Fontra's own.
+reaches the server. `/try` itself is a start page (`try-start.html`,
+`try-start.js`): it opens the font last kept in the visitor's browser, or,
+on a first visit, keeps the example font there first and opens it, so the
+visitor is in Fontra with Hive from the start. On Fontra's pages (editor,
+font overview, font info) for the project `demo:MutatorSans` or
+`local:<id>`, Hive adds three classic scripts at the start of `<head>` and a
+notice at the end of `<body>` (`client/try/`). Nothing in Fontra is changed
+or rebuilt: the pages are Fontra's own.
 
-- **The demo** (`demo:MutatorSans`, `demo-font.json`: MutatorSans, BSD
+- **The example** (`demo:MutatorSans`, `demo-font.json`: MutatorSans, BSD
   licence, see `MUTATORSANS-LICENSE.txt`): `try-engine.js` replaces the
   editor's WebSocket by an object that answers the same calls (`getGlyph`,
-  `getAxes`, `editFinal`…) in JavaScript, instantly. Not saved: a reload
-  starts over, "Keep a copy and try Hive" makes it a font kept in the browser.
+  `getAxes`, `editFinal`…) in JavaScript, instantly. On its own it is a
+  demo with nothing saved (a reload starts over): where the start page
+  falls back to when the browser cannot keep files (a private window); and
+  what the start page and "Example font" in the panel copy into a font
+  kept in the browser.
 - **A font kept in the browser** (`local:<id>`): Hive solo. The font is a
   bare git repository (`/repos/local:<id>.git`) in the browser's IndexedDB
   (Emscripten's IDBFS), and it is served by the same code as fontrahive.com,
@@ -498,8 +504,10 @@ Fontra's own.
   UFOs, Glyphs (`.glyphs`, `.glyphspackage`), TrueType/OpenType/WOFF/TTX
   in; `.fontra` or designspace + UFOs out.
 - `try-banner.js`: the bar at the bottom (name, save state, "Your fonts",
-  "Keep a copy and try Hive" on the demo, "Fontra Hive for teams" to fontrahive.com) and
-  the "Your fonts" panel (open a file or a folder, open, delete). Fontra's
+  "Fontra Hive for teams" to fontrahive.com; on the bare demo, "Keep a copy
+  and try Hive") and the "Your fonts" panel (open a file or a folder, open,
+  delete, a fresh copy of the example; `try-common.js` has what the bar
+  and the start page share). Fontra's
   own File › Export as downloads the font (`.fontra` or designspace + UFOs,
   zipped): the engine answers `exportAs` itself instead of the server.
 - One Python for all the tabs of the site (a `SharedWorker`, where the

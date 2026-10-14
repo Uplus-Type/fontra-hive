@@ -1,7 +1,7 @@
 // Fontra Hive, "Try Fontra": fonts kept in this browser.
 //
 // What this browser keeps of each font, in its private file system (OPFS):
-//   fontra-hive-try/projects/<id>/project.json   {name, created, modified}
+//   fontra-hive-try/projects/<id>/project.json   {name, created, modified, opened}
 // The font itself is a git repository kept by try-python-worker.js (in
 // IndexedDB). Nothing leaves the browser. Reads happen here; writes go
 // through try-opfs-worker.js, in order.
@@ -141,6 +141,14 @@
       var info = await Store.info(id);
       delete info.id;
       Object.assign(info, changes || {}, { modified: new Date().toISOString() });
+      await send({ op: "write", path: projectPath(id).concat(["project.json"]), data: JSON.stringify(info) });
+    },
+
+    // The font was just opened: /try comes back to it next time.
+    async markOpened(id) {
+      var info = await Store.info(id);
+      delete info.id;
+      info.opened = new Date().toISOString();
       await send({ op: "write", path: projectPath(id).concat(["project.json"]), data: JSON.stringify(info) });
     },
 

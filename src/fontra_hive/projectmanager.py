@@ -255,11 +255,13 @@ class DevHiveProjectManager(CommentRoutesMixin):
         return _htmlResponse(injectHiveScripts(text))
 
     async def tryViewHandler(self, request: web.Request, *, view: str) -> web.Response:
-        """"Try Fontra": Fontra's own page with the demo engine, open to all.
+        """"Try Fontra": Fontra's own page with the engine in the browser,
+        open to all.
 
         The font never reaches this server: ``client/try/try-engine.js``
-        answers the editor's WebSocket calls in the browser, from the demo
-        font. So there is nothing to sign in to, and nothing is saved."""
+        answers the editor's WebSocket calls in the browser, from the example
+        font (nothing kept) or from a font kept in the browser, served by
+        Hive's own code in Python there. So there is nothing to sign in to."""
         try:
             text = self.fontraClientFile(f"{view}.html").read_text(encoding="utf-8")
         except FileNotFoundError:
@@ -323,11 +325,19 @@ class DevHiveProjectManager(CommentRoutesMixin):
         )
 
     async def tryHandler(self, request: web.Request) -> web.Response:
-        """/try: the demo editor, with a line of text to start from (on Try's
-        own site when there is one)."""
+        """/try: Try Fontra's start page (client/try/try-start.html), on
+        Try's own site when there is one. It opens the font last kept in the
+        visitor's browser, or keeps the example font there first: Fontra with
+        Hive from the start. The demo with nothing kept (TRY_DEMO_PAGE) is
+        where the page falls back to when the browser cannot keep files."""
         if tryURL() and not _onTryHost(request):
             raise web.HTTPFound(tryURL() + TRY_START)
-        raise web.HTTPFound(TRY_START)
+        text = (
+            resources.files("fontra_hive")
+            .joinpath("client", "try", "try-start.html")
+            .read_text(encoding="utf-8")
+        )
+        return _htmlResponse(injectTryMeta(text, pyodideURL(), fontcURL(), tryVersion()))
 
     async def devLoginHandler(self, request: web.Request) -> web.Response:
         form = await request.post()
@@ -1727,7 +1737,11 @@ TRY_LOCAL_PREFIX = "local:"
 # A font kept in the browser, on a branch or not ("local:<id>@<branch>").
 TRY_LOCAL_PATTERN = re.escape(TRY_LOCAL_PREFIX) + r"[0-9a-f]{12}(@[^/@]+)?"
 TRY_VIEWS = ("editor", "fontoverview", "fontinfo")
-TRY_START = (
+# The start page: the font last kept in the browser, else the example.
+TRY_START = "/try"
+# The example with nothing kept, Fontra alone, in JavaScript: where the
+# start page falls back to when the browser cannot keep files.
+TRY_DEMO_PAGE = (
     "/editor.html?project="
     + quote(TRY_PROJECT, safe="")
     + "&text=%22HAMBURGEFONSTIV%22"
@@ -1779,7 +1793,11 @@ def tryVersion() -> str:
     digest = hashlib.sha256()
     root = pathlib.Path(__file__).parent / "client" / "try"
     for path in sorted(root.rglob("*")):
-        if path.is_file() and path.suffix in (".js", ".py") and "__pycache__" not in path.parts:
+        if (
+            path.is_file()
+            and path.suffix in (".js", ".py", ".html")
+            and "__pycache__" not in path.parts
+        ):
             digest.update(path.relative_to(root).as_posix().encode())
             digest.update(path.read_bytes())
     return digest.hexdigest()[:12]
@@ -1821,6 +1839,22 @@ def injectTryScripts(
     ``pyodide``: where the page loads Pyodide from, if not its default;
     ``fontc``: fontc for the browser, if this server has it (compiled
     exports); ``version``: of Try Fontra's code (tryVersion)."""
+    html = injectTryMeta(html, pyodide, fontc, version, TRY_HEAD_SCRIPT + HIVE_ICON_LINKS)
+    body = html.lower().rfind("</body>")
+    if body == -1:
+        return html + TRY_BODY_SCRIPT
+    return html[:body] + TRY_BODY_SCRIPT + html[body:]
+
+
+def injectTryMeta(
+    html: str,
+    pyodide: str | None = None,
+    fontc: str | None = None,
+    version: str | None = None,
+    after: str = "",
+) -> str:
+    """The <meta> tags Try's pages read (where Pyodide and fontc are, the
+    version of Try's code), and ``after`` them, at the start of <head>."""
     lower = html.lower()
     head = lower.find("<head>")
     cut = head + len("<head>") if head != -1 else 0
@@ -1833,11 +1867,7 @@ def injectTryScripts(
         )
         if value
     )
-    html = html[:cut] + meta + TRY_HEAD_SCRIPT + HIVE_ICON_LINKS + html[cut:]
-    body = html.lower().rfind("</body>")
-    if body == -1:
-        return html + TRY_BODY_SCRIPT
-    return html[:body] + TRY_BODY_SCRIPT + html[body:]
+    return html[:cut] + meta + after + html[cut:]
 
 
 def _htmlResponse(text: str) -> web.Response:

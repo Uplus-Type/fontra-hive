@@ -14,6 +14,7 @@ from test_views import manager  # noqa: F401  (fixture)
 from fontra_hive.projectmanager import (
     CLIENT_CONTENT_TYPES,
     TRY_PROJECT,
+    TRY_DEMO_PAGE,
     TRY_START,
     _isTryRequest,
     injectTryScripts,
@@ -84,10 +85,15 @@ def test_try_pages_need_no_session(manager):  # noqa: F811
                 request("Mutator", path_qs="/editor.html?project=Mutator"),
                 view="editor",
             )
-        with pytest.raises(web.HTTPFound) as raised:
-            await manager.tryHandler(request())
-        assert unquote(str(raised.value.location)) == unquote(TRY_START)
-        assert TRY_START.startswith("/editor.html?project=demo%3AMutatorSans&text=")
+        # /try: the start page, which opens the font last kept in the
+        # browser or keeps the example first; Hive from the start.
+        start = await manager.tryHandler(request())
+        assert TRY_START == "/try"
+        assert "try-start.js" in start.text and "try-engine.js" in start.text
+        assert "try-banner.js" not in start.text
+        assert start.text.index("<meta") < start.text.index("<title>")
+        assert start.headers["Cache-Control"] == "no-cache"
+        assert TRY_DEMO_PAGE.startswith("/editor.html?project=demo%3AMutatorSans&text=")
 
     asyncio.run(go())
 
@@ -303,12 +309,11 @@ def test_try_has_a_site_of_its_own(manager, monkeypatch):  # noqa: F811
         with pytest.raises(web.HTTPFound) as found:
             await manager.viewHandler(on("fontrahive.com", TRY_PROJECT), view="editor")
         assert str(found.value.location).startswith("https://try.fontrahive.com/editor.html")
-        # On Try's site: the demo is served, /try stays there.
+        # On Try's site: the demo is served, and so is the start page.
         page = await manager.viewHandler(on("try.fontrahive.com", TRY_PROJECT), view="editor")
         assert "try-engine.js" in page.text
-        with pytest.raises(web.HTTPFound) as found:
-            await manager.tryHandler(on("try.fontrahive.com"))
-        assert unquote(str(found.value.location)) == unquote(TRY_START)
+        start = await manager.tryHandler(on("try.fontrahive.com"))
+        assert "try-start.js" in start.text
         # A real project asked on Try's site: to the main site.
         with pytest.raises(web.HTTPFound) as found:
             await manager.viewHandler(on("try.fontrahive.com", "MyFont"), view="editor")

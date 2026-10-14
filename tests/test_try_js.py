@@ -73,6 +73,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path == "/bare.html":
             return self._send(BARE_PAGE.encode(), "text/html")
+        if path == "/try":
+            from fontra_hive.projectmanager import injectTryMeta
+
+            html = (CLIENT_DIR / "try" / "try-start.html").read_text(encoding="utf-8")
+            pyodide = "/hive/pyodide/" if PYODIDE_DIR else None
+            fontc = "/hive/try/fontc.wasm" if FONTC_WASM else None
+            return self._send(injectTryMeta(html, pyodide, fontc).encode(), "text/html")
         if path == "/editor.html" and self.fontraClient:
             html = (self.fontraClient / "editor.html").read_text(encoding="utf-8")
             pyodide = "/hive/pyodide/" if PYODIDE_DIR else None
@@ -883,5 +890,141 @@ def test_the_demo_is_kept_with_its_edits(server, browser):
     )
     assert page.evaluate(LAYERS_A) == edited
     assert page.locator(".hive-try .name").inner_text() == "MutatorSans"
+    assert not errors
+    context.close()
+
+
+START_STUBS = """(() => {
+  window.__hiveTryNoAutoStart = true;
+  window.__kept = [];
+  window.__stubStore = (available, projects) => ({
+    available: () => available,
+    list: async () => projects,
+  });
+  window.__stubAPI = {
+    saveCopy: async (name, progress) => {
+      window.__kept.push(name);
+      progress("Loading Python…");
+      return "abcdef012345";
+    },
+  };
+})()"""
+
+
+def test_the_start_page_opens_the_latest_font_or_keeps_the_example(server, browser):
+    """/try: the font opened most recently in this browser; on a first visit
+    the example is kept here first, under a free name; where nothing can be
+    kept, the plain demo."""
+    context = browser.new_context()
+    context.add_init_script(START_STUBS)
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+
+    def start(available, projects):
+        page.goto(f"{server}/try")
+        page.wait_for_function("() => !!window.hiveTryStart")
+        assert page.locator("#status").inner_text() == "Starting…"
+        # [what start() did, the names it kept]: read before the page leaves.
+        return page.evaluate(
+            "([available, projects]) => window.hiveTryStart("
+            "{ store: window.__stubStore(available, projects), tryAPI: window.__stubAPI })"
+            ".then((done) => [done, window.__kept])",
+            [available, projects],
+        )
+
+    # Nothing can be kept: the demo, in JavaScript, nothing saved.
+    assert start(False, []) == ["demo", []]
+    page.wait_for_url("**/editor.html?project=demo%3AMutatorSans*")
+
+    # A first visit: the example is kept, and opened with its sample text.
+    assert start(True, []) == ["local:abcdef012345", ["MutatorSans"]]
+    page.wait_for_url("**/editor.html?project=local%3Aabcdef012345&text=*")
+    assert "HAMBURGEFONSTIV" in urllib.parse.unquote(page.url)
+
+    # Fonts kept here: the one last opened, else the one last changed.
+    projects = [
+        {"id": "111111111111", "name": "Old", "modified": "2026-10-01T10:00:00Z"},
+        {"id": "222222222222", "name": "Recent", "modified": "2026-10-02T10:00:00Z"},
+        {
+            "id": "333333333333",
+            "name": "Opened",
+            "modified": "2026-09-01T10:00:00Z",
+            "opened": "2026-10-03T10:00:00Z",
+        },
+    ]
+    assert start(True, projects) == ["local:333333333333", []]
+    page.wait_for_url("**/editor.html?project=local%3A333333333333")
+    assert start(True, projects[:2]) == ["local:222222222222", []]
+    page.wait_for_url("**/editor.html?project=local%3A222222222222")
+
+    # A name already taken by a font kept here (the panel's "Example font"):
+    # the next free one.
+    assert page.evaluate(
+        "() => import('/hive/try/try-common.js').then((m) => ["
+        " m.freeName('MutatorSans', []),"
+        " m.freeName('MutatorSans', [{ name: 'MutatorSans' }, { name: 'MutatorSans 2' }]),"
+        " m.latestProject([]) ])"
+    ) == ["MutatorSans", "MutatorSans 3", None]
+    assert not errors
+    context.close()
+
+
+def test_the_start_page_fails_towards_the_demo(server, browser):
+    context = browser.new_context()
+    context.add_init_script(START_STUBS)
+    page = context.new_page()
+    page.goto(f"{server}/try")
+    page.wait_for_function("() => !!window.hiveTryStart")
+    assert page.evaluate(
+        "() => window.hiveTryStart({ store: window.__stubStore(true, []),"
+        " tryAPI: { saveCopy: async () => { throw new Error('no Python'); } } })"
+    ) == "error"
+    assert "no Python" in page.locator("#status").inner_text()
+    assert page.locator("#actions a").first.get_attribute("href").startswith(
+        "/editor.html?project=demo%3AMutatorSans"
+    )
+    context.close()
+
+
+def test_the_start_page_keeps_the_example_and_comes_back_to_it(server, browser):
+    """A first visit to /try keeps MutatorSans in the browser and opens it
+    with Hive; the next visit opens the same font; "Example font" in the
+    panel makes a second copy under a free name."""
+    _needsHiveInTheBrowser()
+    context = browser.new_context(viewport={"width": 1400, "height": 850})
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.goto(f"{server}/try")
+    page.wait_for_url("**project=local*", timeout=120000)
+    page.wait_for_function(
+        "window.editorController?.fontController?.glyphMap?.A", timeout=90000
+    )
+    first = urllib.parse.parse_qs(urllib.parse.urlsplit(page.url).query)
+    assert first["project"][0].startswith("local:") and first["text"] == ['"HAMBURGEFONSTIV"']
+    assert page.locator(".hive-try .name").inner_text() == "MutatorSans"
+    assert page.locator(".hive-try img").get_attribute("src") == "/hive/icons/hive-icon.png"
+    assert page.get_by_role("button", name="Keep a copy and try Hive").count() == 0
+
+    page.goto(f"{server}/try")
+    page.wait_for_url("**project=local*", timeout=60000)
+    again = urllib.parse.parse_qs(urllib.parse.urlsplit(page.url).query)
+    assert again["project"] == first["project"]
+    page.wait_for_function(
+        "window.editorController?.fontController?.glyphMap?.A", timeout=90000
+    )
+
+    page.get_by_role("button", name="Your fonts").click()
+    page.get_by_role("button", name="Example font").click()
+    page.wait_for_url("**project=local*", timeout=90000)
+    page.wait_for_function(
+        "window.editorController?.fontController?.glyphMap?.A", timeout=90000
+    )
+    second = urllib.parse.parse_qs(urllib.parse.urlsplit(page.url).query)
+    assert second["project"] != first["project"]
+    page.wait_for_function(
+        "document.querySelector('.hive-try .name')?.textContent === 'MutatorSans 2'"
+    )
     assert not errors
     context.close()

@@ -72,6 +72,8 @@
       infoPromise = Store.info(localId).then(function (info) {
         projectName = info.name;
         Store.persist();
+        // /try comes back to this font next time.
+        Store.markOpened(localId).catch(function () {});
         return info;
       });
     }

@@ -1,0 +1,50 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- "Try Fontra", at /try: the start page. It opens the font last kept in
+     this browser, or keeps the example font (MutatorSans) first, then goes to
+     the editor, Hive included. The server adds its <meta> tags (Pyodide,
+     fontc, the version of Try's code) at the start of <head>. -->
+<title>Try Fontra</title>
+<link rel="icon" href="/hive/icons/hive-icon.png" type="image/png">
+<link rel="icon" href="/favicon.ico" sizes="48x48">
+<link rel="apple-touch-icon" href="/hive/icons/apple-touch-icon.png">
+<link rel="manifest" href="/hive/icons/site.webmanifest">
+<script src="/hive/try/fontra-format.js"></script>
+<script src="/hive/try/try-store.js"></script>
+<script src="/hive/try/try-engine.js"></script>
+<script type="module" src="/hive/try/try-start.js"></script>
+<style>
+  html { background: #1c1c1c; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: #f4f1ea; text-align: center; padding: 24px; box-sizing: border-box;
+  }
+  main { max-width: 440px; }
+  .logo { width: 56px; height: 56px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 14px 0 2px; }
+  .tagline { color: #b9b3a8; margin: 0 0 22px; }
+  .status { min-height: 1.5em; color: #f3c744; }
+  .status.error { color: #ff8a80; }
+  .note { font-size: 13px; color: #a9a397; margin-top: 18px; }
+  a { color: #f3c744; }
+  .actions { margin-top: 16px; display: none; }
+  .actions.shown { display: block; }
+  .actions a {
+    display: inline-block; color: #222; background: #f3c744; border-radius: 999px;
+    padding: 7px 14px; text-decoration: none; margin: 4px;
+  }
+  .actions a.plain { background: transparent; color: #f4f1ea; border: 1px solid #555; }
+</style>
+</head>
+<body>
+  <main>
+    <img class="logo" src="/hive/icons/hive-icon.png" alt="">
+    <h1>Try Fontra</h1>
+    <p class="tagline">Fontra, with Fontra Hive, in your browser.</p>
+    <p class="status" id="status" role="status">Starting…</p>
+    <div class="actions" id="actions"></div>
+    <p class="note">Nothing leaves your computer: the font, with its history, snapshots, branches and comments, is kept by this browser. No account needed.</p>
+    <noscript><p class="status error">Try Fontra needs JavaScript.</p></noscript>
+  </main>
+</body></html>
