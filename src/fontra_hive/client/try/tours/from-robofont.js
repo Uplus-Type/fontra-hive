@@ -91,8 +91,9 @@ export const fromRoboFont = {
       view: "fontoverview",
       title: "Scripting",
       text:
-        "No scripting window, fontParts or extensions yet: a Python API is on Fontra's roadmap. " +
-        "Keep RoboFont for your scripts; Fontra writes UFOs back with File › Export as.",
+        "No scripting window, fontParts or extensions yet: a Python API is on Fontra's roadmap, " +
+        "and coming soon. Until then, keep RoboFont for your scripts; Fontra writes UFOs back " +
+        "with File › Export as.",
       learn: DOCS + "/reference/menu/file/export-as",
       next: "Done",
     },
