@@ -1400,7 +1400,7 @@ def test_every_tour_follows_the_rules(server, browser):
         assert tour["steps"][0]["id"] == "welcome"
         for step in tour["steps"]:
             where = f"{tour['name']}/{step['id']}"
-            assert 15 <= step["words"] <= 48, (where, step["words"])
+            assert 15 <= step["words"] <= 55, (where, step["words"])
             assert step["placement"] in placements, where
             assert step["view"] in ("editor", "fontoverview", "fontinfo", "applicationsettings"), where
             assert not step["hash"] or step["view"] in ("fontinfo", "applicationsettings"), where

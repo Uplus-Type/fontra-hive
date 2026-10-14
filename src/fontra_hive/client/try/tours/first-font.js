@@ -70,7 +70,7 @@ export const firstFont = {
       title: "Shape Tool",
       text:
         "Pick the Shape Tool, rectangle. Drag three rectangles on the H: a left stem, a right " +
-        "stem, a crossbar. Rough is fine — the next step makes them exact.",
+        "stem, a crossbar.",
       learn: DOCS + "/reference/editor-view/tools/shapes",
       until: async ({ fontController }) => contourCount(await firstLayer(fontController, "H")) >= 3,
     },
@@ -102,8 +102,7 @@ export const firstFont = {
       open: "selection-info",
       title: "Sidebearings",
       text:
-        "In Glyph info, set both Sidebearings to 60: the Advance width follows by itself, 600. " +
-        "There is no need to select anything first.",
+        "In Glyph info, set both Sidebearings to 60: the Advance width follows by itself, 600.",
       learn: DOCS + "/reference/editor-view/panels/glyph-info",
       until: async ({ fontController }) => (await firstLayer(fontController, "H"))?.xAdvance === 600,
     },
@@ -115,7 +114,7 @@ export const firstFont = {
       text:
         "Click in the preview text, in the left column, and type o. Double-click its grey place " +
         "once to create the glyph, then again to edit it. Any name works too: type a slash and " +
-        "the name, /a.alt.",
+        "the name (eg. /a.alt).",
       learn: DOCS + "/reference/editor-view/panels/preview-text",
       until: ({ fontController }) => hasGlyph(fontController, "o"),
     },
@@ -139,8 +138,7 @@ export const firstFont = {
       open: "selection-info",
       title: "Sidebearings",
       text:
-        "Same for the o, in Glyph info: Sidebearings of 40 and 40, an Advance width of 500. " +
-        "Round letters sit a little closer to their neighbours than straight ones.",
+        "Same for the o, in Glyph info: Sidebearings of 40 and 40, an Advance width of 500.",
       until: async ({ fontController }) => (await firstLayer(fontController, "o"))?.xAdvance === 500,
     },
     {
@@ -181,9 +179,10 @@ export const firstFont = {
       open: "designspace-navigation",
       title: "Designspace",
       text:
-        "Black is grey under Glyph sources: a virtual source. Double-click it to copy the o " +
-        "there. Hold the Pointer Tool down for Pointer Tool (scaling), select the counter and " +
-        "shrink it. Then the H: its stems' inner edges, outward.",
+        "Black is grey under Glyph sources: a virtual source. Double-click it to copy the " +
+        "Regular's contours there. Hold the Pointer Tool down for Pointer Tool (scaling), select " +
+        "each point of the inner contour to shift them inwards: the handles follow along. Then " +
+        "the H: its stems' inner edges, outward.",
       learn: DOCS + "/reference/editor-view/panels/designspace",
       until: async ({ fontController }) =>
         (await glyphSources(fontController, "H")).length >= 2 &&
