@@ -39,8 +39,9 @@ export const fromRoboFont = {
       ring: false,
       title: "The canvas",
       text:
-        "The Glyph window and Space Center are one: a line of text where you double-click a " +
-        "glyph to edit it in place, its neighbours live around it. Hold the space bar to preview.",
+        "The Glyph window and Space Center are one: type your text in Preview text, in the left " +
+        "column, and double-click a glyph on the canvas to edit it in place, its neighbours " +
+        "live around it. Hold the space bar to preview.",
       learn: DOCS + "/reference/editor-view/canvas/glyph-editor/",
     },
     {

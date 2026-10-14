@@ -39,9 +39,10 @@ export const fromGlyphs = {
       ring: false,
       title: "The canvas",
       text:
-        "No Text tool and no Edit view: the canvas is both. Type in it, then double-click a " +
-        "glyph to edit it in place, among its neighbours. Hold the space bar for the filled preview.",
-      learn: DOCS + "/reference/editor-view/canvas/glyph-editor/",
+        "No Text tool and no separate Edit view: type your text in Preview text, in the left " +
+        "column, and the canvas shows it. Double-click a glyph to edit it in place, among its " +
+        "neighbours. Hold the space bar for the filled preview.",
+      learn: DOCS + "/reference/editor-view/panels/preview-text",
     },
     {
       id: "masters",
@@ -71,8 +72,9 @@ export const fromGlyphs = {
       open: "selection-transformation",
       title: "Transformation",
       text:
-        "The Palette's dimensions, alignment and Remove Overlap are here, with union, subtract, " +
-        "intersect and exclude. Filters like Offset Curve or Round Corners have no equivalent yet.",
+        "What the Palette does — transform, align, exact dimensions — is here, and so is Remove " +
+        "Overlap from the Path menu, with union, subtract, intersect and exclude. Filters like " +
+        "Offset Curve or Round Corners have no equivalent yet.",
       learn: DOCS + "/reference/editor-view/panels/transformations",
     },
     {
