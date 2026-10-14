@@ -112,6 +112,12 @@ fontra --launch hive-dev repos
   observer gets Fontra's read-only mode (lock icon) and any edit they send
   is refused before it is written or broadcast; the Hive routes (history,
   Restore, snapshots) check the same capabilities.
+- With hive-api, the capabilities are those of the role that hive-api also
+  lists for that person and project (`/api/internal/access`): the accounts
+  service can take some away, never add one, and its `notice` (why) is
+  passed on in `…/access`. Every route that writes into a project's fonts
+  needs one of `edit`, `branch`, `snapshot`, `merge`, `tag`;
+  `tests/test_capabilities.py` walks all of them.
 - Every edit is committed under the name of the person who made it, with a
   pseudonymous address (`<username>@hive`), never their real email: open the
   same project in two browsers as two users and the glyph history shows both.
@@ -198,7 +204,7 @@ fontra --launch hive repos --api http://127.0.0.1:8001
   invitations) and your profile (name, photo, password, where you are signed
   in). Pending invitations show as a banner, accepted in one click.
   Importing is `POST /api/hive/projects/<owner%2Fname>/import` (multipart
-  `file`, admins; up to 300 MB). A failed import creates nothing: the
+  `file`, admins who may edit; up to 300 MB). A failed import creates nothing: the
   project then has no repository (`GET …/repository` says so without
   creating one), and its page offers to import again or start with an empty
   font instead of opening on an empty font.

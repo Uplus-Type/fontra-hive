@@ -37,7 +37,7 @@ from multidict import CIMultiDict
 
 from . import importer
 from . import remote as git_remote
-from .access import Access
+from .access import CAPABILITIES, Access
 from .gitstore import DEFAULT_BRANCH, SERVER_SIGNATURE, GitRepoStore
 from .hiveapi import (
     ACCESS_COOKIE,
@@ -81,6 +81,22 @@ _SKIP_RESPONSE_HEADERS = {
     "server",
     "date",
 }
+
+
+def _cannotChange(access: Access) -> str:
+    """Why this font cannot be changed: the accounts service's words if it
+    gave some."""
+    if access.notice:
+        return access.notice["text"]
+    return f"{access.role} cannot change this font"
+
+
+def _refusal(access: Access, capability: str) -> str:
+    """The role's own limit, or the accounts service's reason when the role
+    would allow it."""
+    if access.notice and capability in CAPABILITIES.get(access.role, ()):
+        return access.notice["text"]
+    return f"{access.role} cannot {capability}"
 
 
 class HiveProjectManagerFactory:
@@ -217,7 +233,7 @@ class HiveProjectManager(DevHiveProjectManager):
     ) -> Access:
         access = (await self._projectAccess(request, projectName)).access
         if not access.can(capability):
-            raise web.HTTPForbidden(text=f"{access.role} cannot {capability}")
+            raise web.HTTPForbidden(text=_refusal(access, capability))
         return access
 
     async def _defaultBranch(self, request: web.Request, name: str) -> str:
@@ -226,9 +242,7 @@ class HiveProjectManager(DevHiveProjectManager):
     async def _project(self, request: web.Request, name: str, capability: str):
         projectAccess = await self._projectAccess(request, name)
         if not projectAccess.access.can(capability):
-            raise web.HTTPForbidden(
-                text=f"{projectAccess.access.role} cannot {capability}"
-            )
+            raise web.HTTPForbidden(text=_refusal(projectAccess.access, capability))
         return self._ensureRepo(projectAccess), projectAccess.access
 
     # --- repositories -----------------------------------------------------------
@@ -465,13 +479,15 @@ class HiveProjectManager(DevHiveProjectManager):
     async def importHandler(self, request: web.Request) -> web.Response:
         """Replace a project's font with an uploaded one (multipart field
         ``file``), converted from any format Fontra reads. A new commit:
-        the history before it stays. Admins only."""
+        the history before it stays. Admins who may change the font."""
         name = request.match_info["name"]
         projectAccess = await self._projectAccess(request, name)
         if not projectAccess.access.can("administer"):
             raise web.HTTPForbidden(
                 text="Only the admins of a project can import a font."
             )
+        if not projectAccess.access.can("edit"):
+            raise web.HTTPForbidden(text=_cannotChange(projectAccess.access))
         reader = await request.multipart()
         part = await reader.next()
         while part is not None and part.name != "file":

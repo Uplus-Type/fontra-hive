@@ -104,6 +104,9 @@ class Access:
     user: HiveUser
     role: str
     capabilities: frozenset[str] = field(default=frozenset())
+    # Why some of the role's capabilities are missing, from the accounts
+    # service: {"code", "text", "url"} (shown as is; None: nothing to say).
+    notice: dict | None = field(default=None, compare=False)
 
     def can(self, capability: str) -> bool:
         return capability in self.capabilities
@@ -121,6 +124,7 @@ class Access:
             },
             "role": self.role,
             "capabilities": sorted(self.capabilities),
+            "notice": self.notice,
         }
 
 

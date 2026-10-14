@@ -5,7 +5,11 @@
   (``/api/.well-known/jwks.json``, fetched once and again when the key
   changes). Its ``sub`` is the user's stable id.
 - **Roles** come from ``/api/internal/access`` (with the service key), kept a
-  few seconds: every Hive route asks through :meth:`HiveApi.access`, which
+  few seconds. The capabilities are those of the role here
+  (:data:`CAPABILITIES`) that hive-api also lists: hive-api can only take
+  some away (an account or a project without what it takes to change fonts),
+  never add one. Its ``notice`` says why, and is passed on as is.
+  Every Hive route asks through :meth:`HiveApi.access`, which
   refreshes an old answer; the editor's connections read the last answer
   synchronously (:meth:`HiveApi.cachedAccess`) and refresh it in the
   background, so an edit never waits on the network.
@@ -41,6 +45,30 @@ class ProjectAccess:
     repo: str  # repository file name under the server's root, "<uid>.git"
     defaultBranch: str
     projectId: str  # "owner/name", as hive-api spells it
+
+
+def allowedCapabilities(role: str, listed) -> frozenset[str]:
+    """The role's capabilities that hive-api also lists (all of them when it
+    lists none: an older hive-api)."""
+    capabilities = CAPABILITIES[role]
+    if not isinstance(listed, list):
+        return capabilities
+    return capabilities & frozenset(c for c in listed if isinstance(c, str))
+
+
+def _notice(value) -> dict | None:
+    if not isinstance(value, dict) or not isinstance(value.get("text"), str):
+        return None
+    url = value.get("url")
+    return {
+        "code": str(value.get("code") or ""),
+        "text": value["text"],
+        "url": (
+            url
+            if isinstance(url, str) and url.startswith(("https://", "http://", "/"))
+            else None
+        ),
+    }
 
 
 def token_for_uid(uid: str) -> str:
@@ -192,7 +220,12 @@ class HiveApi:
             self._users[uid] = user
             role = data["role"]
             result = ProjectAccess(
-                access=Access(user, role, CAPABILITIES[role]),
+                access=Access(
+                    user,
+                    role,
+                    allowedCapabilities(role, data.get("capabilities")),
+                    notice=_notice(data.get("notice")),
+                ),
                 repo=data["repo"],
                 defaultBranch=data.get("defaultBranch", "main"),
                 projectId=data["id"],
