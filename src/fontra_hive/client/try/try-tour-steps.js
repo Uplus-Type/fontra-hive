@@ -57,7 +57,7 @@ export const TOURS = {
         text:
           "Pointer, pen, shapes, knife, ruler, hand, metrics — click and hold a tool for its " +
           "variants. The shape tool draws rectangles and ellipses: the quickest way to a first " +
-          "letter. Remove overlap and the other path operations run here too, in your browser.",
+          "letter.",
         learn: DOCS + "/reference/editor-view/tools/",
       },
       {
