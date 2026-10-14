@@ -56,17 +56,6 @@ export const fromGlyphs = {
       learn: DOCS + "/reference/editor-view/panels/designspace",
     },
     {
-      id: "smart-components",
-      anchor: '.sidebar-tab[data-sidebar-name="selection-info"]',
-      open: "selection-info",
-      title: "Glyph info",
-      text:
-        "Smart components are variable components: select one and set its axes here. They nest, " +
-        "and their axes vary across the whole designspace. Glyph › Edit glyph axes gives a glyph " +
-        "axes of its own.",
-      learn: DOCS + "/reference/editor-view/panels/glyph-info",
-    },
-    {
       id: "palette",
       anchor: '.sidebar-tab[data-sidebar-name="selection-transformation"]',
       open: "selection-transformation",
@@ -80,7 +69,7 @@ export const fromGlyphs = {
     {
       id: "kerning",
       anchor: '#edit-tools .tool-button[data-tool="metrics-tool"]',
-      placement: "bottom",
+      placement: "right", // below the tool is its menu
       title: "Kerning Tool",
       text:
         "The Kerning window is a tool: hold the metrics tool for the kerning tool and kern in " +
@@ -113,6 +102,40 @@ export const fromGlyphs = {
         "Features are written here by hand: nothing is generated from glyph name suffixes. " +
         "Kerning and mark positioning are written at export, from your kerning and anchors.",
       learn: DOCS + "/reference/menu/font/features",
+    },
+    // Smart components last: three steps, back in the editor.
+    {
+      id: "glyph-axes",
+      view: "editor",
+      anchor: '.sidebar-tab[data-sidebar-name="designspace-navigation"]',
+      open: "designspace-navigation",
+      title: "Glyph axes",
+      text:
+        "Smart components are variable components. Make one in Designspace: add an axis of the " +
+        "glyph's own with the wrench of Glyph axes, then glyph sources along it with +. A glyph " +
+        "can combine its own axes with the font's.",
+      learn: DOCS + "/how-tos/draw/designing-with-variable-components",
+    },
+    {
+      id: "add-component",
+      anchor: "#edit-canvas",
+      placement: "inside-top",
+      ring: false,
+      title: "Add Component",
+      text:
+        "Open another glyph, right-click the canvas and choose Add Component, then pick your " +
+        "variable glyph. The component brings the glyph's own designspace along with it.",
+    },
+    {
+      id: "component-location",
+      anchor: '.sidebar-tab[data-sidebar-name="selection-info"]',
+      open: "selection-info",
+      title: "Location",
+      text:
+        "Select the component: in Glyph info, Location places it on its glyph's axes. That place " +
+        "is this component's own — use the same glyph anywhere, with other values. Translation, " +
+        "rotation, scale and skew are just above.",
+      learn: DOCS + "/explanations/understanding-variable-components",
       next: "Done",
     },
   ],

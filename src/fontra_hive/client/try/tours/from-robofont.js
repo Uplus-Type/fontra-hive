@@ -67,7 +67,7 @@ export const fromRoboFont = {
     {
       id: "metrics",
       anchor: '#edit-tools .tool-button[data-tool="metrics-tool"]',
-      placement: "bottom",
+      placement: "right", // below the tool is its menu
       title: "Metrics tools",
       text:
         "Spacing and kerning happen in the text, not in a separate window: hold this tool for " +

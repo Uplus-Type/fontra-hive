@@ -1386,8 +1386,8 @@ def test_every_tour_follows_the_rules(server, browser):
         "create-o", "ellipses", "width-o", "axis", "black-source", "draw-black", "slider", "export",
     ]
     assert ids["from-glyphs"] == [
-        "welcome", "open", "text-view", "masters", "smart-components", "palette", "kerning",
-        "instances", "features",
+        "welcome", "open", "text-view", "masters", "palette", "kerning", "instances", "features",
+        "glyph-axes", "add-component", "component-location",
     ]
     assert ids["from-robofont"] == [
         "welcome", "open", "glyph-window", "designspace", "inspector", "metrics", "font-window",
