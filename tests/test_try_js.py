@@ -1028,3 +1028,85 @@ def test_the_start_page_keeps_the_example_and_comes_back_to_it(server, browser):
     )
     assert not errors
     context.close()
+
+
+def test_a_new_font_is_empty_with_a_glyph_set(server, browser):
+    """"New font…": an empty font as Fontra's own New font makes one (one
+    source, Regular, Fontra's line metrics, no axis, no glyph), with the
+    chosen Google Fonts glyph set as the project's, written as a .fontra."""
+    page = browser.new_page()
+    page.goto(f"{server}/bare.html")
+    result = page.evaluate(
+        """async () => {
+          const { emptyFont, GLYPH_SETS, DEFAULT_GLYPH_SET } = await import("/hive/try/try-common.js");
+          const Format = window.HiveTryFormat;
+          const files = Format.writePackage(emptyFont("Hello"));
+          const kernel = Format.writePackage(emptyFont("K", "latin-kernel"));
+          const bare = Format.writePackage(emptyFont("B", "none"));
+          return {
+            keys: [...files.keys()],
+            fontData: JSON.parse(files.get("font-data.json")),
+            glyphInfo: files.get("glyph-info.csv"),
+            kernelSet: JSON.parse(kernel.get("font-data.json")).customData,
+            bareSet: JSON.parse(bare.get("font-data.json")).customData,
+            sets: GLYPH_SETS.map((s) => s.key),
+            defaultSet: DEFAULT_GLYPH_SET,
+          };
+        }"""
+    )
+    assert sorted(result["keys"]) == ["font-data.json", "glyph-info.csv"]
+    data = result["fontData"]
+    assert data["fontInfo"] == {"familyName": "Hello"}
+    assert data["axes"] == {"axes": []}
+    assert "unitsPerEm" not in data  # 1000, Fontra's default
+    (source,) = data["sources"].values()
+    assert source["name"] == "Regular" and source["location"] == {}
+    assert source["lineMetricsHorizontalLayout"]["ascender"] == {"value": 750, "zone": 16}
+    assert source["lineMetricsHorizontalLayout"]["descender"] == {"value": -250, "zone": -16}
+    (glyphSet,) = data["customData"]["fontra.projectGlyphSets"]
+    assert glyphSet == {
+        "name": "GF Latin Core",
+        "url": "https://cdn.jsdelivr.net/gh/googlefonts/glyphsets/data/results/txt/nice-names/GF_Latin_Core.txt",
+        "dataFormat": "glyph-names",
+        "commentChars": "#",
+    }
+    assert result["glyphInfo"].splitlines() == ["glyph name;code points"]
+    assert result["kernelSet"]["fontra.projectGlyphSets"][0]["name"] == "GF Latin Kernel"
+    assert result["bareSet"] is None
+    assert result["sets"] == ["latin-core", "latin-kernel", "none"]
+    assert result["defaultSet"] == "latin-core"
+    page.close()
+
+
+def test_a_new_font_opens_in_the_editor(server, browser):
+    _needsHiveInTheBrowser()
+    context = browser.new_context(viewport={"width": 1400, "height": 850})
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.goto(f"{server}/editor.html?{TRY_PAGE_QUERY}")
+    page.wait_for_function("window.editorController?.fontController?.glyphMap?.A")
+    page.get_by_role("button", name="Your fonts").click()
+    page.get_by_role("button", name="New font…").click()
+    page.locator(".hive-try-panel input[name=name]").fill("Hello")
+    page.get_by_role("button", name="Create").click()
+    page.wait_for_url("**project=local*", timeout=90000)
+    page.wait_for_function("() => !!window.editorController?.fontController", timeout=90000)
+    page.wait_for_function(
+        "document.querySelector('.hive-try .name')?.textContent === 'Hello'"
+    )
+    assert "HAMBURGEFONSTIV" in urllib.parse.unquote(page.url)
+    font = page.evaluate(
+        """() => {
+          const fc = window.editorController.fontController;
+          return {
+            glyphs: Object.keys(fc.glyphMap),
+            sources: Object.values(fc.sources).map((s) => s.name),
+            axes: fc.axes.axes.length,
+            glyphSets: fc.customData["fontra.projectGlyphSets"].map((s) => s.name),
+          };
+        }"""
+    )
+    assert font == {"glyphs": [], "sources": ["Regular"], "axes": 0, "glyphSets": ["GF Latin Core"]}
+    assert not errors
+    context.close()

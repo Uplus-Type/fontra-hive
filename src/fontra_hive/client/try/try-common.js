@@ -44,6 +44,57 @@ export function latestProject(projects) {
   return latest;
 }
 
+// Glyph sets a new font can start from: Google Fonts' Latin sets, as Fontra
+// lists them (glyphset-presets.json); the editor fetches the list itself.
+const GLYPH_SETS_BASE = "https://cdn.jsdelivr.net/gh/googlefonts/glyphsets/data/results/txt/nice-names/";
+export const GLYPH_SETS = [
+  { key: "latin-core", name: "GF Latin Core", url: GLYPH_SETS_BASE + "GF_Latin_Core.txt", about: "324 glyphs: Western and Central European languages" },
+  { key: "latin-kernel", name: "GF Latin Kernel", url: GLYPH_SETS_BASE + "GF_Latin_Kernel.txt", about: "116 glyphs: ASCII and the basics" },
+  { key: "none", name: "No glyph set", url: null, about: "an empty glyph list" },
+];
+export const DEFAULT_GLYPH_SET = "latin-core";
+
+// Fontra's line metrics for a new font (fontra.backends.populate).
+const LINE_METRICS = {
+  ascender: [750, 16],
+  descender: [-250, -16],
+  xHeight: [500, 16],
+  capHeight: [750, 16],
+  baseline: [0, -16],
+};
+
+// A new, empty font, as Fontra's "New font" makes one: one source,
+// Regular, with Fontra's default line metrics, 1000 units per em, no axis,
+// no glyph; and the chosen glyph set as the project's, so the glyph list
+// shows what there is to draw. The shape is what fontra-format.js writes.
+export function emptyFont(familyName, glyphSetKey = DEFAULT_GLYPH_SET) {
+  const glyphSet = GLYPH_SETS.find((set) => set.key === glyphSetKey) || GLYPH_SETS[0];
+  const sourceId = Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) =>
+    b.toString(16).padStart(2, "0")
+  ).join("");
+  const lineMetricsHorizontalLayout = {};
+  for (const [name, [value, zone]] of Object.entries(LINE_METRICS)) {
+    lineMetricsHorizontalLayout[name] = { value, zone };
+  }
+  const customData = {};
+  if (glyphSet.url) {
+    customData["fontra.projectGlyphSets"] = [
+      { name: glyphSet.name, url: glyphSet.url, dataFormat: "glyph-names", commentChars: "#" },
+    ];
+  }
+  return {
+    fontInfo: { familyName },
+    axes: { axes: [] },
+    sources: { [sourceId]: { name: "Regular", location: {}, lineMetricsHorizontalLayout } },
+    unitsPerEm: 1000,
+    glyphMap: {},
+    glyphs: {},
+    glyphInfos: {},
+    kerning: {},
+    customData,
+  };
+}
+
 // A name not yet used by a font kept here: "MutatorSans", "MutatorSans 2"…
 export function freeName(name, projects) {
   const taken = new Set(projects.map((project) => project.name));

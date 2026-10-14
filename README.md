@@ -506,10 +506,12 @@ or rebuilt: the pages are Fontra's own.
 - `try-banner.js`: the bar at the bottom (name, save state, "Your fonts",
   "Fontra Hive for teams" to fontrahive.com; on the bare demo, "Keep a copy
   and try Hive") and the "Your fonts" panel (open a file or a folder, open,
-  delete, a fresh copy of the example; `try-common.js` has what the bar
-  and the start page share). Fontra's
-  own File › Export as downloads the font (`.fontra` or designspace + UFOs,
-  zipped): the engine answers `exportAs` itself instead of the server.
+  delete, a fresh copy of the example, and "New font…": an empty font as
+  Fontra's own New font makes one, with a Google Fonts Latin glyph set —
+  Core by default — as the project's; `try-common.js` has what the bar and
+  the start page share). Fontra's own File › Export as downloads the font
+  (`.fontra` or designspace + UFOs, zipped): the engine answers `exportAs`
+  itself instead of the server.
 - One Python for all the tabs of the site (a `SharedWorker`, where the
   browser has one): two windows on the same font are served by the same
   server and see each other's edits as they happen; each tab holds a Web

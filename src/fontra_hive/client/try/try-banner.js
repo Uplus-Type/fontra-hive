@@ -57,9 +57,26 @@ const STYLE = `
 .hive-try-panel .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 6px; }
 .hive-try-panel .error { color: #ff8a80; min-height: 1.2em; }
 .hive-try-panel .top { display: flex; justify-content: space-between; align-items: start; gap: 8px; }
+.hive-try-panel .new-font { margin: 10px 0 4px; padding: 12px 14px; border-radius: 10px; background: #2c2c2c; }
+.hive-try-panel .new-font label { display: block; margin: 6px 0; color: #cfc9bd; }
+.hive-try-panel .new-font input, .hive-try-panel .new-font select {
+  display: block; width: 100%; box-sizing: border-box; margin-top: 3px; font: inherit;
+  color: #f4f1ea; background: #1c1c1c; border: 1px solid #555; border-radius: 6px; padding: 6px 8px;
+}
+.hive-try-panel .new-font .actions { margin: 10px 0 0; }
 `;
 
-import { EXAMPLE_NAME, EXAMPLE_TEXT, START_URL, editorURL, el, freeName } from "./try-common.js";
+import {
+  DEFAULT_GLYPH_SET,
+  EXAMPLE_NAME,
+  EXAMPLE_TEXT,
+  GLYPH_SETS,
+  START_URL,
+  editorURL,
+  el,
+  emptyFont,
+  freeName,
+} from "./try-common.js";
 
 // Something to show on the canvas: the font's own letters.
 export function sampleText(glyphMap) {
@@ -158,6 +175,15 @@ export async function importPicked(fileList, onProgress) {
   return { id, text: sampleText(font.glyphMap) };
 }
 
+// A new, empty font kept here: a family name and a glyph set to draw.
+export async function createNewFont(name, glyphSetKey, onProgress) {
+  const Format = window.HiveTryFormat;
+  const familyName = (name || "").trim() || "Untitled";
+  const font = emptyFont(familyName, glyphSetKey);
+  const id = await window.hiveTry.createLocal(familyName, Format.writePackage(font), onProgress);
+  return { id, text: EXAMPLE_TEXT };
+}
+
 function openPanel() {
   const Store = window.HiveTryStore;
   const current = window.hiveTry?.localId;
@@ -213,6 +239,43 @@ function openPanel() {
       error.textContent = e.message || String(e);
     }
   }
+
+  // "New font…": a name and a glyph set, then the empty font opens in the
+  // editor, where its sample text shows what there is to draw.
+  const nameInput = el("input", { type: "text", name: "name", value: "Untitled", maxlength: "80", autocomplete: "off" });
+  const glyphSetSelect = el(
+    "select",
+    { name: "glyphset" },
+    ...GLYPH_SETS.map((set) =>
+      el("option", { value: set.key, ...(set.key === DEFAULT_GLYPH_SET ? { selected: "" } : {}) }, set.name + " — " + set.about)
+    )
+  );
+  const newForm = el(
+    "form",
+    {
+      class: "new-font",
+      hidden: "",
+      onsubmit: async (event) => {
+        event.preventDefault();
+        error.textContent = "";
+        progress.textContent = "Setting up " + (nameInput.value.trim() || "Untitled") + "…";
+        try {
+          const { id, text } = await createNewFont(nameInput.value, glyphSetSelect.value, (text) => {
+            progress.textContent = text;
+          });
+          go(editorURL(id, text));
+        } catch (e) {
+          console.error(e);
+          progress.textContent = "";
+          error.textContent = e.message || String(e);
+        }
+      },
+    },
+    el("label", {}, "Family name", nameInput),
+    el("label", {}, "Glyph set", glyphSetSelect),
+    el("p", { class: "note" }, "Fontra lists the glyph set's glyphs as empty places, to draw one by one. You can change the set later, in the sidebar's “Project glyph sets”."),
+    el("div", { class: "actions" }, el("button", { type: "submit" }, "Create"), el("button", { type: "button", class: "plain", onclick: () => (newForm.hidden = true) }, "Cancel"))
+  );
 
   async function fill() {
     list.replaceChildren();
@@ -286,8 +349,22 @@ function openPanel() {
           "button",
           { type: "button", class: "plain", title: "A fresh copy of the example font, MutatorSans", onclick: openExample },
           "Example font"
+        ),
+        el(
+          "button",
+          {
+            type: "button",
+            class: "plain",
+            title: "An empty font with a glyph set to draw",
+            onclick: () => {
+              newForm.hidden = !newForm.hidden;
+              if (!newForm.hidden) nameInput.select();
+            },
+          },
+          "New font…"
         )
       ),
+      newForm,
       progress,
       error,
       el(
