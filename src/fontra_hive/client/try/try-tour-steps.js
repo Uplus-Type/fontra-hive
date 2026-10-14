@@ -49,12 +49,16 @@
 
 import { editor } from "./tours/editor.js";
 import { firstFont } from "./tours/first-font.js";
+import { fontInfo } from "./tours/font-info.js";
+import { fontOverview } from "./tours/font-overview.js";
 import { fromGlyphs } from "./tours/from-glyphs.js";
 import { fromRoboFont } from "./tours/from-robofont.js";
 
 export const TOURS = {
   editor,
   "first-font": firstFont,
+  "font-info": fontInfo,
+  "font-overview": fontOverview,
   "from-glyphs": fromGlyphs,
   "from-robofont": fromRoboFont,
 };

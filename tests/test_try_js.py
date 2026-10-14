@@ -1379,7 +1379,9 @@ def test_every_tour_follows_the_rules(server, browser):
           })),
         }))"""
     )
-    assert [t["name"] for t in tours] == ["editor", "first-font", "from-glyphs", "from-robofont"]
+    assert [t["name"] for t in tours] == [
+        "editor", "first-font", "font-info", "font-overview", "from-glyphs", "from-robofont",
+    ]
     ids = {t["name"]: [s["id"] for s in t["steps"]] for t in tours}
     assert ids["first-font"] == [
         "welcome", "new-font", "create-h", "rectangles", "exact", "remove-overlaps", "width-h",
@@ -1389,6 +1391,11 @@ def test_every_tour_follows_the_rules(server, browser):
         "welcome", "open", "text-view", "masters", "palette", "kerning", "instances", "features",
         "glyph-axes", "add-component", "component-location",
     ]
+    assert ids["font-info"] == [
+        "welcome", "font-info", "axes", "sources", "cross-axis-mapping", "conditional-substitutions",
+        "features", "statuses", "back",
+    ]
+    assert ids["font-overview"] == ["welcome", "cells", "search", "glyph-sets", "group-by", "location"]
     assert ids["from-robofont"] == [
         "welcome", "open", "glyph-window", "designspace", "inspector", "metrics", "font-window",
         "no-scripting",
@@ -1620,9 +1627,9 @@ def test_the_menu_lists_the_tours(server, browser):
     menu = page.locator(".hive-tour-menu")
     assert menu.locator(".title").inner_text() == "Tutorials"
     rows = menu.locator(".row[data-tour]")
-    assert rows.count() == 4
-    marks = [rows.nth(i).locator(".mark").inner_text() for i in range(4)]
-    assert marks == ["✓", "●", "", ""]
+    assert rows.count() == 6
+    marks = [rows.nth(i).locator(".mark").inner_text() for i in range(6)]
+    assert marks == ["✓", "●", "", "", "", ""]
     assert rows.nth(1).locator(".length").inner_text() == "lesson · 20 min"
     assert menu.get_by_role("menuitem", name="Documentation").get_attribute("href") == "https://docs.fontra.xyz"
     assert menu.get_by_role("menuitem", name="Fontra Hive for teams").count() == 1
@@ -1645,7 +1652,7 @@ def test_the_menu_lists_the_tours(server, browser):
     assert page.evaluate("JSON.parse(localStorage.getItem('hive.try.tour'))") == {}
     assert page.locator(".hive-tour").count() == 0
     page.click("#help")
-    assert [rows.nth(i).locator(".mark").inner_text() for i in range(4)] == ["", "", "", ""]
+    assert [rows.nth(i).locator(".mark").inner_text() for i in range(6)] == [""] * 6
     page.keyboard.press("Escape")
     assert not errors
     context.close()
@@ -1695,5 +1702,37 @@ def test_the_bubble_on_a_narrow_screen_and_in_shadow_roots(server, browser):
                            q('#edit-tools').id]; }"""
     )
     assert found == ["x", None, None, "edit-tools"]
+    assert not errors
+    context.close()
+
+
+def test_the_font_info_tour_goes_through_its_panels(server, browser):
+    """Font Info, panel after panel on its own page, then back to the editor."""
+    context, page, errors = _tourPage(browser, server, path="/mock/fontinfo.html")
+    page.evaluate(MOCK_FONTINFO)
+    for id in ["cross-axis-mapping-panel", "conditional-substitutions-panel", "development-status-definitions-panel"]:
+        page.evaluate(
+            """(id) => { const p = document.createElement('div'); p.id = id; p.className = 'multi-panel-panel';
+                         p.hidden = true; p.style = 'width:100%;height:100%';
+                         document.getElementById('multi-panel-panel-container').append(p); }""",
+            id,
+        )
+    page.evaluate("() => { window.__t = window.__tour.startTour('font-info', 'font-info'); }")
+    bubble = page.locator(".hive-tour")
+    titles = []
+    for _ in range(7):
+        titles.append(bubble.locator("h3").inner_text())
+        assert bubble.locator("button.next").inner_text() == "Next"
+        bubble.locator("button.next").click()
+    assert titles == [
+        "Font Info", "Axes", "Sources", "Cross-axis mapping", "Conditional substitutions",
+        "OpenType Features", "Status definitions",
+    ]
+    assert page.evaluate("window.__selected") == [
+        "font-info-panel", "axes-panel", "sources-panel", "cross-axis-mapping-panel", "conditional-substitutions-panel",
+        "opentype-feature-code-panel", "development-status-definitions-panel",
+    ]
+    assert bubble.locator("h3").inner_text() == "The Font menu"
+    assert bubble.locator("button.next").inner_text() == "Back to the editor"
     assert not errors
     context.close()
