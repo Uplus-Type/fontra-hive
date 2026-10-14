@@ -287,6 +287,9 @@
   // has it: see COMPILED).
   function exportAs(options) {
     var format = options && options.format;
+    // For a lesson that waits for an export (try-tour.js).
+    if (window.hiveTry) window.hiveTry.lastExport = { format: format, at: Date.now() };
+    window.dispatchEvent(new CustomEvent("hive-try-export", { detail: { format: format } }));
     if (format !== "fontra" && format !== "designspace" && COMPILED.indexOf(format) === -1) {
       return Promise.reject(new Error("Not available in the browser: " + format));
     }
@@ -830,6 +833,19 @@
   window.fetch = function (input, init) {
     var url = new URL(typeof input === "string" || input instanceof URL ? input : input.url, location.href);
     var api = url.origin === location.origin && SERVER_API.exec(url.pathname);
+    // Settings › Server info: there is no server, and the page needs an
+    // answer to load at all.
+    if (url.origin === location.origin && url.pathname === "/serverinfo") {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            Server: "none — Try Fontra runs in your browser",
+            Fonts: "kept in this browser only",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      );
+    }
     if (api) {
       var args = init && init.body !== undefined ? String(init.body) : "{}";
       return python("api", { name: api[1], args: args }, [], progress).then(function (reply) {

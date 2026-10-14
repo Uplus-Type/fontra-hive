@@ -71,7 +71,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         from fontra_hive.projectmanager import injectTryScripts
 
         path = self.path.split("?")[0]
-        if path == "/bare.html":
+        if path == "/bare.html" or path.startswith("/mock/"):
+            # /mock/<view>.html: a bare page at the address of one of
+            # Fontra's pages, for the tours' moves between pages.
             return self._send(BARE_PAGE.encode(), "text/html")
         if path == "/try":
             from fontra_hive.projectmanager import injectTryMeta
@@ -1122,7 +1124,7 @@ MOCK_EDITOR = """() => {
     add(`<div class="sidebar-tab" data-sidebar-name="${name}" style="position:fixed;left:${left}px;top:${100 + left % 7 * 40}px;width:30px;height:30px"></div>`);
   }
   add('<button class="hive-branch" style="position:fixed;left:900px;top:5px;width:80px;height:24px">main</button>');
-  add('<div class="hive-try" style="position:fixed;left:400px;bottom:14px;width:500px;height:40px"></div>');
+  add('<div class="hive-try" style="position:fixed;left:400px;bottom:14px;width:500px;height:40px"><button class="fonts">Your fonts</button></div>');
   window.__opened = [];
   window.editorController = {
     fontController: {},
@@ -1272,7 +1274,465 @@ def test_the_tour_is_offered_in_the_editor(server, browser):
     page.wait_for_selector(".hive-branch", timeout=30000)
     page.wait_for_timeout(1500)
     assert page.locator(".hive-tour").count() == 0
-    page.get_by_role("button", name="Tour of the editor").click()
+    page.get_by_role("button", name="Tutorials").click()
+    page.locator('.hive-tour-menu .row[data-tour="editor"]').click()
     assert page.locator(".hive-tour h3").inner_text() == "Welcome to Fontra"
+    assert not errors
+    context.close()
+
+
+# The editor's other parts the lessons point at, and a font to watch: Fontra's
+# FontController as the steps' `until` read it (glyphMap, axes, sources,
+# getGlyph), filled by the test as the visitor would by drawing.
+MOCK_LESSON = """() => {
+  const add = (html) => document.body.insertAdjacentHTML("beforeend", html);
+  const tools = document.getElementById("edit-tools");
+  for (const tool of ["pointer-tools", "pen-tool", "shape-tool", "metrics-tool"]) {
+    tools.insertAdjacentHTML("beforeend", `<div class="tool-button" data-tool="${tool}" style="display:inline-block;width:30px;height:30px"></div>`);
+  }
+  for (const [name, top] of [["selection-info", 300], ["selection-transformation", 340]]) {
+    add(`<div class="sidebar-tab" data-sidebar-name="${name}" style="position:fixed;left:1300px;top:${top}px;width:30px;height:30px"></div>`);
+  }
+  window.__glyphs = {};
+  const fc = window.editorController.fontController;
+  Object.assign(fc, {
+    glyphMap: {},
+    axes: { axes: [] },
+    sources: { r: { name: "Regular" } },
+    getGlyph: async (name) => window.__glyphs[name] || null,
+  });
+  // A glyph of rectangles [x, y, w, h], counter-clockwise, or clockwise when w < 0.
+  window.__draw = (name, rects, xAdvance = 500, sources = 1) => {
+    const coordinates = [];
+    const contourInfo = [];
+    for (const [x, y, w, h] of rects) {
+      const pts = w > 0 ? [[x, y], [x + w, y], [x + w, y + h], [x, y + h]]
+                        : [[x, y], [x, y + h], [x - w, y + h], [x - w, y]];
+      for (const [px, py] of pts) coordinates.push(px, py);
+      contourInfo.push({ endPoint: coordinates.length / 2 - 1, isClosed: true });
+    }
+    fc.glyphMap[name] = [name.codePointAt(0)];
+    const layer = { glyph: { xAdvance, path: { coordinates, contourInfo } } };
+    window.__glyphs[name] = {
+      sources: Array.from({ length: sources }, (_, i) => ({ layerName: "L" + i })),
+      layers: Object.fromEntries(Array.from({ length: sources }, (_, i) => ["L" + i, layer])),
+    };
+  };
+}"""
+
+# Font Info as the tours see it: its panels, one shown at a time.
+MOCK_FONTINFO = """() => {
+  const container = document.createElement("div");
+  container.id = "multi-panel-panel-container";
+  container.style = "position:fixed;left:200px;top:40px;width:900px;height:700px";
+  for (const id of ["font-info-panel", "axes-panel", "sources-panel", "opentype-feature-code-panel"]) {
+    const panel = document.createElement("div");
+    panel.id = id;
+    panel.className = "multi-panel-panel";
+    panel.style = "width:100%;height:100%";
+    panel.hidden = "#" + id !== (location.hash || "#font-info-panel");
+    container.append(panel);
+  }
+  document.body.append(container);
+  window.__selected = [];
+  window.fontInfoController = {
+    fontController: { glyphMap: {}, axes: { axes: [] }, sources: { r: {} } },
+    multiPanelController: {
+      selectPanel: (id) => {
+        window.__selected.push(id);
+        for (const panel of container.children) panel.hidden = panel.id !== id;
+        history.replaceState({}, "", "#" + id);
+      },
+    },
+  };
+}"""
+
+TOUR_MODULES = """() => Promise.all([
+  import('/hive/try/try-tour.js'), import('/hive/try/try-tour-steps.js'), import('/hive/try/try-tour-menu.js'),
+]).then(([tour, steps, menu]) => { window.__tour = tour; window.__steps = steps; window.__menu = menu; })"""
+
+LOCAL = "project=local%3A0123456789ab"
+
+
+def _tourPage(browser, server, path="/mock/editor.html", query=LOCAL, viewport=(1400, 850)):
+    context = browser.new_context(viewport={"width": viewport[0], "height": viewport[1]})
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.goto(f"{server}{path}?{query}")
+    page.evaluate(TOUR_MODULES)
+    page.wait_for_function("() => !!window.__menu")
+    return context, page, errors
+
+
+# The words of every bubble: one idea, 25 to 45 words (a few short ones of
+# the first tour stray a little).
+def test_every_tour_follows_the_rules(server, browser):
+    context, page, errors = _tourPage(browser, server)
+    tours = page.evaluate(
+        """() => Object.entries(window.__steps.TOURS).map(([name, tour]) => ({
+          name, title: tour.title, kind: tour.kind, minutes: tour.minutes, about: tour.about || "",
+          steps: tour.steps.map((s) => ({
+            id: s.id, title: s.title, words: s.text.trim().split(/\\s+/).length, anchor: s.anchor || "",
+            placement: s.placement || "", view: s.view || tour.view || "editor", hash: s.hash || "",
+            until: typeof s.until === "function", learn: s.learn || "", teams: s.teams || "",
+          })),
+        }))"""
+    )
+    assert [t["name"] for t in tours] == [
+        "editor", "first-font", "font-info", "font-overview", "from-glyphs", "from-robofont",
+    ]
+    ids = {t["name"]: [s["id"] for s in t["steps"]] for t in tours}
+    assert ids["first-font"] == [
+        "welcome", "new-font", "create-h", "rectangles", "exact", "remove-overlaps", "width-h",
+        "create-o", "ellipses", "width-o", "axis", "black-source", "draw-black", "slider", "export",
+    ]
+    assert ids["from-glyphs"] == [
+        "welcome", "open", "text-view", "masters", "palette", "kerning", "instances", "features",
+        "glyph-axes", "add-component", "component-location",
+    ]
+    assert ids["font-info"] == [
+        "welcome", "font-info", "axes", "sources", "cross-axis-mapping", "conditional-substitutions",
+        "features", "statuses", "back",
+    ]
+    assert ids["font-overview"] == ["welcome", "cells", "search", "glyph-sets", "group-by", "location"]
+    assert ids["from-robofont"] == [
+        "welcome", "open", "glyph-window", "designspace", "inspector", "metrics", "font-window",
+        "no-scripting",
+    ]
+    placements = {"", "right", "left", "top", "bottom", "inside-top", "inside-bottom", "inside-right"}
+    for tour in tours:
+        assert tour["kind"] in ("tour", "lesson") and tour["minutes"] > 0 and tour["about"]
+        assert len(set(s["id"] for s in tour["steps"])) == len(tour["steps"])
+        assert tour["steps"][0]["id"] == "welcome"
+        for step in tour["steps"]:
+            where = f"{tour['name']}/{step['id']}"
+            assert 15 <= step["words"] <= 55, (where, step["words"])
+            assert step["placement"] in placements, where
+            assert step["view"] in ("editor", "fontoverview", "fontinfo", "applicationsettings"), where
+            assert not step["hash"] or step["view"] in ("fontinfo", "applicationsettings"), where
+            # Anchors by ids, classes and data-* attributes, never by words.
+            assert '"' not in step["anchor"].replace('[data-sidebar-name="', "").replace('[data-tool="', "").replace('"]', ""), where
+            assert not step["learn"] or step["learn"].startswith("https://docs.fontra.xyz/"), where
+            assert "Fontra Hive" not in step["teams"], where
+    lesson = next(t for t in tours if t["name"] == "first-font")
+    assert lesson["kind"] == "lesson"
+    assert [s["id"] for s in lesson["steps"] if not s["until"]] == ["welcome", "slider"]
+    assert not errors
+    context.close()
+
+
+def test_a_lesson_waits_until_each_step_is_done(server, browser):
+    """A lesson's step waits: "I did it" goes on anyway; once the thing is
+    done, a check and Next. The steps read Fontra's font as it changes."""
+    context, page, errors = _tourPage(browser, server)
+    page.evaluate(MOCK_EDITOR)
+    page.evaluate(MOCK_LESSON)
+    page.evaluate("() => { window.__t = window.__tour.startTour('first-font'); }")
+    bubble = page.locator(".hive-tour")
+    assert bubble.locator("h3").inner_text().startswith("Your first font")
+    assert page.evaluate("() => window.__t.steps.length") == 15  # none left out: they wait
+    next_ = bubble.locator("button.next")
+
+    # An empty font is there: done at once.
+    next_.click()
+    assert bubble.locator("h3").inner_text().startswith("New font")
+    page.wait_for_function("document.querySelector('.hive-tour').classList.contains('done')")
+    assert next_.inner_text() == "Next"
+    ring = page.locator(".hive-tour-ring").bounding_box()
+    assert ring and ring["y"] > 700  # around the bar's Your fonts
+
+    # The H: not yet, then created.
+    next_.click()
+    assert bubble.locator("h3").inner_text().startswith("Create the H")
+    page.wait_for_timeout(400)
+    assert next_.inner_text() == "I did it"
+    assert "done" not in bubble.get_attribute("class")
+    page.evaluate("() => window.__draw('H', [])")
+    page.wait_for_function("document.querySelector('.hive-tour button.next').textContent === 'Next'")
+    assert "done" in bubble.get_attribute("class")
+    assert bubble.locator("h3 .check").is_visible()
+
+    # Three rectangles, rough; then exact; then fused; then the width.
+    next_.click()
+    assert bubble.locator("h3").inner_text().startswith("Shape Tool")
+    assert bubble.get_attribute("data-side") == "right"  # its menu drops below the tool
+    assert bubble.locator("p.more a").inner_text() == "Learn more ↗"
+    page.evaluate("() => window.__draw('H', [[50, 0, 100, 690], [400, 0, 120, 700], [50, 300, 480, 90]])")
+    page.wait_for_function("document.querySelector('.hive-tour').classList.contains('done')")
+    next_.click()
+    assert bubble.locator("h3").inner_text().startswith("Transformation")
+    assert page.evaluate("window.__opened").count("selection-transformation") == 1
+    page.wait_for_timeout(400)
+    assert next_.inner_text() == "I did it"
+    page.evaluate("() => window.__draw('H', [[60, 0, 110, 700], [430, 0, 110, 700], [60, 300, 480, 100]])")
+    page.wait_for_function("document.querySelector('.hive-tour').classList.contains('done')")
+    next_.click()
+    assert bubble.locator("h3").inner_text().startswith("Remove overlaps")
+    page.evaluate("() => window.__draw('H', [[60, 0, 480, 700]])")
+    page.wait_for_function("document.querySelector('.hive-tour').classList.contains('done')")
+    next_.click()
+    assert bubble.locator("h3").inner_text().startswith("Sidebearings")
+    page.wait_for_timeout(400)
+    assert next_.inner_text() == "I did it"
+    page.evaluate("() => window.__draw('H', [[60, 0, 480, 700]], 600)")
+    page.wait_for_function("document.querySelector('.hive-tour').classList.contains('done')")
+
+    # The o: created; two ovals turning the same way are not yet a counter,
+    # the inner one drawn the other way round is.
+    next_.click()
+    assert bubble.locator("h3").inner_text().startswith("Preview text")
+    page.evaluate("() => window.__draw('o', [])")
+    page.wait_for_function("document.querySelector('.hive-tour').classList.contains('done')")
+    next_.click()
+    assert bubble.locator("h3").inner_text().startswith("Ellipse Tool")
+    page.evaluate("() => window.__draw('o', [[40, -10, 420, 520], [140, 90, 220, 320]])")
+    page.wait_for_timeout(400)
+    assert next_.inner_text() == "I did it"
+    page.evaluate("() => window.__draw('o', [[40, -10, 420, 520], [140, 90, -220, 320]])")
+    page.wait_for_function("document.querySelector('.hive-tour').classList.contains('done')")
+    next_.click()
+    assert bubble.locator("h3").inner_text().startswith("Sidebearings")
+    page.evaluate("() => window.__draw('o', [[40, -10, 420, 520], [140, 90, -220, 320]], 500)")
+    page.wait_for_function("document.querySelector('.hive-tour').classList.contains('done')")
+
+    # The axis is in Font Info: from the editor, a button opens it.
+    next_.click()
+    assert bubble.locator("h3").inner_text().startswith("Axes")
+    assert next_.inner_text() == "Open Font Info"
+    # Not the step's text yet (it is read on its page), nor its link.
+    assert bubble.locator("p").first.inner_text() == "The next step is in Font Info: open it to go on."
+    assert bubble.locator("p.more").count() == 0
+    # The buttons stay inside the bubble.
+    box = bubble.bounding_box()
+    row = bubble.locator(".row button.next").bounding_box()
+    assert row["x"] + row["width"] <= box["x"] + box["width"]
+    assert page.locator(".hive-tour-ring").is_hidden()
+    assert bubble.get_by_role("button", name="Back").count() == 1
+    # "I did it" was never needed to go back and forth.
+    bubble.get_by_role("button", name="Back").click()
+    assert bubble.locator("h3").inner_text().startswith("Sidebearings")
+    page.keyboard.press("Escape")
+    assert page.evaluate("JSON.parse(localStorage.getItem('hive.try.tour'))") == {"first-font": "skipped"}
+    assert page.evaluate("localStorage.getItem('hive.try.tour.now')") is None
+    assert not errors
+    context.close()
+
+
+def test_a_tour_goes_on_in_another_page(server, browser):
+    """A step on another of Fontra's pages: the bubble opens it the way
+    Fontra does (Font Info in a window named after the font), the tour goes
+    on there, and the tab left behind has no bubble any more."""
+    context, page, errors = _tourPage(browser, server)
+    page.evaluate(MOCK_EDITOR)
+    page.evaluate(MOCK_LESSON)
+    page.evaluate("() => { window.__t = window.__tour.startTour('from-glyphs', 'kerning'); }")
+    bubble = page.locator(".hive-tour")
+    assert bubble.locator("h3").inner_text().startswith("Kerning Tool")
+    page.keyboard.press("ArrowRight")
+    assert bubble.locator("h3").inner_text().startswith("Axes")
+    page.keyboard.press("ArrowRight")  # not from here: the page must be opened
+    assert bubble.locator("h3").inner_text().startswith("Axes")
+    with context.expect_page() as opened:
+        bubble.get_by_role("button", name="Open Font Info").click()
+    info = opened.value
+    info.on("pageerror", lambda error: errors.append(str(error)))
+    assert page.locator(".hive-tour").count() == 0
+    now = page.evaluate("JSON.parse(localStorage.getItem('hive.try.tour.now'))")
+    assert now["tour"] == "from-glyphs" and now["step"] == "instances" and now["tab"] is None
+    assert now["view"] == "fontinfo"
+    info.wait_for_load_state()
+    url = urllib.parse.urlsplit(info.url)
+    assert url.path == "/mock/fontinfo.html" and url.fragment == "axes-panel"
+    assert urllib.parse.parse_qs(url.query)["project"] == ["local:0123456789ab"]
+    assert info.evaluate("window.name") == "fontra.fontinfo.local:0123456789ab"
+    info.evaluate(MOCK_FONTINFO)
+    info.evaluate(TOUR_MODULES)
+    info.wait_for_function("() => !!window.__menu")
+    info.evaluate("() => window.__tour.tourOnLoad(5000).then((t) => { window.__t = t; })")
+    info.wait_for_selector(".hive-tour")
+    there = info.locator(".hive-tour")
+    assert there.locator("h3").inner_text().startswith("Axes")
+    assert there.locator("button.next").inner_text() == "Next"
+    tab = info.evaluate("JSON.parse(localStorage.getItem('hive.try.tour.now')).tab")
+    assert tab and tab != page.evaluate("window.__tour.TAB")
+    # Its next step is on the same page, another panel: shown there.
+    there.locator("button.next").click()
+    assert there.locator("h3").inner_text().startswith("OpenType Feature Code")
+    assert info.evaluate("window.__selected") == ["opentype-feature-code-panel"]
+    assert info.locator("#opentype-feature-code-panel").is_visible()
+    # No Back to a step of another page: that is the other tab's.
+    there.get_by_role("button", name="Back").click()
+    assert there.locator("h3").inner_text().startswith("Axes")
+    assert there.get_by_role("button", name="Back").count() == 0
+    # Back to the editor: its own tab, as it was (not a new one), takes the
+    # tour back; this one lets it go.
+    info.evaluate("() => window.__tour.startTour('first-font', 'black-source')")
+    assert there.locator("h3").inner_text().startswith("Sources")
+    there.locator("button.next").click()  # "I did it"
+    assert there.locator("h3").inner_text().startswith("Designspace")
+    assert there.locator("button.next").inner_text() == "Back to the editor"
+    assert there.locator("p").first.inner_text() == "The next step is in the editor: open it to go on."
+    assert page.evaluate("window.name") == "hive.try.editor.local:0123456789ab"
+    page.evaluate("() => window.__marker = 'still here'")
+    there.locator("button.next").click()
+    page.wait_for_selector(".hive-tour")
+    assert page.locator(".hive-tour h3").inner_text().startswith("Designspace")
+    assert page.evaluate("window.__marker") == "still here"
+    assert len(context.pages) == 2
+    info.wait_for_timeout(300)
+    assert info.locator(".hive-tour").count() == 0
+    # Ending it anywhere ends it everywhere.
+    page.keyboard.press("Escape")
+    assert info.evaluate("localStorage.getItem('hive.try.tour.now')") is None
+    assert not errors
+    context.close()
+
+
+def test_another_tab_takes_the_tour_over(server, browser):
+    """Two tabs: the one that shows the tour now has the only bubble."""
+    context, page, errors = _tourPage(browser, server)
+    page.evaluate(MOCK_EDITOR)
+    page.evaluate("() => window.__tour.startTour('editor', 'tools')")
+    other = context.new_page()
+    other.goto(f"{server}/mock/editor.html?{LOCAL}%40bold")  # same font, another branch
+    other.evaluate(TOUR_MODULES)
+    other.wait_for_function("() => !!window.__menu")
+    other.evaluate(MOCK_EDITOR)
+    # Not this tab's: it was shown in the first one.
+    assert other.evaluate("() => window.__tour.tourOnLoad(1000)") is None
+    other.evaluate("() => window.__tour.startTour('editor', 'designspace')")
+    page.wait_for_function("() => !document.querySelector('.hive-tour')")
+    assert other.locator(".hive-tour h3").inner_text() == "Designspace"
+    assert not errors
+    context.close()
+
+
+def test_the_menu_lists_the_tours(server, browser):
+    """The ? menu: every tour, its length, where you are in it; a tour going
+    on resumes at its step; Start over forgets them all."""
+    context, page, errors = _tourPage(browser, server)
+    page.evaluate(MOCK_EDITOR)
+    page.evaluate(MOCK_LESSON)
+    page.evaluate(
+        """() => localStorage.setItem('hive.try.tour', JSON.stringify(
+             {editor: 'done', 'first-font': {step: 'width-h'}, 'from-glyphs': 'skipped'}))"""
+    )
+    page.evaluate(
+        """() => { const b = document.createElement('button'); b.id = 'help';
+                   b.style = 'position:fixed;right:20px;bottom:20px'; b.textContent = '?';
+                   b.onclick = () => window.__menu.openTourMenu(b); document.body.append(b); }"""
+    )
+    page.click("#help")
+    menu = page.locator(".hive-tour-menu")
+    assert menu.locator(".title").inner_text() == "Tutorials"
+    rows = menu.locator(".row[data-tour]")
+    assert rows.count() == 6
+    marks = [rows.nth(i).locator(".mark").inner_text() for i in range(6)]
+    assert marks == ["✓", "●", "", "", "", ""]
+    assert rows.nth(1).locator(".length").inner_text() == "lesson · 20 min"
+    assert menu.get_by_role("menuitem", name="Documentation").get_attribute("href") == "https://docs.fontra.xyz"
+    assert menu.get_by_role("menuitem", name="Fontra Hive for teams").count() == 1
+    box = menu.bounding_box()
+    assert box["y"] + box["height"] <= page.locator("#help").bounding_box()["y"]
+    # The lesson going on: resumed at its step.
+    rows.nth(1).click()
+    assert menu.count() == 0
+    assert page.locator(".hive-tour h3").inner_text().startswith("Sidebearings")
+    # A tour done: from its start.
+    page.click("#help")
+    menu.locator('.row[data-tour="editor"]').click()
+    assert page.locator(".hive-tour h3").inner_text() == "Welcome to Fontra"
+    # Escape closes the menu; Start over forgets everything.
+    page.click("#help")
+    page.keyboard.press("Escape")
+    assert menu.count() == 0
+    page.click("#help")
+    menu.locator('.row[data-action="start-over"]').click()
+    assert page.evaluate("JSON.parse(localStorage.getItem('hive.try.tour'))") == {}
+    assert page.locator(".hive-tour").count() == 0
+    page.click("#help")
+    assert [rows.nth(i).locator(".mark").inner_text() for i in range(6)] == [""] * 6
+    page.keyboard.press("Escape")
+    assert not errors
+    context.close()
+
+
+def test_a_tour_is_asked_for_in_the_address(server, browser):
+    """/try?tour=<name> (the docs' "Try it"): the start page passes it on, and
+    the page starts that tour from its start, even when done, once."""
+    context, page, errors = _tourPage(browser, server, query=LOCAL + "&tour=from-robofont&text=%22H%22")
+    page.evaluate("() => localStorage.setItem('hive.try.tour', JSON.stringify({'from-robofont': 'done'}))")
+    page.evaluate(MOCK_EDITOR)
+    page.evaluate("() => window.__tour.tourOnLoad(3000).then((t) => { window.__t = t; })")
+    page.wait_for_selector(".hive-tour")
+    assert page.locator(".hive-tour h3").inner_text() == "Coming from RoboFont"
+    assert "tour=" not in page.url and "text=" in page.url
+    # The start page passes ?tour= and ?new on to the editor.
+    page.evaluate(
+        "() => { window.__hiveTryNoAutoStart = true; return import('/hive/try/try-start.js').then((m) => { window.__start = m; }); }"
+    )
+    passed = page.evaluate(
+        "() => window.__start.passOn('/editor.html?project=local%3Aabc&text=%22H%22', '?tour=first-font&new')"
+    )
+    assert passed == "/editor.html?project=local%3Aabc&text=%22H%22&tour=first-font&new"
+    assert page.evaluate("() => window.__start.passOn('/editor.html?project=x', '')") == "/editor.html?project=x"
+    assert not errors
+    context.close()
+
+
+def test_the_bubble_on_a_narrow_screen_and_in_shadow_roots(server, browser):
+    """Below 900 px, the bubble sits at the bottom, the ring alone shows the
+    place; anchors may go through open shadow roots (a >>> b)."""
+    context, page, errors = _tourPage(browser, server, viewport=(800, 700))
+    page.evaluate(MOCK_EDITOR)
+    page.evaluate("() => window.__tour.startTour('editor', 'tools')")
+    bubble = page.locator(".hive-tour")
+    box = bubble.bounding_box()
+    assert abs(box["x"] + box["width"] / 2 - 400) < 2
+    assert box["y"] + box["height"] > 560
+    assert page.locator(".hive-tour-ring").is_visible()
+    assert bubble.locator(".arrow").is_hidden()
+    found = page.evaluate(
+        """() => { const host = document.createElement('div'); host.id = 'host';
+                   host.attachShadow({mode: 'open'}).innerHTML = '<p class="deep">x</p>';
+                   document.body.append(host);
+                   const q = window.__tour.deepQuery;
+                   return [q('#host >>> .deep')?.textContent, q('#host >>> .none'), q('#nothing >>> .deep'),
+                           q('#edit-tools').id]; }"""
+    )
+    assert found == ["x", None, None, "edit-tools"]
+    assert not errors
+    context.close()
+
+
+def test_the_font_info_tour_goes_through_its_panels(server, browser):
+    """Font Info, panel after panel on its own page, then back to the editor."""
+    context, page, errors = _tourPage(browser, server, path="/mock/fontinfo.html")
+    page.evaluate(MOCK_FONTINFO)
+    for id in ["cross-axis-mapping-panel", "conditional-substitutions-panel", "development-status-definitions-panel"]:
+        page.evaluate(
+            """(id) => { const p = document.createElement('div'); p.id = id; p.className = 'multi-panel-panel';
+                         p.hidden = true; p.style = 'width:100%;height:100%';
+                         document.getElementById('multi-panel-panel-container').append(p); }""",
+            id,
+        )
+    page.evaluate("() => { window.__t = window.__tour.startTour('font-info', 'font-info'); }")
+    bubble = page.locator(".hive-tour")
+    titles = []
+    for _ in range(7):
+        titles.append(bubble.locator("h3").inner_text())
+        assert bubble.locator("button.next").inner_text() == "Next"
+        bubble.locator("button.next").click()
+    assert titles == [
+        "Font Info", "Axes", "Sources", "Cross-axis mapping", "Conditional substitutions",
+        "OpenType Features", "Status definitions",
+    ]
+    assert page.evaluate("window.__selected") == [
+        "font-info-panel", "axes-panel", "sources-panel", "cross-axis-mapping-panel", "conditional-substitutions-panel",
+        "opentype-feature-code-panel", "development-status-definitions-panel",
+    ]
+    assert bubble.locator("h3").inner_text() == "The Font menu"
+    assert bubble.locator("button.next").inner_text() == "Back to the editor"
     assert not errors
     context.close()

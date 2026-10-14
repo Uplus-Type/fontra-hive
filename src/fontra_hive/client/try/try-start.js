@@ -29,8 +29,18 @@ function fail(text) {
   actions.classList.add("shown");
 }
 
+// What the address asks of the editor: a tutorial to start (?tour=<name>,
+// from the documentation's "Try it" buttons), or "New font…" open (?new).
+export function passOn(url, search = location.search) {
+  const asked = new URLSearchParams(search);
+  const target = new URL(url, location.href);
+  if (asked.get("tour")) target.searchParams.set("tour", asked.get("tour"));
+  if (asked.has("new")) target.searchParams.set("new", "");
+  return target.pathname + target.search.replace(/([?&]new)=(?=&|$)/, "$1");
+}
+
 function go(url) {
-  location.replace(url);
+  location.replace(passOn(url));
 }
 
 // Which font to open: the last one opened here; a new copy of the example

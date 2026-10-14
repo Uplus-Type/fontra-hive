@@ -512,15 +512,26 @@ or rebuilt: the pages are Fontra's own.
   the start page share). Fontra's own File › Export as downloads the font
   (`.fontra` or designspace + UFOs, zipped): the engine answers `exportAs`
   itself instead of the server.
-- `try-tour.js`, `try-tour-steps.js`: the guided tour for someone new to
-  Fontra. On a first visit to a font kept in the browser, a welcome bubble
-  offers it; the ? in the bar starts it again. Each step is a bubble beside
-  a part of the interface (found by the editor's ids and data attributes,
-  never its words; a step whose part is absent is skipped), with a ring
-  around it, the sidebar panel opened as it goes, and a link to the page of
-  docs.fontra.xyz that says more. Done or skipped is remembered in
-  localStorage (`hive.try.tour`). The bubble is a native popover (top
-  layer, above Fontra's overlays).
+- `try-tour.js`, `try-tour-steps.js`, `tours/`, `try-tour-menu.js`: the
+  tutorials. A tour is watched, Next after Next; a lesson is done: a step
+  with `until` waits for the thing to be done (its Next reads "I did it" to
+  go on anyway, a check shows once done). On a first visit to a font kept
+  in the browser, a welcome bubble offers "Around the editor"; the ? in the
+  bar opens the menu of every tutorial (✓ done, ● going on, length), Start
+  over, the documentation and Fontra Hive for teams. Each step is a bubble
+  beside a part of the interface (found by ids and data attributes, never
+  words, through open shadow roots with `a >>> b`; a step whose part is
+  absent is skipped), with a ring around it, the sidebar panel or Font Info
+  panel opened as it goes, and a link to the page of docs.fontra.xyz that
+  says more. A step on another of Fontra's pages (Font overview, Font Info,
+  Settings) offers to open it the way Fontra does, and the tour goes on
+  there; the tab left behind lets go of its bubble. `/try?tour=<name>`
+  starts a tutorial (the docs' "Try it" buttons), `/try?new` opens "New
+  font…". Done or skipped is remembered in localStorage (`hive.try.tour`),
+  the tutorial going on in `hive.try.tour.now`. One file per tutorial in
+  `tours/`; how to write one is at the top of `try-tour-steps.js`. Settings
+  (`applicationsettings.html`) is a page of Try when opened from Try: the
+  engine answers its `/serverinfo`.
 - One Python for all the tabs of the site (a `SharedWorker`, where the
   browser has one): two windows on the same font are served by the same
   server and see each other's edits as they happen; each tab holds a Web

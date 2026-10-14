@@ -77,7 +77,8 @@ import {
   emptyFont,
   freeName,
 } from "./try-common.js";
-import { offerTour, startTour } from "./try-tour.js";
+import { hereView, tourOnLoad } from "./try-tour.js";
+import { openTourMenu } from "./try-tour-menu.js";
 
 // Something to show on the canvas: the font's own letters.
 export function sampleText(glyphMap) {
@@ -185,7 +186,8 @@ export async function createNewFont(name, glyphSetKey, onProgress) {
   return { id, text: EXAMPLE_TEXT };
 }
 
-function openPanel() {
+// `newFont`: with the "New font…" form open (/try?new).
+function openPanel({ newFont = false } = {}) {
   const Store = window.HiveTryStore;
   const current = window.hiveTry?.localId;
   const error = el("p", { class: "error", role: "alert" });
@@ -387,6 +389,10 @@ function openPanel() {
   if (!Store.available()) {
     error.textContent = "This browser cannot keep files for this site (private window?).";
   }
+  if (newFont) {
+    newForm.hidden = false;
+    nameInput.select();
+  }
   fill();
 }
 
@@ -408,8 +414,48 @@ function useFontraIcon() {
   document.head.append(el("link", { rel: "icon", href: "/images/fontra-icon.svg", type: "image/svg+xml" }));
 }
 
+// Settings, which is about no font: a slim bar — the way back, and the
+// tutorials (the Settings tour goes on here).
+function startFontless() {
+  useFontraIcon();
+  const back = () => {
+    let opener = null;
+    try {
+      opener = window.opener && !window.opener.closed && window.opener.location.origin === location.origin ? window.opener : null;
+    } catch (error) {
+      opener = null;
+    }
+    if (opener) opener.focus();
+    else if (history.length > 1) history.back();
+    else location.href = START_URL;
+  };
+  const bar = el(
+    "div",
+    { class: "hive-try", role: "region", "aria-label": "Try Fontra" },
+    el("img", { src: "/images/fontra-icon.svg", alt: "", title: "Fontra" }),
+    el("span", { class: "name" }, "Try Fontra"),
+    el("button", { type: "button", class: "plain", onclick: back }, "Back to the editor"),
+    el(
+      "button",
+      { class: "close help", type: "button", title: "Tutorials", "aria-label": "Tutorials", "aria-haspopup": "menu", onclick: (event) => openTourMenu(event.currentTarget) },
+      "?"
+    ),
+    el(
+      "button",
+      { class: "close", type: "button", title: "Hide", "aria-label": "Hide", onclick: () => bar.classList.toggle("small") },
+      "–"
+    )
+  );
+  document.body.append(bar);
+  tourOnLoad();
+}
+
 function start() {
   document.head.append(el("style", {}, STYLE));
+  if (hereView() === "applicationsettings") {
+    startFontless();
+    return;
+  }
   if (!window.hiveTry?.localId) useFontraIcon();
   const tryAPI = window.hiveTry;
   const isLocal = !!tryAPI?.localId;
@@ -454,7 +500,7 @@ function start() {
     }),
     name,
     status,
-    el("button", { type: "button", class: "plain", onclick: openPanel }, "Your fonts"),
+    el("button", { type: "button", class: "plain fonts", onclick: () => openPanel() }, "Your fonts"),
     // The demo without Hive is only seen where nothing can be kept (a
     // private window), or at its own address: the offer is for the latter.
     isLocal || !window.HiveTryStore.available() ? null : keep,
@@ -472,7 +518,7 @@ function start() {
     isLocal
       ? el(
           "button",
-          { class: "close", type: "button", title: "Tour of the editor", "aria-label": "Tour of the editor", onclick: () => startTour("editor") },
+          { class: "close help", type: "button", title: "Tutorials", "aria-label": "Tutorials", "aria-haspopup": "menu", onclick: (event) => openTourMenu(event.currentTarget) },
           "?"
         )
       : null,
@@ -488,8 +534,18 @@ function start() {
       .then((info) => {
         name.textContent = info.name;
         startBranches();
-        // Someone new: the welcome bubble, once the editor is up.
-        offerTour("editor");
+        // A tour going on, one asked for (?tour=), or, for someone new,
+        // the welcome bubble — once the page is up.
+        tourOnLoad();
+        // /try?new: straight to "New font…".
+        const params = new URLSearchParams(location.search);
+        if (params.has("new")) {
+          params.delete("new");
+          const url = new URL(location.href);
+          url.search = params.toString();
+          history.replaceState(history.state, "", url);
+          openPanel({ newFont: true });
+        }
       })
       .catch(() => {
         name.textContent = "Font not found";
