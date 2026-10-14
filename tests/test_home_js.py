@@ -1208,3 +1208,78 @@ def test_organization_page_new_addresses_as_guests(browser_and_url):  # noqa: F8
     assert "free guest account" in page.inner_text("main")
     assert page.errors == []
     page.close()
+
+
+def test_plan_level_notices_and_billing_link(browser_and_url):  # noqa: F811
+    me = {
+        **ME,
+        "staff": False,
+        "level": "solo",
+        "accountType": "full",
+        "trial": {"endsAt": "2027-02-09T00:00:00+00:00", "daysLeft": 4},
+        "notices": [
+            {
+                "code": "trial",
+                "text": "Your free trial ends in 4 days.",
+                "url": "/billing",
+            }
+        ],
+        "billingUrl": "/billing",
+    }
+    page = open_home(browser_and_url, extra={"GET /api/me": [200, {"user": me}]})
+    page.wait_for_selector(".project-card")
+    assert page.inner_text("h2 .badge.level") == "Trial · 4 days left"
+    assert "ends in 4 days" in page.inner_text(".plan-notice")
+    assert page.get_attribute(".home-bar nav a[href='/billing']", "href") == "/billing"
+    assert page.errors == []
+    page.close()
+
+
+def test_no_billing_link_while_there_is_none(browser_and_url):  # noqa: F811
+    page = open_home(browser_and_url)
+    page.wait_for_selector(".project-card")
+    assert page.query_selector(".home-bar nav a[href='/billing']") is None
+    assert page.query_selector(".badge.level") is None
+    page.close()
+
+
+def test_a_guest_owner_keeps_download_and_trash(browser_and_url):  # noqa: F811
+    me = {
+        **ME,
+        "staff": False,
+        "level": "guest",
+        "accountType": "guest",
+        "billingUrl": "/billing",
+    }
+    own = {
+        **project("jeremie", "MySans", "admin"),
+        "capabilities": ["administer", "comment", "export", "read"],
+        "notice": {
+            "code": "guest",
+            "text": "You have a free guest account.",
+            "url": "/billing",
+        },
+    }
+    page = open_home(
+        browser_and_url,
+        "#project/jeremie/MySans",
+        {
+            "GET /api/me": [200, {"user": me}],
+            "GET /api/projects/jeremie/MySans": [200, {"project": own}],
+            "GET /api/hive/projects/jeremie%2FMySans/repository": [
+                200,
+                {"exists": True},
+            ],
+            "GET /api/hive/export-formats": [
+                200,
+                {"formats": [{"format": "fontra", "label": "Fontra package"}]},
+            ],
+        },
+    )
+    page.wait_for_selector(".downloads button")
+    text = page.inner_text("main")
+    assert "free guest account" in page.inner_text(".plan-notice")
+    assert "Trash" in text  # the project's own trash panel
+    assert "Import a font" not in text  # replacing the font is changing it
+    assert page.errors == []
+    page.close()

@@ -257,6 +257,29 @@ def test_read_only_badge(browser_and_url):
     page.close()
 
 
+def test_read_only_badge_says_why(browser_and_url):
+    """The accounts service took edit away and says why: the badge links to it."""
+    notice = {
+        "code": "read-only",
+        "text": "This project is read-only for now.",
+        "url": "/why",
+    }
+    data = {
+        "access": {
+            "role": "admin",
+            "capabilities": ["read", "comment"],
+            "notice": notice,
+        }
+    }
+    page = open_page(browser_and_url, data=data)
+    badge = page.query_selector(".hive-badge")
+    assert badge.text_content() == "Read only · why?"
+    assert badge.get_attribute("title") == notice["text"]
+    assert badge.get_attribute("href") == "/why"
+    assert page.errors == []
+    page.close()
+
+
 def test_file_menu_and_share_dialog(browser_and_url):
     page = open_page(browser_and_url)
     items = page.evaluate(

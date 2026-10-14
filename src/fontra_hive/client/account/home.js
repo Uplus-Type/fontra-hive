@@ -179,9 +179,10 @@ async function projectsSection() {
   ]);
   const content = [
     el("h2", {}, [
-      el("span", { class: "grow" }, ["Projects"]),
+      el("span", { class: "grow" }, ["Projects", levelBadge()]),
       isGuest() ? null : el("a", { href: "#new" }, [el("button", {}, ["New project"])]),
     ]),
+    ...planNotices(),
   ];
   if (isGuest()) content.push(guestNote());
   if (!projects.length && isGuest()) {
@@ -282,19 +283,36 @@ async function deleteForGood(ids, then = route) {
   return true;
 }
 
-// A guest account (invited as reviewer or observer by a full account) sees
-// and comments on what it is invited to; it creates nothing and invites no
-// one. hive-api refuses it anyway (403): this only keeps the buttons away.
+// A guest (hive-api's level "guest") sees and comments on what it is
+// invited to, and keeps its own projects (download, rename, trash); it
+// creates nothing and invites no one. hive-api refuses it anyway (403):
+// this only keeps the buttons away.
 function isGuest() {
-  return me?.accountType === "guest";
+  return (me?.level ?? (me?.accountType === "guest" ? "guest" : "solo")) === "guest";
 }
 
 function guestNote() {
   return el("p", { class: "note guest-note" }, [
     el("span", { class: "badge guest" }, ["Guest"]),
-    " Your free guest account lets you look at and comment on the projects you are invited to. " +
-      "To create your own projects, ask the Hive team to upgrade it.",
+    " Your free guest account lets you look at projects, comment on them, and download your own.",
+    me?.billingUrl ? el("span", {}, [" ", el("a", { href: me.billingUrl }, ["Plan and billing"])]) : null,
   ]);
+}
+
+// What hive-api has to say about the person's plan (its own words), and the
+// level as a badge: Solo, Studio, or the trial's days left.
+function planNotices() {
+  const notices = (me?.notices || []).filter((n) => n.code !== "guest"); // guestNote says it
+  const parts = notices.map((n) =>
+    el("p", { class: "note plan-notice" }, [n.text, " ", n.url ? el("a", { href: n.url }, ["Plan and billing"]) : null])
+  );
+  return parts;
+}
+
+function levelBadge() {
+  if (!me?.level || me.level === "guest") return null;
+  const text = me.trial ? `Trial · ${me.trial.daysLeft} days left` : me.level === "studio" ? "Studio" : "Solo";
+  return el("span", { class: "badge level", title: "Your plan" }, [text]);
 }
 
 async function newProjectSection() {
@@ -1177,6 +1195,13 @@ async function projectSection(projectId) {
     ]),
     el("p", { class: "note" }, [`Your role: ${project.role}.`]),
   ];
+  // Why the role does less than it says (hive-api's words): no plan, or the
+  // project's owner has none.
+  if (project.notice) {
+    content.push(el("p", { class: "note plan-notice" }, [
+      project.notice.text, " ", project.notice.url ? el("a", { href: project.notice.url }, ["Plan and billing"]) : null,
+    ]));
+  }
   if (message) content.splice(1, 0, el("div", { class: "error notice" }, [message]));
   if (!withFont) {
     content.push(
@@ -1286,7 +1311,8 @@ async function projectSection(projectId) {
     );
     const { input: file, bar, elements } = importFields();
     const status = el("p", { class: "note" });
-    content.push(
+    // Replacing the font is changing it: not without "edit".
+    if (project.capabilities.includes("edit")) content.push(
       el("div", { class: "panel" }, [
         el("h3", { style: "margin-top:0" }, ["Import a font"]),
         el("p", { class: "note" }, [
@@ -1365,7 +1391,7 @@ async function orgSection(login) {
   const rows = members.members.map((m) => {
     const isYou = m.username === me.username;
     return el("tr", { "data-username": m.username }, [
-      el("td", { class: "who" }, [avatar(m, 28), el("div", {}, [`${m.name}${isYou ? " (you)" : ""}`, m.guest ? el("span", { class: "badge guest", title: "Guest account: reviewer at most" }, ["guest"]) : null, el("small", {}, [[m.username, m.email].filter(Boolean).join(" · ")])])]),
+      el("td", { class: "who" }, [avatar(m, 28), el("div", {}, [`${m.name}${isYou ? " (you)" : ""}`, m.guest ? el("span", { class: "badge guest", title: "Can only look and comment for now" }, ["guest"]) : null, el("small", {}, [[m.username, m.email].filter(Boolean).join(" · ")])])]),
       el("td", {}, [
         owner && !m.guest
           ? roleSelect(["owner", "member"], m.role, {
@@ -1579,6 +1605,9 @@ export async function start() {
   } catch (error) {
     location.replace("/"); // not signed in any more
     return;
+  }
+  if (me.billingUrl) {
+    document.querySelector(".home-bar nav")?.append(el("a", { href: me.billingUrl }, ["Plan and billing"]));
   }
   window.addEventListener("hashchange", route);
   listenForGitHub();

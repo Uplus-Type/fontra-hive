@@ -784,10 +784,16 @@ export class HiveViews {
       if (this.project) right.append(this.makeBranchPill(projectName));
       right.append(this.chip);
       if (this.access && this.access.role && !this.access.capabilities.includes("edit")) {
+        // The accounts service may say why (its own words, and where to act).
+        const notice = this.access.notice;
         topBar.append(
-          el("span", { class: "hive-badge", title: "Your role on this project cannot edit" }, [
-            `Read only · ${this.access.role}`,
-          ])
+          notice
+            ? el("a", { class: "hive-badge", title: notice.text, href: notice.url || "#", target: "_blank" }, [
+                "Read only · why?",
+              ])
+            : el("span", { class: "hive-badge", title: "Your role on this project cannot edit" }, [
+                `Read only · ${this.access.role}`,
+              ])
         );
       }
     } else {
@@ -880,8 +886,12 @@ export class HiveViews {
         el("b", {}, [
           this.me.name,
           this.me.accountType === "guest"
-            ? el("span", { class: "hive-guest-badge", title: "Free guest account: reviewer or observer only" }, ["Guest"])
-            : null,
+            ? el("span", { class: "hive-guest-badge", title: "Free guest account: look and comment" }, ["Guest"])
+            : this.me.level === "studio" || this.me.level === "solo"
+              ? el("span", { class: "hive-guest-badge" }, [
+                  this.me.trial ? `Trial · ${this.me.trial.daysLeft} days left` : this.me.level === "studio" ? "Studio" : "Solo",
+                ])
+              : null,
         ]),
         el("small", {}, [[this.me.username, this.me.email, role].filter(Boolean).join(" · ")]),
       ]),
@@ -892,6 +902,7 @@ export class HiveViews {
       ),
       el("hr"),
       el("a", { href: "/" }, ["My projects"]),
+      this.me.billingUrl ? el("a", { href: this.me.billingUrl }, ["Plan and billing"]) : null,
       this.project ? el("a", { onclick: () => { this.closeMenu(); this.openShare(); } }, ["Share…"]) : null,
       el("hr"),
       el("a", { href: "/hive/logout" }, ["Sign out"]), // a page that signs out, then goes home
@@ -1403,7 +1414,7 @@ export function openShareDialog(projectName, { onClose } = {}) {
           avatar(m, 30),
           el("div", { class: "who" }, [
             `${m.name}${isYou ? " (you)" : ""}`,
-            m.guest ? el("span", { class: "hive-guest-badge", title: "Guest account: reviewer at most" }, ["guest"]) : null,
+            m.guest ? el("span", { class: "hive-guest-badge", title: "Can only look and comment for now" }, ["guest"]) : null,
             el("small", {}, [[m.username, m.email].filter(Boolean).join(" · ")]),
           ]),
           roleCell,
@@ -1538,6 +1549,9 @@ export async function start() {
         email: full.email,
         avatar: full.avatar,
         accountType: full.accountType, // "guest": reviewer or observer only
+        level: full.level, // "guest", "solo" or "studio"
+        trial: full.trial, // {endsAt, daysLeft} during the free period
+        billingUrl: full.billingUrl, // the plan page, when there is one
       });
     } catch (error) {
       // keep what the token says
