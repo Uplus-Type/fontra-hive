@@ -261,25 +261,30 @@ export function startTour(name = "editor") {
   return new Tour(name).start();
 }
 
-// Hive's panels and Fontra's editor are mounted after the page loads; the
-// tour waits for them, up to `timeout` ms, then for whatever is there.
-function whenReady(selectors, timeout = 20000) {
+// Hive's panels and Fontra's editor are mounted once the font has loaded
+// (Python in the browser may still be starting); the tour waits for them,
+// up to `timeout` ms. True when they are there.
+function whenReady(selectors, timeout = 120000) {
   return new Promise((resolve) => {
     const started = performance.now();
     const check = () => {
-      const ready = window.editorController?.fontController && selectors.every((s) => document.querySelector(s));
-      if (ready || performance.now() - started > timeout) resolve();
+      const ready = !!window.editorController?.fontController && selectors.every((s) => document.querySelector(s));
+      if (ready) resolve(true);
+      else if (performance.now() - started > timeout) resolve(false);
       else setTimeout(check, 250);
     };
     check();
   });
 }
 
+const EDITOR_READY = ['.sidebar-tab[data-sidebar-name="hive-history"]', ".hive-branch", "#edit-tools .tool-button"];
+
 // On a first visit: the welcome bubble, once the editor and Hive's panels
-// are up. Returns the tour, or null when it was done or skipped before.
-export async function offerTour(name = "editor") {
+// are up — never on a page still loading, or broken. Returns the tour, or
+// null when it was done or skipped before, or the editor never came up.
+export async function offerTour(name = "editor", timeout = 120000) {
   if (tourState(name) || !TOURS[name]) return null;
-  await whenReady(['.sidebar-tab[data-sidebar-name="hive-history"]', ".hive-branch"]);
+  if (!(await whenReady(EDITOR_READY, timeout))) return null;
   if (tourState(name) || Tour.current) return null;
   return startTour(name);
 }

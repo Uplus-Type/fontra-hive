@@ -1116,7 +1116,7 @@ def test_a_new_font_opens_in_the_editor(server, browser):
 MOCK_EDITOR = """() => {
   const add = (html) => document.body.insertAdjacentHTML("beforeend", html);
   add('<canvas id="edit-canvas" style="position:fixed;left:200px;top:40px;width:800px;height:600px"></canvas>');
-  add('<div id="edit-tools" style="position:fixed;left:400px;top:50px;width:300px;height:30px"></div>');
+  add('<div id="edit-tools" style="position:fixed;left:400px;top:50px;width:300px;height:30px"><div class="tool-button"></div></div>');
   for (const [name, left] of [["text-entry", 10], ["glyph-search", 10], ["designspace-navigation", 10],
                               ["hive-history", 1300], ["hive-comments", 1300]]) {
     add(`<div class="sidebar-tab" data-sidebar-name="${name}" style="position:fixed;left:${left}px;top:${100 + left % 7 * 40}px;width:30px;height:30px"></div>`);
@@ -1143,11 +1143,14 @@ def test_the_tour_goes_round_the_editor(server, browser):
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.goto(f"{server}/bare.html")
-    page.evaluate(MOCK_EDITOR)
     page.evaluate(
         "() => import('/hive/try/try-tour.js').then((m) => { window.__tour = m; })"
     )
     page.wait_for_function("() => !!window.__tour")
+    # Not offered while the editor is still loading (or never comes up).
+    assert page.evaluate("() => window.__tour.offerTour('editor', 600)") is None
+    assert page.locator(".hive-tour").count() == 0
+    page.evaluate(MOCK_EDITOR)
     # Offered on a first visit: the welcome bubble, centred, no ring.
     page.evaluate("() => window.__tour.offerTour('editor').then((t) => { window.__t = t; })")
     page.wait_for_selector(".hive-tour")
