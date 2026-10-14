@@ -951,7 +951,14 @@ export class HiveViews {
     return this.branches;
   }
 
-  gotoBranch(branch) {
+  async gotoBranch(branch) {
+    // In Try, the last edits may still be on their way to the browser's
+    // storage: written now, so that leaving asks nothing.
+    try {
+      await window.hiveTry?.flush?.();
+    } catch (error) {
+      console.warn(error);
+    }
     location.href = branchURL(location.href, this.project.name, branch, this.branches.default);
   }
 

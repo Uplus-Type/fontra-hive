@@ -13,7 +13,7 @@
 import { el } from "./try-common.js";
 import { TOURS } from "./try-tour-steps.js";
 
-const KEY = "hive.try.tour"; // {"<tour>": "done" | "skipped"}
+const KEY = "hive.try.tour"; // {"<tour>": "done" | "skipped" | {step: "<id>"}}
 const GAP = 12; // between the ring and the bubble
 const RING_PAD = 4;
 
@@ -28,6 +28,8 @@ const STYLE = `
 .hive-tour:popover-open { display: block; }
 .hive-tour h3 { font-size: 15px; font-weight: 600; margin: 0 0 6px; padding-right: 48px; }
 .hive-tour p { margin: 0 0 10px; color: #e2ddd2; }
+.hive-tour p.teams { color: #a9a397; font-size: 12px; }
+.hive-tour p.teams b { color: #f3c744; font-weight: 600; }
 .hive-tour .count { position: absolute; top: 14px; right: 16px; font-size: 12px; color: #a9a397; }
 .hive-tour .row { display: flex; align-items: center; gap: 8px; }
 .hive-tour .row .grow { flex: 1; }
@@ -124,12 +126,15 @@ export class Tour {
     // No Back on the first step, nor to the welcome from the step after it.
     const first = this.index === 0 || (this.index === 1 && this.steps[0].id === "welcome");
     if (step.open) openPanel(step.open);
+    // Where the tour is, for a page that reloads mid-way (a branch switch).
+    if (step.id !== "welcome") remember(this.name, { step: step.id });
     const count = this.steps.length > 1 && step.id !== "welcome" ? `${this.index}/${this.steps.length - 1}` : "";
     const parts = [
       el("span", { class: "arrow", hidden: "" }),
       count ? el("span", { class: "count" }, count) : null,
       el("h3", {}, step.title),
       el("p", {}, step.text),
+      step.teams ? el("p", { class: "teams" }, el("b", {}, "Fontra Hive for teams: "), step.teams) : null,
       el(
         "div",
         { class: "row" },
@@ -256,9 +261,12 @@ export class Tour {
   }
 }
 
-export function startTour(name = "editor") {
+// `stepId`: where to start, when not at the beginning.
+export function startTour(name = "editor", stepId = null) {
   if (!TOURS[name]) return null;
-  return new Tour(name).start();
+  const tour = new Tour(name);
+  const index = stepId ? tour.steps.findIndex((step) => step.id === stepId) : -1;
+  return tour.start(index < 0 ? 0 : index);
 }
 
 // Hive's panels and Fontra's editor are mounted once the font has loaded
@@ -280,11 +288,15 @@ function whenReady(selectors, timeout = 120000) {
 const EDITOR_READY = ['.sidebar-tab[data-sidebar-name="hive-history"]', ".hive-branch", "#edit-tools .tool-button"];
 
 // On a first visit: the welcome bubble, once the editor and Hive's panels
-// are up — never on a page still loading, or broken. Returns the tour, or
-// null when it was done or skipped before, or the editor never came up.
+// are up — never on a page still loading, or broken; a tour left mid-way
+// (the page reloaded on a branch switch) goes on from its step. Returns
+// the tour, or null when it was done or skipped before, or the editor
+// never came up.
 export async function offerTour(name = "editor", timeout = 120000) {
-  if (tourState(name) || !TOURS[name]) return null;
+  const done = (state) => state === "done" || state === "skipped";
+  if (done(tourState(name)) || !TOURS[name]) return null;
   if (!(await whenReady(EDITOR_READY, timeout))) return null;
-  if (tourState(name) || Tour.current) return null;
-  return startTour(name);
+  const state = tourState(name);
+  if (done(state) || Tour.current) return null;
+  return startTour(name, state && typeof state === "object" ? state.step : null);
 }

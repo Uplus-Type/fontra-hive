@@ -2,8 +2,10 @@
 //
 // Each step points at a part of Fontra's or Hive's interface (a CSS
 // selector in the editor's page; the step is skipped when it is absent),
-// may open a sidebar panel first, and may link to the page of Fontra's
-// documentation that says more. Selectors use the editor's ids and data
+// may open a sidebar panel first, may link to the page of Fontra's
+// documentation that says more, and may say what the same feature does
+// in Fontra Hive for teams (`teams`), so that nobody takes Try for the
+// whole of it. Selectors use the editor's ids and data
 // attributes, never its words, so the tour survives Fontra's languages.
 // The mechanics are in try-tour.js.
 //
@@ -79,24 +81,25 @@ export const TOURS = {
           "Every edit is a commit, kept in this browser. Hover a version to see it on the " +
           "canvas, click to restore it. Name a snapshot when a glyph is in a state worth " +
           "coming back to.",
+        teams: "the history says who changed what, and the font lives on a server you share.",
       },
       {
         id: "branches",
         anchor: ".hive-branch",
-        placement: "bottom",
+        placement: "left", // its menu drops below the pill: leave it room
         title: "Branches",
         text:
-          "Try a bolder H on a branch of your own. Merge it into main when it works, or drop " +
-          "it and nothing is lost.",
+          "Try a bolder H on a branch of your own — open the menu and make one now, the tour " +
+          "follows. Merge it into main when it works, or drop it and nothing is lost.",
+        teams: "everyone draws on their own branch, and a merge is reviewed before it reaches main.",
       },
       {
         id: "comments",
         anchor: '.sidebar-tab[data-sidebar-name="hive-comments"]',
         open: "hive-comments",
         title: "Comments",
-        text:
-          "Pin a note to a point in a glyph with the comment tool. In Fontra Hive for teams, " +
-          "that is how reviews happen — here, they are notes to yourself.",
+        text: "Pin a note to a point in a glyph with the comment tool — here, notes to yourself.",
+        teams: "comments are the review: a reviewer pins them, the designer answers and resolves them.",
       },
       {
         id: "bar",

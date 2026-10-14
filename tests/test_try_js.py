@@ -1205,6 +1205,21 @@ def test_the_tour_goes_round_the_editor(server, browser):
     page.keyboard.press("ArrowLeft")
     page.keyboard.press("ArrowRight")
     assert page.evaluate("window.__opened.length") == 4
+    assert bubble.locator("p.teams").inner_text().startswith("Fontra Hive for teams: ")
+    # Mid-way, the page may reload (a branch switch): the tour goes on from
+    # its step, not from the welcome.
+    assert page.evaluate("JSON.parse(localStorage.getItem('hive.try.tour'))") == {
+        "editor": {"step": "comments"}
+    }
+    page.keyboard.press("ArrowLeft")
+    assert bubble.locator("h3").inner_text() == "Branches"
+    assert bubble.get_attribute("data-side") == "left"  # its menu drops below the pill
+    page.evaluate("() => window.__t.end(null)")
+    assert page.locator(".hive-tour").count() == 0
+    page.evaluate("() => window.__tour.offerTour('editor').then((t) => { window.__t = t; })")
+    page.wait_for_selector(".hive-tour")
+    assert bubble.locator("h3").inner_text() == "Branches"
+    page.keyboard.press("ArrowRight")
     page.keyboard.press("ArrowRight")
     assert bubble.locator("h3").inner_text() == "Your fonts"
     assert bubble.get_attribute("data-side") == "top"
