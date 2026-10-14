@@ -512,6 +512,15 @@ or rebuilt: the pages are Fontra's own.
   the start page share). Fontra's own File › Export as downloads the font
   (`.fontra` or designspace + UFOs, zipped): the engine answers `exportAs`
   itself instead of the server.
+- `try-tour.js`, `try-tour-steps.js`: the guided tour for someone new to
+  Fontra. On a first visit to a font kept in the browser, a welcome bubble
+  offers it; the ? in the bar starts it again. Each step is a bubble beside
+  a part of the interface (found by the editor's ids and data attributes,
+  never its words; a step whose part is absent is skipped), with a ring
+  around it, the sidebar panel opened as it goes, and a link to the page of
+  docs.fontra.xyz that says more. Done or skipped is remembered in
+  localStorage (`hive.try.tour`). The bubble is a native popover (top
+  layer, above Fontra's overlays).
 - One Python for all the tabs of the site (a `SharedWorker`, where the
   browser has one): two windows on the same font are served by the same
   server and see each other's edits as they happen; each tab holds a Web

@@ -1110,3 +1110,151 @@ def test_a_new_font_opens_in_the_editor(server, browser):
     assert font == {"glyphs": [], "sources": ["Regular"], "axes": 0, "glyphSets": ["GF Latin Core"]}
     assert not errors
     context.close()
+
+
+# The parts of the editor's page the tour points at, without the editor.
+MOCK_EDITOR = """() => {
+  const add = (html) => document.body.insertAdjacentHTML("beforeend", html);
+  add('<canvas id="edit-canvas" style="position:fixed;left:200px;top:40px;width:800px;height:600px"></canvas>');
+  add('<div id="edit-tools" style="position:fixed;left:400px;top:50px;width:300px;height:30px"></div>');
+  for (const [name, left] of [["text-entry", 10], ["glyph-search", 10], ["designspace-navigation", 10],
+                              ["hive-history", 1300], ["hive-comments", 1300]]) {
+    add(`<div class="sidebar-tab" data-sidebar-name="${name}" style="position:fixed;left:${left}px;top:${100 + left % 7 * 40}px;width:30px;height:30px"></div>`);
+  }
+  add('<button class="hive-branch" style="position:fixed;left:900px;top:5px;width:80px;height:24px">main</button>');
+  add('<div class="hive-try" style="position:fixed;left:400px;bottom:14px;width:500px;height:40px"></div>');
+  window.__opened = [];
+  window.editorController = {
+    fontController: {},
+    toggleSidebar: (name) => {
+      window.__opened.push(name);
+      document.querySelector(`.sidebar-tab[data-sidebar-name="${name}"]`).classList.add("selected");
+    },
+  };
+}"""
+
+
+def test_the_tour_goes_round_the_editor(server, browser):
+    """The guided tour: offered once, a bubble beside each part of the
+    interface (a step whose part is absent is skipped), Back and Next, the
+    panels opened as it goes, remembered when done or skipped."""
+    context = browser.new_context(viewport={"width": 1400, "height": 850})
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.goto(f"{server}/bare.html")
+    page.evaluate(MOCK_EDITOR)
+    page.evaluate(
+        "() => import('/hive/try/try-tour.js').then((m) => { window.__tour = m; })"
+    )
+    page.wait_for_function("() => !!window.__tour")
+    # Offered on a first visit: the welcome bubble, centred, no ring.
+    page.evaluate("() => window.__tour.offerTour('editor').then((t) => { window.__t = t; })")
+    page.wait_for_selector(".hive-tour")
+    bubble = page.locator(".hive-tour")
+    assert bubble.locator("h3").inner_text() == "Welcome to Fontra"
+    assert page.locator(".hive-tour-ring").is_hidden()
+    assert bubble.get_by_role("button", name="Take the tour").count() == 1
+    assert bubble.get_by_role("button", name="Not now").count() == 1
+    box = bubble.bounding_box()
+    assert abs(box["x"] + box["width"] / 2 - 700) < 2
+    assert bubble.locator(".count").count() == 0
+
+    steps = page.evaluate("() => window.__t.steps.map((s) => s.id)")
+    assert steps == [
+        "welcome", "canvas", "text", "tools", "designspace", "history", "branches", "comments", "bar",
+    ]
+
+    # The canvas: the bubble inside it, near the bottom, no ring.
+    bubble.get_by_role("button", name="Take the tour").click()
+    assert bubble.locator("h3").inner_text() == "The canvas"
+    assert bubble.locator(".count").inner_text() == "1/8"
+    assert page.locator(".hive-tour-ring").is_hidden()
+    box = bubble.bounding_box()
+    assert 200 < box["x"] and box["x"] + box["width"] < 1000 and box["y"] + box["height"] < 640
+    assert bubble.locator("a.learn").get_attribute("href").startswith("https://docs.fontra.xyz/")
+    assert bubble.get_by_role("button", name="Back").count() == 0  # right after the welcome
+
+    # Preview text: the panel is opened, the ring is on its tab, the bubble to its right.
+    bubble.get_by_role("button", name="Next").click()
+    assert bubble.locator("h3").inner_text() == "Preview text"
+    assert page.evaluate("window.__opened") == ["text-entry"]
+    ring = page.locator(".hive-tour-ring").bounding_box()
+    assert abs(ring["x"] - (10 - 4)) < 1 and abs(ring["width"] - 38) < 1
+    assert bubble.get_attribute("data-side") == "right"
+    assert bubble.bounding_box()["x"] > 40
+
+    # Back, then on to the end; the keyboard works while the bubble has the focus.
+    bubble.get_by_role("button", name="Back").click()
+    assert bubble.locator("h3").inner_text() == "The canvas"
+    page.keyboard.press("ArrowRight")
+    assert bubble.locator("h3").inner_text() == "Preview text"
+    page.keyboard.press("ArrowRight")
+    assert bubble.locator("h3").inner_text() == "Tools"
+    assert bubble.get_attribute("data-side") == "bottom"
+    for _ in range(4):
+        page.keyboard.press("ArrowRight")
+    assert bubble.locator("h3").inner_text() == "Comments"
+    assert page.evaluate("window.__opened") == [
+        "text-entry", "designspace-navigation", "hive-history", "hive-comments",
+    ]
+    # Opening a panel already open does nothing.
+    page.keyboard.press("ArrowLeft")
+    page.keyboard.press("ArrowRight")
+    assert page.evaluate("window.__opened.length") == 4
+    page.keyboard.press("ArrowRight")
+    assert bubble.locator("h3").inner_text() == "Your fonts"
+    assert bubble.get_attribute("data-side") == "top"
+    assert bubble.locator(".count").inner_text() == "8/8"
+    assert bubble.get_by_role("button", name="Skip").count() == 0
+    bubble.get_by_role("button", name="Done").click()
+    assert page.locator(".hive-tour").count() == 0
+    assert page.locator(".hive-tour-ring").count() == 0
+    assert page.evaluate("localStorage.getItem('hive.try.tour')") == '{"editor":"done"}'
+
+    # Not offered again; the ? starts it again all the same; Escape skips.
+    assert page.evaluate("() => window.__tour.offerTour('editor')") is None
+    page.evaluate("() => window.__tour.startTour('editor')")
+    assert page.locator(".hive-tour h3").inner_text() == "Welcome to Fontra"
+    page.keyboard.press("Escape")
+    assert page.locator(".hive-tour").count() == 0
+    assert page.evaluate("localStorage.getItem('hive.try.tour')") == '{"editor":"skipped"}'
+
+    # A part of the interface that is absent: its step is left out.
+    page.evaluate("() => document.querySelector('.sidebar-tab[data-sidebar-name=\"hive-comments\"]').remove()")
+    page.evaluate("() => { window.__t = window.__tour.startTour('editor'); }")
+    assert page.evaluate("() => window.__t.steps.map((s) => s.id)") == [
+        "welcome", "canvas", "text", "tools", "designspace", "history", "branches", "bar",
+    ]
+    page.evaluate("() => window.__t.end('skipped')")
+    assert not errors
+    context.close()
+
+
+def test_the_tour_is_offered_in_the_editor(server, browser):
+    """On a font kept in the browser, the welcome bubble shows once the
+    editor and Hive's panels are up; the ? in the bar brings it back."""
+    _needsHiveInTheBrowser()
+    context = browser.new_context(viewport={"width": 1400, "height": 850})
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.goto(f"{server}/try")
+    page.wait_for_url("**project=local*", timeout=120000)
+    page.wait_for_selector(".hive-tour", timeout=90000)
+    assert page.locator(".hive-tour h3").inner_text() == "Welcome to Fontra"
+    page.get_by_role("button", name="Take the tour").click()
+    page.get_by_role("button", name="Next").click()
+    assert page.locator(".hive-tour h3").inner_text() == "Preview text"
+    assert page.locator('.sidebar-tab[data-sidebar-name="text-entry"]').get_attribute("class").find("selected") >= 0
+    page.keyboard.press("Escape")
+    assert page.locator(".hive-tour").count() == 0
+    page.reload()
+    page.wait_for_function("() => !!window.editorController?.fontController", timeout=90000)
+    page.wait_for_selector(".hive-branch", timeout=30000)
+    page.wait_for_timeout(1500)
+    assert page.locator(".hive-tour").count() == 0
+    page.get_by_role("button", name="Tour of the editor").click()
+    assert page.locator(".hive-tour h3").inner_text() == "Welcome to Fontra"
+    assert not errors
+    context.close()

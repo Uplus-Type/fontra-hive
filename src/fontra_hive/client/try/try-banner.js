@@ -77,6 +77,7 @@ import {
   emptyFont,
   freeName,
 } from "./try-common.js";
+import { offerTour, startTour } from "./try-tour.js";
 
 // Something to show on the canvas: the font's own letters.
 export function sampleText(glyphMap) {
@@ -468,6 +469,13 @@ function start() {
       },
       "Fontra Hive for teams"
     ),
+    isLocal
+      ? el(
+          "button",
+          { class: "close", type: "button", title: "Tour of the editor", "aria-label": "Tour of the editor", onclick: () => startTour("editor") },
+          "?"
+        )
+      : null,
     el(
       "button",
       { class: "close", type: "button", title: "Hide", "aria-label": "Hide", onclick: () => bar.classList.toggle("small") },
@@ -480,6 +488,8 @@ function start() {
       .then((info) => {
         name.textContent = info.name;
         startBranches();
+        // Someone new: the welcome bubble, once the editor is up.
+        offerTour("editor");
       })
       .catch(() => {
         name.textContent = "Font not found";
