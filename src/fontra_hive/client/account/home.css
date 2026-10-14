@@ -1,15 +1,38 @@
 /* Hive's home page: projects, organizations, profile. */
 body[data-page="home"] { display: block; align-items: stretch; }
+/* One bar for all of Hive's pages: the same height, logo, links and place for
+   the person's menu as the header of a deployment's site (fontrahive.com).
+   Hive's pages are dark (class="dark-theme" on <html>: core.css then gives
+   Fontra's dark colors); only the editor follows Fontra's theme setting. */
 .home-bar {
-  display: flex; align-items: center; gap: 2em; height: 44px; padding: 0 1.2em;
-  background: var(--top-bar-background-color, #eee); position: sticky; top: 0; z-index: 10;
+  --honey: #e9b02a;
+  display: flex; align-items: center; gap: 1rem 2rem; height: auto;
+  box-sizing: border-box; min-height: 3.75rem; line-height: 1.5;
+  padding: 0 clamp(1rem, 4vw, 2.5rem);
+  background: #222222e6; -webkit-backdrop-filter: saturate(1.4) blur(12px); backdrop-filter: saturate(1.4) blur(12px);
+  border-bottom: 1px solid #ffffff17; box-shadow: none;
+  position: sticky; top: 0; z-index: 10; font-size: 1rem;
 }
-.home-bar .brand { display: flex; align-items: center; gap: 0.5em; text-decoration: none; font-weight: 600; }
-.home-bar .brand img { width: 26px; }
-.home-bar nav { display: flex; gap: 1.2em; }
-.home-bar nav a { text-decoration: none; opacity: 0.65; padding: 0.3em 0; }
-.home-bar nav a.current { opacity: 1; border-bottom: 2px solid var(--fontra-red-color, #f11759); }
+.home-bar a { color: inherit; text-decoration: none; }
+.home-bar .brand { display: inline-flex; align-items: center; gap: 0.55rem; font-size: 1.1rem; font-weight: normal; white-space: nowrap; }
+.home-bar .brand img { width: 30px; height: 30px; }
+.home-bar nav { display: flex; gap: 1.6rem; font-size: 0.95rem; }
+.home-bar nav a { opacity: 0.78; white-space: nowrap; padding: 0.3rem 0; border-bottom: 2px solid transparent; }
+.home-bar nav a:hover { opacity: 1; color: var(--honey); }
+.home-bar nav a.current { opacity: 1; border-bottom-color: var(--honey); }
 .home-bar .hive-right { margin-left: auto; }
+.home-bar .hive-chip { margin-top: 0; } /* account.css gives buttons 0.25em */
+@media (max-width: 760px) {
+  .home-bar { flex-wrap: wrap; padding-top: 0.6rem; padding-bottom: 0; }
+  .home-bar nav { order: 3; width: 100%; overflow-x: auto; scrollbar-width: none; gap: 1.3rem; padding-bottom: 0.35rem; }
+}
+
+/* The page, in the dark of the site: cards on #222, without shadows. */
+body[data-page="home"] { background: #222; color: white; color-scheme: dark; }
+body[data-page="home"] .project-card, body[data-page="home"] .panel {
+  background: #2a2a2a; border: 1px solid #ffffff1c; box-shadow: none;
+}
+body[data-page="home"] .project-card:hover { outline: none; border-color: #e9b02a66; }
 
 main { max-width: 64em; margin: 0 auto; padding: 1.5em 1.2em 4em; }
 main h2 { font-size: 1.35em; margin: 0.6em 0 0.8em; display: flex; align-items: center; gap: 0.6em; }

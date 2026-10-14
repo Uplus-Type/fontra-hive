@@ -53,3 +53,16 @@ def test_try_fontra_opens_in_a_new_tab():
                 link,
             )
     assert found
+
+
+def test_hives_pages_are_dark_with_the_sites_bar():
+    # Hive's pages are dark whatever the system theme (core.css: html.dark-theme);
+    # only Fontra's editor follows its own theme setting. The home page's bar has
+    # the height and look of a deployment's site header (fontrahive.com).
+    for page in sorted(ACCOUNT.glob("*.html")):
+        assert '<html class="dark-theme">' in page.read_text(
+            encoding="utf-8"
+        ), page.name
+    css = (ACCOUNT / "home.css").read_text(encoding="utf-8")
+    assert "min-height: 3.75rem" in css
+    assert 'body[data-page="home"] { background: #222' in css
