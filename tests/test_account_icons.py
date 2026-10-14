@@ -37,3 +37,19 @@ def test_the_sign_in_page_is_the_plugins_own():
     for element in ("login", "request", "request-open", "request-sent", "waitlist"):
         assert f'id="{element}"' in html, element
     assert not (ACCOUNT.parent / "landing").exists()
+
+
+def test_try_fontra_opens_in_a_new_tab():
+    # Try Fontra is another site (try.fontrahive.com): the account pages stay
+    # open behind it. rel="noopener": the new tab cannot reach this one.
+    found = 0
+    for page in sorted(ACCOUNT.glob("*.html")):
+        for link in re.findall(
+            r'<a [^>]*href="/try[^"]*"[^>]*>', page.read_text("utf-8")
+        ):
+            found += 1
+            assert 'target="_blank"' in link and 'rel="noopener"' in link, (
+                page.name,
+                link,
+            )
+    assert found
