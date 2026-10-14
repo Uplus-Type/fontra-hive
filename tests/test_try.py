@@ -61,7 +61,6 @@ def test_only_the_demo_project_is_a_try_request():
     assert TRY_PROJECT == "demo:MutatorSans" and "/" not in TRY_PROJECT
     assert _isTryRequest(request(TRY_PROJECT), "editor")
     assert _isTryRequest(request(TRY_PROJECT), "fontoverview")
-    assert not _isTryRequest(request(TRY_PROJECT), "applicationsettings")
     assert not _isTryRequest(request("jeremie/Demo"), "editor")
     assert not _isTryRequest(request(), "editor")
     # Fonts kept in the visitor's browser.
@@ -69,6 +68,35 @@ def test_only_the_demo_project_is_a_try_request():
     assert _isTryRequest(request("local:0123456789ab"), "fontinfo")
     assert not _isTryRequest(request("local:../x"), "editor")
     assert not _isTryRequest(request("local:0123456789AB"), "editor")
+
+
+def test_settings_is_a_try_page_when_opened_from_try(monkeypatch):
+    """Fontra's menu opens Settings with no project: it is Try's when
+    opened from a page of Try (the Referer), or on Try's own site."""
+    monkeypatch.delenv("HIVE_TRY_URL", raising=False)
+    settings = "applicationsettings"
+    assert _isTryRequest(request("local:0123456789ab"), settings)
+    assert not _isTryRequest(request(), settings)
+    fromTry = request()
+    fromTry.headers = {"Referer": "http://localhost:8000/editor.html?project=local%3A0123456789ab%40bold"}
+    assert _isTryRequest(fromTry, settings)
+    fromDemo = request()
+    fromDemo.headers = {"Referer": "http://localhost:8000/editor.html?project=demo%3AMutatorSans"}
+    assert _isTryRequest(fromDemo, settings)
+    fromHive = request()
+    fromHive.headers = {"Referer": "http://localhost:8000/editor.html?project=jeremie%2FDemo"}
+    assert not _isTryRequest(fromHive, settings)
+    elsewhere = request()
+    elsewhere.headers = {"Referer": "https://example.com/editor.html?project=local%3A0123456789ab"}
+    assert not _isTryRequest(elsewhere, settings)
+    # Only Settings goes without a project.
+    fromTry.headers = dict(fromTry.headers)
+    assert not _isTryRequest(fromTry, "fontinfo")
+    monkeypatch.setenv("HIVE_TRY_URL", "https://try.example.com")
+    onTry = request()
+    onTry.host = "try.example.com"
+    assert _isTryRequest(onTry, settings)
+    assert not _isTryRequest(onTry, "editor")
 
 
 def test_try_pages_need_no_session(manager):  # noqa: F811

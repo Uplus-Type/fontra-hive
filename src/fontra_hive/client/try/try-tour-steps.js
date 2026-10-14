@@ -1,118 +1,60 @@
-// Fontra Hive, "Try Fontra": what the guided tours say, step by step.
+// Fontra Hive, "Try Fontra": the tours and lessons, in the order the ?
+// menu lists them. Each lives in a file of its own, in tours/; the
+// mechanics are in try-tour.js, the menu in try-tour-menu.js.
 //
-// Each step points at a part of Fontra's or Hive's interface (a CSS
-// selector in the editor's page; the step is skipped when it is absent),
-// may open a sidebar panel first, may link to the page of Fontra's
-// documentation that says more, and may say what the same feature does
-// in Fontra Hive for teams (`teams`), so that nobody takes Try for the
-// whole of it. Selectors use the editor's ids and data
-// attributes, never its words, so the tour survives Fontra's languages.
-// The mechanics are in try-tour.js.
+// A tour: {title, kind: "tour" | "lesson", minutes, about (one line for
+// the menu), view (the page it starts on, "editor" by default), anyFont
+// (it goes on in another font, the one it makes), then (the tour offered
+// after the last step), steps}.
+//
+// A step:
+//   id          its name, remembered when the page reloads mid-way
+//   title       the element's name as Fontra shows it in English
+//   text        what the bubble says
+//   anchor      a CSS selector ("a >>> b": b in a's shadow root); the step is
+//               left out when it is absent from its page (unless it has
+//               `until`); none: the bubble is centred
+//   placement   right | left | top | bottom | inside-top | inside-bottom |
+//               inside-right; by default beside the anchor, towards the middle
+//   offset      [dx, dy] added to the bubble's place
+//   ring        false: no ring around the anchor
+//   open        the editor's sidebar panel to open first
+//   view, hash  the page it is on (editor, fontoverview, fontinfo,
+//               applicationsettings) and its panel (#axes-panel…): from
+//               another page, the bubble offers to open it
+//   until       a lesson's step: ({editor, fontController, sceneSettings,
+//               hiveTry}) => true (or a promise of it) once it is done; see
+//               tours/lib.js
+//   learn       the page of docs.fontra.xyz that says more
+//   teams       what Fontra Hive for teams does more
+//   next, skip, go   the buttons' words, when not Next, Skip, "Open …"
+//
+// How to write them:
+// - One bubble, one idea, 25 to 45 words, in the imperative; the title is
+//   the element's name as Fontra shows it in English.
+// - The first sentence says what it is for, the second how to use it, the
+//   third (if any) the trap to avoid.
+// - `learn` only to a page that really adds something; `teams` only where
+//   the server version really does more — never selling in the main text.
+// - What Try lacks is said once, where one would look for it: no OTF
+//   (export), no live collaboration (branches), fonts in this browser only
+//   (Your fonts).
+// - Anchors: ids and data-* attributes, never the words (Fontra is
+//   translated); check each one in the tests' mock pages and in the real
+//   editor.
+// - No clicks made for the visitor on Fontra's menus: say where to click.
+// - English only for now; the Display language step of Settings says so.
 //
 // Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
 
-const DOCS = "https://docs.fontra.xyz";
+import { editor } from "./tours/editor.js";
+import { firstFont } from "./tours/first-font.js";
+import { fromGlyphs } from "./tours/from-glyphs.js";
+import { fromRoboFont } from "./tours/from-robofont.js";
 
 export const TOURS = {
-  // Around the editor: five minutes on the example font, Fontra first,
-  // then what Hive adds.
-  editor: {
-    title: "Around the editor",
-    steps: [
-      {
-        id: "welcome",
-        title: "Welcome to Fontra",
-        text:
-          "This is Fontra, the font editor, running entirely in your browser, with Fontra Hive " +
-          "for history, snapshots, branches and comments. Nothing leaves your computer. " +
-          "A two-minute tour?",
-        next: "Take the tour",
-        skip: "Not now",
-      },
-      {
-        id: "canvas",
-        anchor: "#edit-canvas",
-        placement: "inside-bottom",
-        ring: false,
-        title: "The canvas",
-        text:
-          "Here is MutatorSans, a small variable font to play with. Double-click a glyph to " +
-          "edit its outline; double-click an empty grey place to create that glyph. Scroll to " +
-          "pan, pinch or ⌘-scroll to zoom.",
-        learn: DOCS + "/reference/editor-view/canvas/glyph-editor/",
-      },
-      {
-        id: "text",
-        anchor: '.sidebar-tab[data-sidebar-name="text-entry"]',
-        open: "text-entry",
-        title: "Preview text",
-        text:
-          "Type any text here and the canvas shows it in your font — including the glyphs " +
-          "you have not drawn yet.",
-        learn: DOCS + "/reference/editor-view/panels/preview-text",
-      },
-      {
-        id: "tools",
-        anchor: "#edit-tools",
-        placement: "bottom",
-        title: "Tools",
-        text:
-          "Pointer, pen, shapes, knife, ruler, hand, metrics — click and hold a tool for its " +
-          "variants. The shape tool draws rectangles and ellipses: the quickest way to a first " +
-          "letter.",
-        learn: DOCS + "/reference/editor-view/tools/",
-      },
-      {
-        id: "designspace",
-        anchor: '.sidebar-tab[data-sidebar-name="designspace-navigation"]',
-        open: "designspace-navigation",
-        title: "Designspace",
-        text:
-          "MutatorSans has Weight and Width axes. Drag the sliders: the canvas interpolates " +
-          "between the sources. Each source is a drawing; edit any of them.",
-        learn: DOCS + "/reference/editor-view/panels/designspace",
-      },
-      {
-        id: "history",
-        anchor: '.sidebar-tab[data-sidebar-name="hive-history"]',
-        open: "hive-history",
-        title: "Glyph history — Fontra Hive",
-        text:
-          "Every edit is a commit, kept in this browser. Hover a version to see it on the " +
-          "canvas, click to restore it. Name a snapshot when a glyph is in a state worth " +
-          "coming back to.",
-        teams: "the history says who changed what, and the font lives on a server you share.",
-      },
-      {
-        id: "branches",
-        anchor: ".hive-branch",
-        placement: "left", // its menu drops below the pill: leave it room
-        title: "Branches",
-        text:
-          "Try a bolder H on a branch of your own — open the menu and make one now, the tour " +
-          "follows. Merge it into main when it works, or drop it and nothing is lost.",
-        teams: "everyone draws on their own branch, and a merge is reviewed before it reaches main.",
-      },
-      {
-        id: "comments",
-        anchor: '.sidebar-tab[data-sidebar-name="hive-comments"]',
-        open: "hive-comments",
-        title: "Comments",
-        text: "Pin a note to a point in a glyph with the comment tool — here, notes to yourself.",
-        teams: "comments are the review: a reviewer pins them, the designer answers and resolves them.",
-      },
-      {
-        id: "bar",
-        anchor: ".hive-try",
-        placement: "top",
-        title: "Your fonts",
-        text:
-          "Open your own .fontra, UFO, Glyphs or TrueType files here, or start a new font with " +
-          "a Latin glyph set. File › Export as saves what you did: .fontra, UFOs, or a compiled " +
-          "TTF. This tour is behind the ? whenever you want it again.",
-        learn: DOCS + "/reference/menu/file/export-as",
-        next: "Done",
-      },
-    ],
-  },
+  editor,
+  "first-font": firstFont,
+  "from-glyphs": fromGlyphs,
+  "from-robofont": fromRoboFont,
 };

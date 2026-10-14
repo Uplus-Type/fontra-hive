@@ -27,7 +27,7 @@ import os
 import time
 from functools import partial
 from html import escape as html_escape
-from urllib.parse import quote, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 import pathlib
 import re
 import shutil
@@ -1736,7 +1736,10 @@ TRY_PROJECT = "demo:MutatorSans"
 TRY_LOCAL_PREFIX = "local:"
 # A font kept in the browser, on a branch or not ("local:<id>@<branch>").
 TRY_LOCAL_PATTERN = re.escape(TRY_LOCAL_PREFIX) + r"[0-9a-f]{12}(@[^/@]+)?"
-TRY_VIEWS = ("editor", "fontoverview", "fontinfo")
+TRY_VIEWS = ("editor", "fontoverview", "fontinfo", "applicationsettings")
+# Pages of Fontra about no font: Fontra's menu opens them without a project
+# ("/applicationsettings.html#theme-settings-panel").
+TRY_FONTLESS_VIEWS = ("applicationsettings",)
 # The start page: the font last kept in the browser, else the example.
 TRY_START = "/try"
 # The example with nothing kept, Fontra alone, in JavaScript: where the
@@ -1818,13 +1821,31 @@ def pyodideURL() -> str | None:
     return os.environ.get("HIVE_PYODIDE_URL") or None
 
 
+def _isTryProject(project: str) -> bool:
+    return project == TRY_PROJECT or re.fullmatch(TRY_LOCAL_PATTERN, project) is not None
+
+
 def _isTryRequest(request, view: str) -> bool:
+    """A page of Try Fontra: one of TRY_VIEWS on the demo or a font kept in
+    the browser. Settings, which is about no font, is Try's on Try's own
+    site, or when it is opened from a page of Try (its project in the
+    address, or in the Referer: Fontra's menu opens it without one)."""
+    if view not in TRY_VIEWS:
+        return False
     query = getattr(request, "query", None) or {}
-    project = query.get("project") or ""
-    return view in TRY_VIEWS and (
-        project == TRY_PROJECT
-        or re.fullmatch(TRY_LOCAL_PATTERN, project) is not None
-    )
+    if _isTryProject(query.get("project") or ""):
+        return True
+    if view not in TRY_FONTLESS_VIEWS:
+        return False
+    if _onTryHost(request):
+        return True
+    headers = getattr(request, "headers", None) or {}
+    referer = urlsplit(headers.get("Referer") or "")
+    host = (getattr(request, "host", "") or "").lower()
+    if referer.netloc and referer.netloc.lower() != host:
+        return False
+    refererProject = parse_qs(referer.query).get("project", [""])[0]
+    return _isTryProject(refererProject)
 
 
 def injectTryScripts(
