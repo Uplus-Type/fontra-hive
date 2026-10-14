@@ -35,6 +35,12 @@ const NARROW = 900; // px: below, the bubble sits at the bottom of the screen
 const STALE = 3600 * 1000; // a tour asked for on another page, so long ago, is let go
 
 export const VIEWS = ["editor", "fontoverview", "fontinfo", "applicationsettings"];
+const VIEW_NAMES = {
+  editor: "the editor",
+  fontoverview: "Font overview",
+  fontinfo: "Font Info",
+  applicationsettings: "Settings",
+};
 const VIEW_BUTTONS = {
   editor: "Back to the editor",
   fontoverview: "Open Font overview",
@@ -61,13 +67,15 @@ const STYLE = `
 .hive-tour .count { position: absolute; top: 14px; right: 16px; font-size: 12px; color: #a9a397; }
 .hive-tour .row { display: flex; align-items: center; gap: 8px; }
 .hive-tour .row .grow { flex: 1; }
-.hive-tour button, .hive-tour a.learn {
+.hive-tour p.more { margin: -4px 0 10px; }
+.hive-tour p.more a { color: #f3c744; text-decoration: none; font-size: 12px; }
+.hive-tour p.more a:hover { text-decoration: underline; }
+.hive-tour button {
   font: inherit; color: #222; background: #f3c744; border: 0; border-radius: 999px;
   padding: 5px 12px; cursor: pointer; text-decoration: none; white-space: nowrap;
 }
 .hive-tour button.plain, .hive-tour button.waiting { background: transparent; color: #f4f1ea; border: 1px solid #555; }
 .hive-tour button.link { background: transparent; color: #a9a397; border: 0; padding: 5px 4px; }
-.hive-tour a.learn { background: transparent; color: #f3c744; border: 1px solid #5a4d1e; }
 .hive-tour .arrow { position: absolute; width: 14px; height: 14px; background: #222; transform: rotate(45deg); }
 .hive-tour[data-side="right"] .arrow { left: -7px; top: 20px; }
 .hive-tour[data-side="left"] .arrow { right: -7px; top: 20px; }
@@ -137,7 +145,7 @@ function writeNow(now) {
 export const TAB = (() => {
   const fresh = () => Math.random().toString(36).slice(2, 10);
   try {
-    const key = "hive.try.tab:" + window.name;
+    const key = "hive.try.tab:" + (window.name.startsWith("fontra.") ? window.name : "");
     let justOpened = false;
     try {
       justOpened = !!window.opener && history.length === 1 && performance.getEntriesByType("navigation")[0]?.type === "navigate";
@@ -231,17 +239,14 @@ function viewURL(view, hash) {
   return url.toString();
 }
 
-// The window that opened this one, when it shows `view` of this site.
-function openerOn(view) {
-  try {
-    const opener = window.opener;
-    if (opener && !opener.closed && opener.location.origin === location.origin && viewOf(opener.location.pathname) === view) {
-      return opener;
-    }
-  } catch (error) {
-    // another site
-  }
-  return null;
+// The editor's tab of a font is given a name while a tour shows there (Fontra
+// does not name it), so that Font Info or Settings can bring it back.
+function editorWindowName(project = projectHere()) {
+  return "hive.try.editor." + (project || "").split("@")[0];
+}
+
+function nameEditorWindow() {
+  if (!window.name || window.name.startsWith("hive.try.editor.")) window.name = editorWindowName();
 }
 
 // Open a page the way Fontra does: Font overview and Font Info in a window
@@ -255,10 +260,24 @@ function navigate(view, hash) {
   else if (view === "fontinfo" || view === "fontoverview") target = `fontra.${view}.${project}`;
   else if (view === "applicationsettings") target = "fontra.applicationsettings";
   else if (view === "editor") {
-    const opener = openerOn("editor");
-    if (opener) {
-      opener.focus();
-      return "opener";
+    // The editor's tab when it is still open (it is not reloaded: what is
+    // open there stays); else a new one.
+    let editor = null;
+    try {
+      editor = window.open("", editorWindowName(project));
+    } catch (error) {
+      editor = null;
+    }
+    if (editor) {
+      let blank = false;
+      try {
+        blank = editor.location.href === "about:blank";
+      } catch (error) {
+        blank = false;
+      }
+      if (blank) editor.location.href = url;
+      editor.focus();
+      return "editor";
     }
   }
   const opened = window.open(url, target);
@@ -325,8 +344,12 @@ export class Tour {
     const view = stepView(this.tour, step);
     const last = this.index === this.steps.length - 1;
     // No Back on the first step, nor to the welcome from the step after it.
-    const first = this.index === 0 || (this.index === 1 && this.steps[0].id === "welcome");
+    const first =
+      this.index === 0 ||
+      (this.index === 1 && this.steps[0].id === "welcome") ||
+      (here && stepView(this.tour, this.steps[this.index - 1]) !== view);
     if (here) {
+      if (view === "editor") nameEditorWindow();
       selectPanel(step.hash);
       if (step.open) openPanel(step.open);
     }
@@ -342,14 +365,16 @@ export class Tour {
       el("span", { class: "arrow", hidden: "" }),
       count ? el("span", { class: "count" }, count) : null,
       el("h3", {}, step.title, el("span", { class: "check", "aria-label": "done" }, "✓")),
-      el("p", {}, step.text),
-      step.teams ? el("p", { class: "teams" }, el("b", {}, "Fontra Hive for teams: "), step.teams) : null,
+      // From another page, the step's text would be read too early: only
+      // where it goes on.
+      el("p", {}, here ? step.text : step.away || `The next step is in ${VIEW_NAMES[view]}: open it to go on.`),
+      here && step.teams ? el("p", { class: "teams" }, el("b", {}, "Fontra Hive for teams: "), step.teams) : null,
+      here && step.learn
+        ? el("p", { class: "more" }, el("a", { class: "learn", href: step.learn, target: "_blank", rel: "noopener" }, "Learn more ↗"))
+        : null,
       el(
         "div",
         { class: "row" },
-        step.learn
-          ? el("a", { class: "learn", href: step.learn, target: "_blank", rel: "noopener" }, "Learn more")
-          : null,
         el("span", { class: "grow" }),
         first ? null : el("button", { type: "button", class: "plain", onclick: () => this.back() }, "Back"),
         last
@@ -436,7 +461,7 @@ export class Tour {
       location.href = viewURL(view, step.hash);
       return;
     }
-    if (navigate(view, step.hash) === "opener") {
+    if (navigate(view, step.hash) === "editor") {
       // The browser may keep this tab in front: say where the tour went.
       setTimeout(() => {
         if (document.visibilityState !== "visible" || Tour.current || readNow()?.tab) return;

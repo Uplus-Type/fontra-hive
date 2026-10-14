@@ -1383,7 +1383,7 @@ def test_every_tour_follows_the_rules(server, browser):
     ids = {t["name"]: [s["id"] for s in t["steps"]] for t in tours}
     assert ids["first-font"] == [
         "welcome", "new-font", "create-h", "rectangles", "exact", "remove-overlaps", "width-h",
-        "the-o", "subtract", "axis", "black-source", "draw-black", "slider", "export",
+        "create-o", "ellipses", "width-o", "axis", "black-source", "draw-black", "slider", "export",
     ]
     assert ids["from-glyphs"] == [
         "welcome", "open", "text-view", "masters", "smart-components", "palette", "kerning",
@@ -1424,7 +1424,7 @@ def test_a_lesson_waits_until_each_step_is_done(server, browser):
     page.evaluate("() => { window.__t = window.__tour.startTour('first-font'); }")
     bubble = page.locator(".hive-tour")
     assert bubble.locator("h3").inner_text().startswith("Your first font")
-    assert page.evaluate("() => window.__t.steps.length") == 14  # none left out: they wait
+    assert page.evaluate("() => window.__t.steps.length") == 15  # none left out: they wait
     next_ = bubble.locator("button.next")
 
     # An empty font is there: done at once.
@@ -1449,7 +1449,8 @@ def test_a_lesson_waits_until_each_step_is_done(server, browser):
     # Three rectangles, rough; then exact; then fused; then the width.
     next_.click()
     assert bubble.locator("h3").inner_text().startswith("Shape Tool")
-    assert bubble.get_attribute("data-side") == "bottom"
+    assert bubble.get_attribute("data-side") == "right"  # its menu drops below the tool
+    assert bubble.locator("p.more a").inner_text() == "Learn more ↗"
     page.evaluate("() => window.__draw('H', [[50, 0, 100, 690], [400, 0, 120, 700], [50, 300, 480, 90]])")
     page.wait_for_function("document.querySelector('.hive-tour').classList.contains('done')")
     next_.click()
@@ -1464,20 +1465,27 @@ def test_a_lesson_waits_until_each_step_is_done(server, browser):
     page.evaluate("() => window.__draw('H', [[60, 0, 480, 700]])")
     page.wait_for_function("document.querySelector('.hive-tour').classList.contains('done')")
     next_.click()
-    assert bubble.locator("h3").inner_text().startswith("Advance width")
+    assert bubble.locator("h3").inner_text().startswith("Sidebearings")
     page.wait_for_timeout(400)
     assert next_.inner_text() == "I did it"
     page.evaluate("() => window.__draw('H', [[60, 0, 480, 700]], 600)")
     page.wait_for_function("document.querySelector('.hive-tour').classList.contains('done')")
 
-    # The o: two ovals turning the same way are not yet a counter.
+    # The o: created; two ovals turning the same way are not yet a counter,
+    # the inner one drawn the other way round is.
     next_.click()
-    page.evaluate("() => window.__draw('o', [[40, -10, 420, 520], [140, 90, 220, 320]])")
+    assert bubble.locator("h3").inner_text().startswith("Preview text")
+    page.evaluate("() => window.__draw('o', [])")
     page.wait_for_function("document.querySelector('.hive-tour').classList.contains('done')")
     next_.click()
-    assert bubble.locator("h3").inner_text().startswith("Subtract contours")
+    assert bubble.locator("h3").inner_text().startswith("Ellipse Tool")
+    page.evaluate("() => window.__draw('o', [[40, -10, 420, 520], [140, 90, 220, 320]])")
     page.wait_for_timeout(400)
     assert next_.inner_text() == "I did it"
+    page.evaluate("() => window.__draw('o', [[40, -10, 420, 520], [140, 90, -220, 320]])")
+    page.wait_for_function("document.querySelector('.hive-tour').classList.contains('done')")
+    next_.click()
+    assert bubble.locator("h3").inner_text().startswith("Sidebearings")
     page.evaluate("() => window.__draw('o', [[40, -10, 420, 520], [140, 90, -220, 320]], 500)")
     page.wait_for_function("document.querySelector('.hive-tour').classList.contains('done')")
 
@@ -1485,11 +1493,18 @@ def test_a_lesson_waits_until_each_step_is_done(server, browser):
     next_.click()
     assert bubble.locator("h3").inner_text().startswith("Axes")
     assert next_.inner_text() == "Open Font Info"
+    # Not the step's text yet (it is read on its page), nor its link.
+    assert bubble.locator("p").first.inner_text() == "The next step is in Font Info: open it to go on."
+    assert bubble.locator("p.more").count() == 0
+    # The buttons stay inside the bubble.
+    box = bubble.bounding_box()
+    row = bubble.locator(".row button.next").bounding_box()
+    assert row["x"] + row["width"] <= box["x"] + box["width"]
     assert page.locator(".hive-tour-ring").is_hidden()
     assert bubble.get_by_role("button", name="Back").count() == 1
     # "I did it" was never needed to go back and forth.
     bubble.get_by_role("button", name="Back").click()
-    assert bubble.locator("h3").inner_text().startswith("Subtract contours")
+    assert bubble.locator("h3").inner_text().startswith("Sidebearings")
     page.keyboard.press("Escape")
     assert page.evaluate("JSON.parse(localStorage.getItem('hive.try.tour'))") == {"first-font": "skipped"}
     assert page.evaluate("localStorage.getItem('hive.try.tour.now')") is None
@@ -1539,14 +1554,25 @@ def test_a_tour_goes_on_in_another_page(server, browser):
     assert there.locator("h3").inner_text().startswith("OpenType Feature Code")
     assert info.evaluate("window.__selected") == ["opentype-feature-code-panel"]
     assert info.locator("#opentype-feature-code-panel").is_visible()
-    # Back to Kerning: the editor's tab takes it back, this one lets it go.
+    # No Back to a step of another page: that is the other tab's.
     there.get_by_role("button", name="Back").click()
-    there.get_by_role("button", name="Back").click()
+    assert there.locator("h3").inner_text().startswith("Axes")
+    assert there.get_by_role("button", name="Back").count() == 0
+    # Back to the editor: its own tab, as it was (not a new one), takes the
+    # tour back; this one lets it go.
+    info.evaluate("() => window.__tour.startTour('first-font', 'black-source')")
+    assert there.locator("h3").inner_text().startswith("Sources")
+    there.locator("button.next").click()  # "I did it"
+    assert there.locator("h3").inner_text().startswith("Designspace")
     assert there.locator("button.next").inner_text() == "Back to the editor"
-    page.evaluate("() => window.__tour.resumeTour(5000)")  # (a hidden tab waits to be seen)
+    assert there.locator("p").first.inner_text() == "The next step is in the editor: open it to go on."
+    assert page.evaluate("window.name") == "hive.try.editor.local:0123456789ab"
+    page.evaluate("() => window.__marker = 'still here'")
     there.locator("button.next").click()
     page.wait_for_selector(".hive-tour")
-    assert page.locator(".hive-tour h3").inner_text().startswith("Kerning Tool")
+    assert page.locator(".hive-tour h3").inner_text().startswith("Designspace")
+    assert page.evaluate("window.__marker") == "still here"
+    assert len(context.pages) == 2
     info.wait_for_timeout(300)
     assert info.locator(".hive-tour").count() == 0
     # Ending it anywhere ends it everywhere.
@@ -1605,7 +1631,7 @@ def test_the_menu_lists_the_tours(server, browser):
     # The lesson going on: resumed at its step.
     rows.nth(1).click()
     assert menu.count() == 0
-    assert page.locator(".hive-tour h3").inner_text().startswith("Advance width")
+    assert page.locator(".hive-tour h3").inner_text().startswith("Sidebearings")
     # A tour done: from its start.
     page.click("#help")
     menu.locator('.row[data-tour="editor"]').click()

@@ -66,7 +66,7 @@ export const firstFont = {
     {
       id: "rectangles",
       anchor: '#edit-tools .tool-button[data-tool="shape-tool"]',
-      placement: "bottom",
+      placement: "right", // below the tool is its menu
       title: "Shape Tool",
       text:
         "Pick the Shape Tool, rectangle. Drag three rectangles on the H: a left stem, a right " +
@@ -80,8 +80,9 @@ export const firstFont = {
       open: "selection-transformation",
       title: "Transformation",
       text:
-        "Select each rectangle and type its Dimensions and position: stems 110 × 700 at x 60 " +
-        "and x 430, y 0; crossbar 480 × 100 at x 60, y 300.",
+        "Take the Pointer Tool and double-click a rectangle to select it whole. Here, type its " +
+        "Dimensions and move it: stems 110 × 700 at x 60 and x 430, y 0; crossbar 480 × 100 " +
+        "at x 60, y 300.",
       learn: DOCS + "/reference/editor-view/panels/transformations",
       until: async ({ fontController }) => near(pathBounds(await firstLayer(fontController, "H")), H_BOX),
     },
@@ -99,35 +100,48 @@ export const firstFont = {
       id: "width-h",
       anchor: '.sidebar-tab[data-sidebar-name="selection-info"]',
       open: "selection-info",
-      title: "Advance width",
+      title: "Sidebearings",
       text:
-        "Click an empty place of the canvas to select nothing, then set the Advance width to " +
-        "600 in Glyph info: 60 units of space on each side of the H.",
+        "In Glyph info, set both Sidebearings to 60: the Advance width follows by itself, 600. " +
+        "There is no need to select anything first.",
+      learn: DOCS + "/reference/editor-view/panels/glyph-info",
       until: async ({ fontController }) => (await firstLayer(fontController, "H"))?.xAdvance === 600,
     },
     {
-      id: "the-o",
-      anchor: '#edit-tools .tool-button[data-tool="shape-tool"]',
-      placement: "bottom",
-      title: "The o",
+      id: "create-o",
+      anchor: '.sidebar-tab[data-sidebar-name="text-entry"]',
+      open: "text-entry",
+      title: "Preview text",
       text:
-        "Add o to the preview text and create it. With the ellipse, draw an outer oval, 420 × 520 " +
-        "at x 40, y −10, and an inner one, 220 × 320 at x 140, y 90.",
-      until: async ({ fontController }) => contourCount(await firstLayer(fontController, "o")) >= 2,
+        "Click in the preview text, in the left column, and type o. Double-click its grey place " +
+        "once to create the glyph, then again to edit it. Any name works too: type a slash and " +
+        "the name, /a.alt.",
+      learn: DOCS + "/reference/editor-view/panels/preview-text",
+      until: ({ fontController }) => hasGlyph(fontController, "o"),
     },
     {
-      id: "subtract",
-      anchor: '.sidebar-tab[data-sidebar-name="selection-transformation"]',
-      open: "selection-transformation",
-      title: "Subtract contours",
+      id: "ellipses",
+      anchor: '#edit-tools .tool-button[data-tool="shape-tool"]',
+      placement: "right", // below the tool is its menu
+      title: "Ellipse Tool",
       text:
-        "Select both ovals and click Subtract contours under Path Operations: the inner oval " +
-        "punches the counter. Then set the o's Advance width to 500.",
+        "Hold the Shape Tool down for its menu and pick the ellipse. Drag the outer oval, " +
+        "420 × 520 at x 40, y −10. Hold ⌘ while dragging the inner one, 220 × 320 at x 140, " +
+        "y 90: drawn the other way round, it is the counter.",
       until: async ({ fontController }) => {
-        const layer = await firstLayer(fontController, "o");
-        const turns = turnings(layer);
-        return turns.length === 2 && turns[0] !== turns[1] && layer.xAdvance === 500;
+        const turns = turnings(await firstLayer(fontController, "o"));
+        return turns.length === 2 && turns[0] !== turns[1];
       },
+    },
+    {
+      id: "width-o",
+      anchor: '.sidebar-tab[data-sidebar-name="selection-info"]',
+      open: "selection-info",
+      title: "Sidebearings",
+      text:
+        "Same for the o, in Glyph info: Sidebearings of 40 and 40, an Advance width of 500. " +
+        "Round letters sit a little closer to their neighbours than straight ones.",
+      until: async ({ fontController }) => (await firstLayer(fontController, "o"))?.xAdvance === 500,
     },
     {
       id: "axis",
@@ -167,9 +181,9 @@ export const firstFont = {
       open: "designspace-navigation",
       title: "Designspace",
       text:
-        "Black shows in grey here: a virtual source. Double-click it to copy the drawing there, " +
-        "then drag the stems' inner edges outward. Do the same for the o. Same points everywhere, " +
-        "or no interpolation.",
+        "Black is grey under Glyph sources: a virtual source. Double-click it to copy the o " +
+        "there. Hold the Pointer Tool down for Pointer Tool (scaling), select the counter and " +
+        "shrink it. Then the H: its stems' inner edges, outward.",
       learn: DOCS + "/reference/editor-view/panels/designspace",
       until: async ({ fontController }) =>
         (await glyphSources(fontController, "H")).length >= 2 &&
@@ -181,8 +195,9 @@ export const firstFont = {
       open: "designspace-navigation",
       title: "The slider",
       text:
-        "Type HoHoHo in the preview text and drag the Weight slider slowly from 400 to 900. " +
-        "Stop at 547: that weight exists now, and nobody drew it.",
+        "Type HoHoHo in the preview text and drag the Weight slider. Stop anywhere between 400 " +
+        "and 900: what you see is interpolated, not editable — but + under Glyph sources adds " +
+        "an editable source right there.",
     },
     {
       id: "export",
