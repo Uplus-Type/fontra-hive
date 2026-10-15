@@ -214,6 +214,11 @@ export async function refreshSession() {
 }
 
 // "owner/name" -> "/api/projects/owner/name" (hive-api's project routes)
+// A project's settings on Hive's home page ("owner/name": #project/owner/name).
+export function projectSettingsURL(projectName) {
+  return "/#project/" + projectName.split("/").map(encodeURIComponent).join("/");
+}
+
 export function hiveApiProjectPath(projectName) {
   return "/api/projects/" + projectName.split("/").map(encodeURIComponent).join("/");
 }
@@ -898,10 +903,21 @@ export class HiveViews {
       el("a", { href: "/" }, ["My projects"]),
       this.me.billingUrl ? el("a", { href: this.me.billingUrl }, ["Plan and billing"]) : null,
       this.project ? el("a", { onclick: () => { this.closeMenu(); this.openShare(); } }, ["Share…"]) : null,
+      this.mayOpenSettings() ? el("a", { href: projectSettingsURL(this.project.name) }, ["Project settings"]) : null,
       el("hr"),
       el("a", { href: "/hive/logout" }, ["Sign out"]), // a page that signs out, then goes home
     ]);
     this.showMenu(this.chip, rect);
+  }
+
+  // The project's settings are a section of Hive's home page (hive-api only),
+  // for those who may administer the project.
+  mayOpenSettings() {
+    return (
+      !!this.project &&
+      this.source === "hive-api" &&
+      !!this.access?.capabilities?.includes("administer")
+    );
   }
 
   showMenu(owner, rect) {

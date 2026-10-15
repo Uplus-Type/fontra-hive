@@ -249,6 +249,17 @@ def test_top_bar_chip_presence_and_menu(browser_and_url):
     page.close()
 
 
+def test_no_project_settings_on_the_development_server(browser_and_url):
+    """Project settings are a section of Hive's home page, which hive-dev has
+    not: the menu has no entry for them, even for an admin."""
+    access = {"role": "admin", "capabilities": ["administer", "edit", "invite", "read"]}
+    page = open_page(browser_and_url, data={"access": access})
+    page.click(".hive-chip")
+    assert "Project settings" not in page.inner_text(".hive-menu")
+    assert page.errors == []
+    page.close()
+
+
 def test_read_only_badge(browser_and_url):
     page = open_page(browser_and_url, role="observer")
     assert page.evaluate("document.querySelector('.hive-badge').textContent") == (

@@ -449,6 +449,7 @@ def open_share(browser_and_url, answers):
     page.goto(f"{base}/editor.html?project=uplustype/Mutator")
     page.evaluate("""async () => {
         const m = await import('/views/hive-views.js');
+        window.hiveModule = m;
         window.hive = await m.start();
       }""")
     page.evaluate("editorController.getFileMenuItems()[0].callback()")
@@ -611,6 +612,40 @@ def test_share_dialog_on_ones_free_project(browser_and_url):
     page.wait_for_selector(".hive-dialog .error")
     assert page.inner_text(".hive-dialog .error") == FREE_LIMIT
     assert page.errors == []
+    page.close()
+
+
+def open_user_menu(browser_and_url, access):
+    answers = share_answers()
+    answers["GET /api/hive/projects/uplustype%2FMutator/access"] = [200, access]
+    page = open_share(browser_and_url, answers)
+    page.keyboard.press("Escape")
+    page.click(".hive-chip")
+    page.wait_for_selector(".hive-menu .who")
+    return page
+
+
+def test_project_settings_in_the_user_menu(browser_and_url):
+    access = {"role": "admin", "capabilities": ["administer", "edit", "invite", "read"]}
+    page = open_user_menu(browser_and_url, access)
+    links = page.evaluate(
+        "[...document.querySelectorAll('.hive-menu a')].map(a => [a.textContent, a.getAttribute('href')])"
+    )
+    assert links == [
+        ["My projects", "/"],
+        ["Share…", None],
+        ["Project settings", "/#project/uplustype/Mutator"],
+        ["Sign out", "/hive/logout"],
+    ]
+    assert page.evaluate(
+        "hiveModule.projectSettingsURL('u+type/My Font')"
+    ) == "/#project/u%2Btype/My%20Font"
+    assert page.errors == []
+    page.close()
+    # Without administer (a manager): no settings in the menu.
+    access = {"role": "manager", "capabilities": ["edit", "invite", "read"]}
+    page = open_user_menu(browser_and_url, access)
+    assert "Project settings" not in page.inner_text(".hive-menu")
     page.close()
 
 
