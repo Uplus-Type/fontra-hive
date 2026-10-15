@@ -27,7 +27,7 @@ import {
   LIMITED_TITLE,
   timeAgo,
 } from "../views/hive-views.js";
-import { issueLink, issueTitle, relativeTime } from "../plugin/comments.js";
+import { EDITOR_TAB_PREFIX, editorTabName, issueLink, issueTitle, relativeTime } from "../plugin/comments.js";
 
 const ROLES = ["observer", "reviewer", "designer", "manager", "admin"];
 const main = () => document.getElementById("main");
@@ -1297,7 +1297,11 @@ async function commentsSection(projectId) {
           ]),
           el("td", { class: "labels" }, (issue.labels || []).map((l) => el("span", { class: "label-chip" }, [l]))),
           el("td", {}, [
-            el("a", { href: issueLink(projectId, issue), title: `Open ${issue.glyph} in the editor, with this comment` }, [
+            el("a", {
+              href: issueLink(projectId, issue),
+              target: editorTabName(projectId), // one editor tab per project, reused
+              title: `Open ${issue.glyph} in the editor, with this comment`,
+            }, [
               el("button", { class: "secondary" }, ["Open glyph"]),
             ]),
           ]),
@@ -1746,6 +1750,13 @@ async function route() {
 }
 
 export async function start() {
+  // A tab that was an editor and came here (My projects…) is not one any
+  // more: "Open glyph" must not land in this very tab.
+  try {
+    if (window.name.startsWith(EDITOR_TAB_PREFIX)) window.name = "";
+  } catch (error) {
+    // nothing to do
+  }
   try {
     me = (await get("/api/me")).user;
   } catch (error) {

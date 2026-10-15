@@ -124,9 +124,11 @@ def answers():
     }
 
 
-def open_home(browser_and_url, hash="", extra=None):  # noqa: F811
+def open_home(browser_and_url, hash="", extra=None, init=None):  # noqa: F811
     browser, base = browser_and_url
     page = browser.new_page()
+    if init:
+        page.add_init_script(init)
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
     data = answers()
@@ -635,6 +637,66 @@ def test_project_comments(browser_and_url):  # noqa: F811
     page.fill("[data-filter=q]", "tight")
     assert numbers() == ["3"]
     assert "1 of 3 comments" in page.text_content("main")
+    page.close()
+
+
+# A stand-in for Fontra's editor: Hive's first script (register.js) keeps the
+# topic asked for in the tab's session storage and takes it out of the address.
+EDITOR = """<!doctype html><html><head><script src="/views/register.js"></script>
+<script>window.loadedAt = Date.now();</script></head><body>editor</body></html>"""
+
+
+def comments_page(browser_and_url, init=None):  # noqa: F811
+    hive = "/api/hive/projects/uplustype%2FMutator"
+    comments = {
+        "head": "h",
+        "you": {"username": "jeremie", "name": "Jérémie Hornus"},
+        "can": {"comment": True},
+        "members": [],
+        "issues": [comment(1, "A", text="Stem too thin"), comment(3, "B", text="Too tight")],
+    }
+    extra = {f"GET {hive}/comments": [200, comments]}
+    page = open_home(browser_and_url, "#project/uplustype/Mutator/comments", extra, init)
+    page.context.route(
+        lambda url: "/editor.html" in url,
+        lambda route: route.fulfill(content_type="text/html", body=EDITOR),
+    )
+    page.wait_for_selector("table.comments tr[data-number='1']")
+    return page
+
+
+def test_open_glyph_in_one_editor_tab_per_project(browser_and_url):  # noqa: F811
+    page = comments_page(browser_and_url)
+    link = "tr[data-number='1'] a"
+    assert page.get_attribute(link, "target") == "hive-editor-uplustype/Mutator"
+    with page.expect_popup() as popup:
+        page.click(link)
+    editor = popup.value
+    editor.wait_for_load_state()
+    pending = "JSON.parse(sessionStorage.getItem('hive.openIssue'))"
+    assert editor.evaluate("window.name") == "hive-editor-uplustype/Mutator"
+    assert editor.evaluate(pending) == {"project": "uplustype/Mutator", "number": "1"}
+    assert "text=%22%2FA%22" in editor.url and "hive-issue" not in editor.url
+    # The comments page stays; the next topic goes to the same editor tab,
+    # which loads it like the first: its glyph, and the topic for the plug-in.
+    first = editor.evaluate("window.loadedAt")
+    page.click("tr[data-number='3'] a")
+    editor.wait_for_function(f"window.loadedAt !== {first}")
+    assert editor.evaluate(pending) == {"project": "uplustype/Mutator", "number": "3"}
+    assert "text=%22%2FB%22" in editor.url
+    assert len(page.context.pages) == 2
+    assert page.url.endswith("#project/uplustype/Mutator/comments")
+    assert page.errors == []
+    page.close()
+
+
+def test_a_former_editor_tab_is_not_reused_for_the_editor(browser_and_url):  # noqa: F811
+    """An editor tab that went to the home page (My projects) keeps its name
+    across the visit: the page drops it, so that Open glyph opens a tab."""
+    page = comments_page(
+        browser_and_url, init="window.name = 'hive-editor-uplustype/Mutator';"
+    )
+    assert page.evaluate("window.name") == ""
     page.close()
 
 

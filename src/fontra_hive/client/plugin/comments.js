@@ -673,6 +673,15 @@ export function issueLink(projectName, issue, origin = window.location.origin) {
   return url.toString();
 }
 
+// The tab a page outside the editor opens a project's glyphs in: one per
+// project, reused at each click, so that the page stays open and no second
+// editor (and connection) opens on the same font. Loading a link there goes
+// to its glyph and topic like any other load (register.js, takePendingIssue).
+export const EDITOR_TAB_PREFIX = "hive-editor-";
+export function editorTabName(projectName) {
+  return EDITOR_TAB_PREFIX + parseProjectIdentifier(projectName).name;
+}
+
 const PENDING_ISSUE_KEY = "hive.openIssue";
 
 // The earlier texts of a message, newest first, from a topic's history
