@@ -210,6 +210,15 @@ def test_invitation_page_signs_up(browser_and_url):
     page.fill("#signup input[name=fullname]", "Zoé")
     page.fill("#signup input[name=password]", "a good passphrase")
     page.fill("#signup input[name=password2]", "another one!!")
+    # The terms are a box to tick: the browser keeps the form until it is.
+    page.click("#signup button[type=submit]")
+    assert page.evaluate(
+        "!document.querySelector('#signup input[name=terms]').validity.valid"
+    )
+    assert not page.evaluate(
+        "calls.some(c => c.path === '/api/invitations/signup')"
+    )
+    page.check("#signup input[name=terms]")
     page.click("#signup button[type=submit]")
     page.wait_for_function(
         "document.querySelector('#signup .error').textContent.length > 0"
@@ -226,6 +235,7 @@ def test_invitation_page_signs_up(browser_and_url):
         "username": "zoe",
         "name": "Zoé",
         "password": "a good passphrase",
+        "acceptTerms": True,
     }
     assert page.errors == []
     page.close()
@@ -417,8 +427,11 @@ def test_invitation_page_says_a_guest_account(browser_and_url):
         }""")
     page.wait_for_selector("#signup:not(.hidden)")
     assert page.is_visible("#signup .guest")
-    assert "free guest account" in page.inner_text("#signup .guest")
+    # True before subscriptions open (a guest account) and after (Free).
+    assert "free" in page.inner_text("#signup .guest")
+    assert "guest" not in page.inner_text("#signup .guest")
     assert page.is_visible("#signup a[href='/charter']")
+    assert page.is_visible("#signup label.check input[name=terms][required]")
     assert page.errors == []
     page.close()
 
@@ -449,10 +462,24 @@ def test_share_dialog_admins_invite_new_addresses_as_guests(browser_and_url):
     members = answers[f"GET {BASE}/members"][1]
     members["roles"] = ["observer", "reviewer", "designer", "manager", "admin"]
     members["inviteNew"] = ["observer", "reviewer"]
-    members["members"][2]["guest"] = True  # Ana: a guest, reviewer at most
+    members["members"][2]["guest"] = True  # Ana: reviewer at most (a guest, or no plan)
+    members["members"].append(
+        {
+            "username": "tom",
+            "name": "Tom Weber",
+            "email": "t@x",
+            "role": "designer",
+            "via": "collaborator",
+            "collaboratorRole": "designer",
+            "guest": True,  # a designer whose role cannot be used here for now
+        }
+    )
     page = open_share(browser_and_url, answers)
     ana = page.inner_text(".hive-member[data-username='ana']")
-    assert "guest" in ana
+    assert "reviewer at most" not in ana and "guest" not in ana  # her menu says it
+    tom = page.inner_text(".hive-member[data-username='tom']")
+    assert "reviewer at most" in tom
+    assert page.query_selector("select[aria-label='Role of Tom Weber']") is None
     choices = page.evaluate(
         "[...document.querySelectorAll(\"select[aria-label='Role of Ana López'] option\")]"
         ".map(o => o.value)"
@@ -464,7 +491,7 @@ def test_share_dialog_admins_invite_new_addresses_as_guests(browser_and_url):
     # Default role designer: a new address needs reviewer or observer.
     assert "only be invited as reviewer or observer" in page.inner_text(".guest-line")
     page.select_option(".hive-dialog .add select", "reviewer")
-    assert "will get a free guest account" in page.inner_text(".guest-line")
+    assert "will open a free account" in page.inner_text(".guest-line")
     page.click(".hive-dialog .add button")
     page.wait_for_function(
         f"calls.some(c => c.path === '{BASE}/invitations' && c.method === 'POST')"
@@ -507,4 +534,91 @@ def test_guest_badge_in_the_user_menu(browser_and_url):
     page.click(".hive-chip")
     page.wait_for_selector(".hive-menu .hive-guest-badge")
     assert page.inner_text(".hive-menu .hive-guest-badge") == "Guest"
+    page.close()
+
+
+# --- the plan Free (hive-api from the opening of subscriptions) ----------------------
+
+
+def menu_badge(browser_and_url, user):
+    answers = share_answers()
+    answers["GET /api/me"] = [
+        200,
+        {"user": {"username": "fabio", "name": "Fabio Rossi", "email": "f@x", **user}},
+    ]
+    page = open_share(browser_and_url, answers)
+    page.keyboard.press("Escape")
+    page.click(".hive-chip")
+    page.wait_for_selector(".hive-menu .who")
+    badge = page.query_selector(".hive-menu .hive-guest-badge")
+    text = badge.inner_text() if badge else None
+    page.close()
+    return text
+
+
+def test_plan_badges_in_the_user_menu(browser_and_url):
+    # Free's alias in accountType is "guest": level comes first.
+    for level, alias, badge in [
+        ("free", "guest", "Free"),
+        ("guest", "guest", "Guest"),
+        ("solo", "full", "Solo"),
+        ("studio", "full", "Studio"),
+    ]:
+        user = {"level": level, "accountType": alias}
+        assert menu_badge(browser_and_url, user) == badge
+    trial = {"level": "solo", "trial": {"daysLeft": 12, "endsAt": "2026-11-01"}}
+    assert menu_badge(browser_and_url, trial) == "Trial · 12 days left"
+    assert menu_badge(browser_and_url, {}) is None
+
+
+FREE_LIMIT = (
+    "Free includes one designer, one reviewer and one observer. "
+    "Subscribe to Solo to add more."
+)
+
+
+def free_share_answers(free_project):
+    answers = share_answers()
+    answers["GET /api/me"] = [
+        200,
+        {
+            "user": {
+                "username": "fabio",
+                "name": "Fabio Rossi",
+                "email": "f@x",
+                "level": "free",
+                "accountType": "guest",
+                "ownPlan": False,
+                "freeProject": free_project,
+                "freeProjectToChoose": False,
+                "billingUrl": "/billing",
+            }
+        },
+    ]
+    answers[f"POST {BASE}/invitations"] = [403, {"detail": FREE_LIMIT}]
+    return answers
+
+
+def test_share_dialog_on_ones_free_project(browser_and_url):
+    page = open_share(browser_and_url, free_share_answers("uplustype/Mutator"))
+    line = page.query_selector(".hive-dialog .free-line")
+    assert line is not None
+    assert FREE_LIMIT in line.inner_text()
+    assert line.query_selector("a").get_attribute("href") == "/billing"
+    # Over the limits, hive-api says no, and the dialog says why.
+    page.fill(".hive-dialog .add input", "zoe")
+    page.click(".hive-dialog .add button")
+    page.wait_for_selector(".hive-dialog .error")
+    assert page.inner_text(".hive-dialog .error") == FREE_LIMIT
+    assert page.errors == []
+    page.close()
+
+
+def test_share_dialog_elsewhere_has_no_free_line(browser_and_url):
+    page = open_share(browser_and_url, free_share_answers("fabio/Other"))
+    assert page.query_selector(".hive-dialog .free-line") is None
+    page.close()
+    # Before subscriptions open: no Free project, no line.
+    page = open_share(browser_and_url, share_answers())
+    assert page.query_selector(".hive-dialog .free-line") is None
     page.close()

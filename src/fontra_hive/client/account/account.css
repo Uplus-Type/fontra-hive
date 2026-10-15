@@ -32,6 +32,8 @@ form, .card {
 }
 label { display: flex; flex-direction: column; gap: 0.3em; font-size: 0.9em; }
 label small { opacity: 0.6; }
+label.check { flex-direction: row; align-items: flex-start; gap: 0.6em; line-height: 1.4; }
+label.check input { margin: 0.2em 0 0; padding: 0; flex: none; }
 input, textarea, input[type="password"] {
   font: inherit; font-size: 1em; padding: 0.5em 0.6em; border-radius: 0.4em;
   border: 1px solid #8884;

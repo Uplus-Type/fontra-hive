@@ -22,6 +22,9 @@ import {
   openMergeDialog,
   openRestoreBranchDialog,
   openShareDialog,
+  planLabel,
+  LIMITED_LABEL,
+  LIMITED_TITLE,
   timeAgo,
 } from "../views/hive-views.js";
 import { issueLink, issueTitle, relativeTime } from "../plugin/comments.js";
@@ -159,6 +162,9 @@ function projectCard(p) {
     el("div", { class: "description" }, [p.description || ""]),
     el("div", { class: "foot" }, [
       el("span", { class: `badge ${p.role}` }, [p.role]),
+      p.id === me?.freeProject
+        ? el("span", { class: "badge free-project", title: "The project you keep editing on Free" }, ["Free project"])
+        : null,
       el("span", { class: "comment-count", "data-comments": p.id }),
       el("button", {
         class: "link-button",
@@ -180,11 +186,12 @@ async function projectsSection() {
   const content = [
     el("h2", {}, [
       el("span", { class: "grow" }, ["Projects", levelBadge()]),
-      isGuest() ? null : el("a", { href: "#new" }, [el("button", {}, ["New project"])]),
+      mayOfferNewProject() ? el("a", { href: "#new" }, [el("button", {}, ["New project"])]) : null,
     ]),
     ...planNotices(),
   ];
   if (isGuest()) content.push(guestNote());
+  if (me?.freeProjectToChoose) content.push(freeChooser(projects));
   if (!projects.length && isGuest()) {
     content.push(el("p", { class: "empty" }, ["No project yet: the projects you are invited to appear here."]));
   } else if (!projects.length) {
@@ -283,19 +290,74 @@ async function deleteForGood(ids, then = route) {
   return true;
 }
 
-// A guest (hive-api's level "guest") sees and comments on what it is
+// hive-api's level: "free", "solo" or "studio" once subscriptions are open;
+// before, "guest" or "solo". An older hive-api sends accountType only.
+function level() {
+  return me?.level ?? (me?.accountType === "guest" ? "guest" : "solo");
+}
+
+// A guest (before subscriptions open) sees and comments on what it is
 // invited to, and keeps its own projects (download, rename, trash); it
 // creates nothing and invites no one. hive-api refuses it anyway (403):
 // this only keeps the buttons away.
 function isGuest() {
-  return (me?.level ?? (me?.accountType === "guest" ? "guest" : "solo")) === "guest";
+  return level() === "guest";
 }
 
-// Projects of one's own take a plan of one's own (trial, offered access,
-// Solo): a Studio seat counts in its organization only (hive-api's ownPlan;
-// an older hive-api does not send it: then any non-guest has one).
+// A plan of one's own (trial, offered access, Solo): projects of one's own
+// as many as one likes. A Studio seat counts in its organization only
+// (hive-api's ownPlan; an older hive-api does not send it: then any
+// non-guest, non-free account has one).
 function hasOwnPlan() {
-  return me?.ownPlan ?? !isGuest();
+  return me?.ownPlan ?? (!isGuest() && level() !== "free");
+}
+
+// Free, for one's own projects: subscriptions are open (hive-api says free
+// or studio only then) and no plan of one's own; a seat elsewhere does not
+// count (decision of 15 October: Free outside its organization).
+function onFree() {
+  return !hasOwnPlan() && (level() === "free" || level() === "studio");
+}
+
+// Free's one project of one's own can be created: none yet (or deleted
+// for good, or moved into an organization), and no choice waiting.
+function freePlaceOpen() {
+  return onFree() && !me.freeProject && !me.freeProjectToChoose;
+}
+
+function mayCreateOwnProject() {
+  return hasOwnPlan() || freePlaceOpen();
+}
+
+// The "New project" button: not for a guest, nor for a Free account whose
+// place is taken or which has a project to choose first (Free: hive-api's
+// level free; with a seat, the organization's projects stay reachable
+// through #new).
+function mayOfferNewProject() {
+  if (isGuest()) return false;
+  if (level() === "free") return freePlaceOpen();
+  return true;
+}
+
+function billingLink() {
+  return me?.billingUrl ? el("span", {}, [" ", el("a", { href: me.billingUrl }, ["Plan and billing"])]) : null;
+}
+
+// Why there is no project of one's own to create: Free's place is taken,
+// or its project is to be chosen first (hive-api's words for the first).
+function freeProjectNote() {
+  const where = (me?.seatIn || []).join(", ");
+  return el("p", { class: `note free-note${where ? " seat-note" : ""}` }, [
+    where ? `Your Studio seat counts in ${where} only: you can work on its projects there. ` : "",
+    me?.freeProjectToChoose
+      ? el("span", {}, [
+          "Your account is now Free: ",
+          el("a", { href: "#" }, ["choose the project you keep editing"]),
+          " first.",
+        ])
+      : "Free includes one project. Delete it for good, move it to an organization, or subscribe to Solo.",
+    billingLink(),
+  ]);
 }
 
 function seatOnlyNote() {
@@ -303,7 +365,7 @@ function seatOnlyNote() {
   return el("p", { class: "note seat-note" }, [
     `Your Studio seat counts in ${where} only: you can work on its projects there. `,
     "Projects of your own need a Solo plan.",
-    me?.billingUrl ? el("span", {}, [" ", el("a", { href: me.billingUrl }, ["Plan and billing"])]) : null,
+    billingLink(),
   ]);
 }
 
@@ -311,14 +373,16 @@ function guestNote() {
   return el("p", { class: "note guest-note" }, [
     el("span", { class: "badge guest" }, ["Guest"]),
     " Your free guest account lets you look at projects, comment on them, and download your own.",
-    me?.billingUrl ? el("span", {}, [" ", el("a", { href: me.billingUrl }, ["Plan and billing"])]) : null,
+    billingLink(),
   ]);
 }
 
 // What hive-api has to say about the person's plan (its own words), and the
-// level as a badge: Solo, Studio, or the trial's days left.
+// level as a badge: Free, Solo, Studio, or the trial's days left.
 function planNotices() {
-  const notices = (me?.notices || []).filter((n) => n.code !== "guest"); // guestNote says it
+  const notices = (me?.notices || []).filter(
+    (n) => n.code !== "guest" && !(n.code === "free" && me?.freeProjectToChoose) // said elsewhere
+  );
   const parts = notices.map((n) =>
     el("p", { class: "note plan-notice" }, [n.text, " ", n.url ? el("a", { href: n.url }, ["Plan and billing"]) : null])
   );
@@ -326,9 +390,67 @@ function planNotices() {
 }
 
 function levelBadge() {
-  if (!me?.level || me.level === "guest") return null;
-  const text = me.trial ? `Trial · ${me.trial.daysLeft} days left` : me.level === "studio" ? "Studio" : "Solo";
-  return el("span", { class: "badge level", title: "Your plan" }, [text]);
+  const label = planLabel(me);
+  if (!label || label.level === "guest") return null; // guestNote says it
+  return el("span", { class: "badge level", "data-level": label.level, title: label.title }, [label.text]);
+}
+
+// A Free account with several projects of its own chooses, once, the one it
+// keeps editing (POST /api/me/free-project); until then all are read-only.
+function freeChooser(projects) {
+  const own = projects.filter((p) => p.owner === me.username);
+  const text =
+    (me.notices || []).find((n) => n.code === "free")?.text ||
+    "Your account is now Free: choose the project you keep editing.";
+  const content = [el("h3", { style: "margin-top:0" }, ["Choose your Free project"]), el("p", { class: "note" }, [text])];
+  if (!own.length) {
+    content.push(
+      el("p", { class: "note" }, [
+        "Your projects are all in the trash: restore the one you want to keep editing, then choose it here.",
+      ])
+    );
+    return el("div", { class: "panel free-chooser" }, content);
+  }
+  const choices = own.map((p) =>
+    el("label", { class: "check" }, [
+      el("input", { type: "radio", name: "free-project", value: p.id }),
+      el("span", {}, [el("b", {}, [p.name]), p.description ? ` · ${p.description}` : ""]),
+    ])
+  );
+  const f = form(
+    [el("div", { class: "choices" }, choices)],
+    "Keep editing this one",
+    async (element) => {
+      const chosen = element.querySelector("input[name=free-project]:checked");
+      if (!chosen) throw new Error("Choose one of your projects.");
+      const name = chosen.value.split("/").pop();
+      if (
+        !confirm(
+          `Keep editing ${name}? The choice stays while your account is Free: ` +
+            "your other projects stay read-only until you subscribe."
+        )
+      ) {
+        return;
+      }
+      const { user } = await call("/api/me/free-project", { project: chosen.value });
+      me = { ...me, ...user };
+      route();
+    }
+  );
+  content.push(f);
+  return el("div", { class: "panel free-chooser" }, content);
+}
+
+function ownerHint(ownsOrgs) {
+  if (hasOwnPlan()) return ownsOrgs ? "you, or an organization you own" : null;
+  if (freePlaceOpen()) {
+    return ownsOrgs
+      ? "you (it becomes your Free project: Free includes one), or an organization you own"
+      : "it becomes your Free project: Free includes one";
+  }
+  return onFree()
+    ? "an organization you own (Free includes one project of your own)"
+    : "an organization you own (your seat does not cover projects of your own)";
 }
 
 async function newProjectSection() {
@@ -337,12 +459,10 @@ async function newProjectSection() {
     return;
   }
   const { organizations } = await get("/api/me/organizations");
-  const owners = [
-    ...(hasOwnPlan() ? [me.username] : []),
-    ...organizations.filter((o) => o.role === "owner").map((o) => o.login),
-  ];
+  const ownedOrgs = organizations.filter((o) => o.role === "owner").map((o) => o.login);
+  const owners = [...(mayCreateOwnProject() ? [me.username] : []), ...ownedOrgs];
   if (!owners.length) {
-    main().replaceChildren(el("h2", {}, ["New project"]), seatOnlyNote());
+    main().replaceChildren(el("h2", {}, ["New project"]), onFree() ? freeProjectNote() : seatOnlyNote());
     return;
   }
   const owner = el("select", { name: "owner" }, owners.map((o) => el("option", { value: o }, [o === me.username ? `${o} (you)` : o])));
@@ -360,15 +480,7 @@ async function newProjectSection() {
   const status = el("p", { class: "note" });
   const f = form(
     [
-      field(
-        "Owner",
-        owner,
-        !hasOwnPlan()
-          ? "an organization you own (your seat does not cover projects of your own)"
-          : organizations.some((o) => o.role === "owner")
-            ? "you, or an organization you own"
-            : null
-      ),
+      field("Owner", owner, ownerHint(ownedOrgs.length > 0)),
       field("Name", name, "letters, digits, '-', '_' and '.'"),
       field("Description", description, "optional"),
       el("div", { class: "choices" }, [
@@ -378,6 +490,7 @@ async function newProjectSection() {
       ]),
       fontBox,
       status,
+      onFree() && !freePlaceOpen() ? freeProjectNote() : null,
     ],
     "Create the project",
     async () => {
@@ -1271,7 +1384,9 @@ async function projectSection(projectId) {
     el("div", { class: "panel" }, [
       el("h3", { style: "margin-top:0" }, ["People"]),
       el("p", { class: "note" }, ["Who has access, with which role; invite people by username or email."]),
-      el("button", { onclick: () => openShareDialog(project.id) }, ["Manage people…"]),
+      el("button", {
+        onclick: () => openShareDialog(project.id, { free: project.id === me.freeProject, billingUrl: me.billingUrl }),
+      }, ["Manage people…"]),
     ])
   );
 
@@ -1422,7 +1537,7 @@ async function orgSection(login) {
   const rows = members.members.map((m) => {
     const isYou = m.username === me.username;
     return el("tr", { "data-username": m.username }, [
-      el("td", { class: "who" }, [avatar(m, 28), el("div", {}, [`${m.name}${isYou ? " (you)" : ""}`, m.guest ? el("span", { class: "badge guest", title: "Can only look and comment for now" }, ["guest"]) : null, el("small", {}, [[m.username, m.email].filter(Boolean).join(" · ")])])]),
+      el("td", { class: "who" }, [avatar(m, 28), el("div", {}, [`${m.name}${isYou ? " (you)" : ""}`, m.guest ? el("span", { class: "badge guest limited", title: LIMITED_TITLE }, [LIMITED_LABEL]) : null, el("small", {}, [[m.username, m.email].filter(Boolean).join(" · ")])])]),
       el("td", {}, [
         owner && !m.guest
           ? roleSelect(["owner", "member"], m.role, {
@@ -1475,7 +1590,7 @@ async function orgSection(login) {
           : null,
         el("p", { class: "note" }, [
           members.inviteNew?.includes("member")
-            ? "By email address. Someone without a Hive account yet gets a free guest account as a member: " +
+            ? "By email address. Someone without a Hive account yet opens a free account to join as a member: " +
               "on the organization's projects they can review at most (comment and look, not edit)."
             : "People who already have a Hive account, by the address of their account.",
         ]),
@@ -1541,7 +1656,7 @@ async function profileSection() {
   });
 
   main().replaceChildren(
-    el("h2", {}, ["Profile"]),
+    el("h2", {}, ["Profile", levelBadge()]),
     ...(isGuest() ? [guestNote()] : []),
     el("div", { class: "panel" }, [
       el("div", { class: "photo" }, [

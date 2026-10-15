@@ -197,17 +197,23 @@ async function invitationPage() {
     const form = $("#signup");
     form.classList.remove("hidden");
     form.querySelector(".email").textContent = inv.email;
-    // A guest invitation (from an admin or an organization owner): reviewer or observer only.
+    // An invitation from someone other than the Hive team: a free account,
+    // which looks and comments where it is invited (before subscriptions
+    // open, a guest account; after, Free, with the trial for a new address).
     if (inv.accountType === "guest") form.querySelector(".guest").classList.remove("hidden");
     form.addEventListener("submit", (event) => {
       event.preventDefault();
       busy(form, async () => {
         const password = checkSamePasswords(form);
+        // The terms are ticked, never assumed: hive-api records the date, and
+        // requires it once subscriptions are open.
+        if (!form.elements.terms.checked) throw new Error("Accept the terms to open an account.");
         await call("/api/invitations/signup", {
           token,
           username: form.username.value.trim(),
           name: form.elements.fullname.value.trim(), // not form.name: that is the form's own name
           password,
+          acceptTerms: true,
         });
         location.replace("/");
       });

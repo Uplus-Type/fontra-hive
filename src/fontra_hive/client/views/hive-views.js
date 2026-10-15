@@ -885,13 +885,7 @@ export class HiveViews {
       el("div", { class: "who" }, [
         el("b", {}, [
           this.me.name,
-          this.me.accountType === "guest"
-            ? el("span", { class: "hive-guest-badge", title: "Free guest account: look and comment" }, ["Guest"])
-            : this.me.level === "studio" || this.me.level === "solo"
-              ? el("span", { class: "hive-guest-badge" }, [
-                  this.me.trial ? `Trial · ${this.me.trial.daysLeft} days left` : this.me.level === "studio" ? "Studio" : "Solo",
-                ])
-              : null,
+          planBadge(this.me),
         ]),
         el("small", {}, [[this.me.username, this.me.email, role].filter(Boolean).join(" · ")]),
       ]),
@@ -1342,16 +1336,58 @@ export class HiveViews {
 
   // Share… with hive-api (the dialog is shared with Hive's home page).
   openShareHiveApi() {
-    this.shareDialog = openShareDialog(this.project.name);
+    this.shareDialog = openShareDialog(this.project.name, {
+      free: !!this.me.freeProject && this.me.freeProject === this.project.name,
+      billingUrl: this.me.billingUrl,
+    });
   }
 }
+
+// The person's plan, as hive-api's /api/me says it: level "free", "solo" or
+// "studio" once subscriptions are open; before, "guest" or "solo" (an older
+// hive-api sends accountType only: "guest" or "full"). Free's alias in
+// accountType is "guest" too, so level comes first. {text, title}, or null
+// when there is nothing to say.
+export function planLabel(me) {
+  const level = me?.level ?? (me?.accountType === "guest" ? "guest" : null);
+  if (level === "guest") return { level, text: "Guest", title: "Free guest account: look and comment" };
+  if (me?.trial) return { level, text: `Trial · ${me.trial.daysLeft} days left`, title: "Your plan" };
+  if (level === "free") {
+    return {
+      level,
+      text: "Free",
+      title: "Your plan: one project of your own, with one more designer, a reviewer and an observer",
+    };
+  }
+  if (level === "studio") return { level, text: "Studio", title: "Your plan" };
+  if (level === "solo") return { level, text: "Solo", title: "Your plan" };
+  return null;
+}
+
+function planBadge(me) {
+  const label = planLabel(me);
+  return label
+    ? el("span", { class: "hive-guest-badge", "data-level": label.level, title: label.title }, [label.text])
+    : null;
+}
+
+// A member whose role above reviewer cannot be used there for now (hive-api's
+// "guest" flag: before subscriptions open, a guest account; after, no plan of
+// their own nor a seat there, or a Free project's designer place is taken).
+export const LIMITED_LABEL = "reviewer at most";
+export const LIMITED_TITLE = "For now, this person can look and comment here, not change the fonts";
+
+// Free, on the person's own Free project (hive-api's words for its limits).
+export const FREE_LIMIT_TEXT =
+  "Free includes one designer, one reviewer and one observer. Subscribe to Solo to add more.";
 
 
 // People and invitations of a hive-api project: who has which role (and
 // from where), change roles up to one's own, invite by username or email,
 // cancel invitations. Returns the dialog element (closed with Escape, the
-// backdrop or Done; onClose is then called).
-export function openShareDialog(projectName, { onClose } = {}) {
+// backdrop or Done; onClose is then called). ``free``: the project is the
+// person's own Free project (its limits are said under the invite line).
+export function openShareDialog(projectName, { onClose, free = false, billingUrl = null } = {}) {
   ensureStyle();
   const backdrop = el("div", { class: "hive-backdrop", onclick: () => close() });
   const dialog = el("div", { class: "hive-dialog", role: "dialog" });
@@ -1393,7 +1429,8 @@ export function openShareDialog(projectName, { onClose } = {}) {
     dialog.replaceChildren(el("h3", {}, [`Share “${projectName}”`]));
     for (const m of data.members) {
       const isYou = m.username === data.you;
-      // A guest's role only goes between observer and reviewer.
+      // A role that cannot be used above reviewer there only goes between
+      // observer and reviewer.
       const choices = m.guest ? data.roles.filter((r) => r === "observer" || r === "reviewer") : data.roles;
       const editable = data.canManage && m.via === "collaborator" && choices.includes(m.role);
       const roleCell = editable
@@ -1414,7 +1451,11 @@ export function openShareDialog(projectName, { onClose } = {}) {
           avatar(m, 30),
           el("div", { class: "who" }, [
             `${m.name}${isYou ? " (you)" : ""}`,
-            m.guest ? el("span", { class: "hive-guest-badge", title: "Can only look and comment for now" }, ["guest"]) : null,
+            // Said for a role above reviewer only: for a reviewer or an
+            // observer, the role menu alone keeps to those two.
+            m.guest && !choices.includes(m.role)
+              ? el("span", { class: "hive-guest-badge limited", title: LIMITED_TITLE }, [LIMITED_LABEL])
+              : null,
             el("small", {}, [[m.username, m.email].filter(Boolean).join(" · ")]),
           ]),
           roleCell,
@@ -1448,16 +1489,16 @@ export function openShareDialog(projectName, { onClose } = {}) {
       const role = el("select", { "aria-label": "Role" }, data.roles.map((r) =>
         el("option", { value: r, selected: r === "designer" ? "" : null }, [r])));
       const add = el("button", { class: "pill blue", disabled: "" }, ["Invite"]);
-      // Admins may invite a new address as reviewer or observer: a free guest
-      // account (data.inviteNew: the roles a new address may get).
+      // Admins may invite a new address as reviewer or observer: the person
+      // opens a free account (data.inviteNew: the roles a new address may get).
       const inviteNew = data.inviteNew || [];
       const guestLine = el("p", { class: "note guest-line", hidden: "" });
       const updateGuestLine = () => {
         const email = who.value.includes("@");
         guestLine.hidden = !email || !inviteNew.length || inviteNew.length === data.roles.length;
         guestLine.textContent = inviteNew.includes(role.value)
-          ? "If this address has no Hive account yet, this person will get a free guest account (reviewer or observer only)."
-          : "A new address can only be invited as reviewer or observer: it gets a free guest account.";
+          ? "If this address has no Hive account yet, this person will open a free account to join (reviewer or observer only)."
+          : "A new address can only be invited as reviewer or observer: the person opens a free account to join.";
       };
       who.addEventListener("input", () => {
         add.disabled = !who.value.trim();
@@ -1473,10 +1514,16 @@ export function openShareDialog(projectName, { onClose } = {}) {
       add.addEventListener("click", invite);
       who.addEventListener("keydown", (e) => e.key === "Enter" && invite());
       dialog.append(el("div", { class: "add" }, [who, role, add]), guestLine);
+      if (free) {
+        dialog.append(el("p", { class: "note free-line" }, [
+          FREE_LIMIT_TEXT,
+          billingUrl ? el("span", {}, [" ", el("a", { href: billingUrl, target: "_blank" }, ["Plan and billing"])]) : null,
+        ]));
+      }
       dialog.append(el("p", { class: "note" }, [
         (inviteNew.length && inviteNew.length < data.roles.length
           ? "People who already have a Hive account, by username or by the address of their account; " +
-            "anyone else by email, as reviewer or observer (a free guest account). "
+            "anyone else by email, as reviewer or observer (they open a free account). "
           : inviteNew.length
           ? "Anyone, by username or email. "
           : "People who already have a Hive account, by username or by the address of their account. ") +
@@ -1548,10 +1595,11 @@ export async function start() {
         name: full.name,
         email: full.email,
         avatar: full.avatar,
-        accountType: full.accountType, // "guest": reviewer or observer only
-        level: full.level, // "guest", "solo" or "studio"
+        accountType: full.accountType, // deprecated: "guest" for guest and free
+        level: full.level, // "free", "solo" or "studio"; before opening, "guest" or "solo"
         trial: full.trial, // {endsAt, daysLeft} during the free period
         billingUrl: full.billingUrl, // the plan page, when there is one
+        freeProject: full.freeProject, // Free: the project kept editable ("owner/name")
       });
     } catch (error) {
       // keep what the token says

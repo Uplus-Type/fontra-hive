@@ -1202,10 +1202,10 @@ def test_organization_page_new_addresses_as_guests(browser_and_url):  # noqa: F8
         browser_and_url, "#org/uplustype", {"GET /api/orgs/uplustype/members": members}
     )
     page.wait_for_selector("table.people tr[data-username=fabio]")
-    assert "guest" in page.inner_text("tr[data-username=fabio]")
-    # A guest cannot be made owner: no role menu for them.
+    assert "reviewer at most" in page.inner_text("tr[data-username=fabio]")
+    # Someone limited there cannot be made owner: no role menu for them.
     assert page.query_selector("select[aria-label='Role of Fabio Rossi']") is None
-    assert "free guest account" in page.inner_text("main")
+    assert "opens a free account" in page.inner_text("main")
     assert page.errors == []
     page.close()
 
@@ -1281,5 +1281,240 @@ def test_a_guest_owner_keeps_download_and_trash(browser_and_url):  # noqa: F811
     assert "free guest account" in page.inner_text(".plan-notice")
     assert "Trash" in text  # the project's own trash panel
     assert "Import a font" not in text  # replacing the font is changing it
+    assert page.errors == []
+    page.close()
+
+
+# --- the plan Free (hive-api from the opening of subscriptions) ----------------------
+
+FREE_LIMIT_PROJECT = (
+    "Free includes one project. Delete it for good, move it to an organization, "
+    "or subscribe to Solo."
+)
+
+
+def free_me(**changes):
+    me = {
+        **ME,
+        "staff": False,
+        "level": "free",
+        "accountType": "guest",  # the deprecated alias
+        "ownPlan": False,
+        "seatIn": [],
+        "freeProject": None,
+        "freeProjectToChoose": False,
+        "trial": None,
+        "billingUrl": "/billing",
+        "notices": [
+            {
+                "code": "free",
+                "text": "Your account is Free: create your project.",
+                "url": "/billing",
+            }
+        ],
+    }
+    me.update(changes)
+    return {"GET /api/me": [200, {"user": me}]}
+
+
+def owner_choices(page):
+    page.wait_for_selector("form select[name=owner]")
+    return page.evaluate(
+        "[...document.querySelectorAll('select[name=owner] option')].map(o => o.value)"
+    )
+
+
+def test_a_free_account_creates_its_one_project(browser_and_url):  # noqa: F811
+    extra = free_me()
+    extra["GET /api/auth/sessions"] = [200, {"sessions": []}]
+    page = open_home(browser_and_url, extra=extra)
+    page.wait_for_selector(".project-card")
+    assert page.inner_text("h2 .badge.level") == "Free"
+    assert page.query_selector(".guest-note") is None
+    assert "create your project" in page.inner_text(".plan-notice")
+    page.click("a[href='#new'] button")
+    assert owner_choices(page) == ["jeremie", "uplustype"]
+    assert "becomes your Free project" in page.inner_text("form")
+    assert page.query_selector("form .free-note") is None
+    # Free can create an organization (inert until someone takes Studio).
+    page.evaluate("location.hash = '#orgs'")
+    page.wait_for_function(
+        "document.querySelector('main').innerText.includes('New organization')"
+    )
+    page.evaluate("location.hash = '#profile'")
+    page.wait_for_function(
+        "document.querySelector('main h2')?.textContent.startsWith('Profile')"
+    )
+    page.wait_for_selector("main h2 .badge.level")
+    assert page.inner_text("main h2 .badge.level") == "Free"
+    assert page.errors == []
+    page.close()
+
+
+def test_a_free_account_with_its_project(browser_and_url):  # noqa: F811
+    extra = free_me(freeProject="jeremie/Sketches")
+    page = open_home(browser_and_url, extra=extra)
+    page.wait_for_selector(".project-card")
+    assert page.query_selector("a[href='#new']") is None
+    card = page.query_selector(".project-card[data-project='jeremie/Sketches']")
+    assert card.query_selector(".badge.free-project").inner_text() == "Free project"
+    other = page.query_selector(".project-card[data-project='uplustype/Mutator']")
+    assert other.query_selector(".badge.free-project") is None
+    # By the address: the organizations it owns only, and why.
+    page.evaluate("location.hash = '#new'")
+    assert owner_choices(page) == ["uplustype"]
+    assert FREE_LIMIT_PROJECT in page.inner_text("form .free-note")
+    assert page.get_attribute("form .free-note a", "href") == "/billing"
+    page.close()
+    # Without an organization: the note alone.
+    extra["GET /api/me/organizations"] = [200, {"organizations": []}]
+    page = open_home(browser_and_url, "#new", extra)
+    page.wait_for_selector("main .free-note")
+    assert page.query_selector("form select[name=owner]") is None
+    assert FREE_LIMIT_PROJECT in page.inner_text("main .free-note")
+    assert page.errors == []
+    page.close()
+
+
+def choose_answers():
+    extra = free_me(
+        freeProjectToChoose=True,
+        notices=[
+            {
+                "code": "free",
+                "text": "Your account is now Free: choose the project you keep editing.",
+                "url": "/billing",
+            }
+        ],
+    )
+    extra["GET /api/me/projects"] = [
+        200,
+        {
+            "projects": [
+                project("jeremie", "Sketches", "admin", "Ideas"),
+                project("jeremie", "Drafts", "admin"),
+                project("uplustype", "Mutator", "admin"),
+            ]
+        },
+    ]
+    chosen = {
+        **extra["GET /api/me"][1]["user"],
+        "freeProject": "jeremie/Drafts",
+        "freeProjectToChoose": False,
+        "notices": [
+            {
+                "code": "free",
+                "text": "Your account is Free: Drafts is the project you keep editing.",
+                "url": "/billing",
+            }
+        ],
+    }
+    extra["POST /api/me/free-project"] = [200, {"user": chosen}]
+    return extra
+
+
+def test_a_free_account_chooses_its_project(browser_and_url):  # noqa: F811
+    page = open_home(browser_and_url, extra=choose_answers())
+    page.wait_for_selector(".free-chooser")
+    assert page.query_selector("a[href='#new']") is None
+    chooser = page.inner_text(".free-chooser")
+    assert "choose the project you keep editing" in chooser
+    # The notice is in the chooser, not twice.
+    assert page.query_selector(".plan-notice") is None
+    choices = page.evaluate(
+        "[...document.querySelectorAll('.free-chooser input[type=radio]')].map(i => i.value)"
+    )
+    assert choices == ["jeremie/Sketches", "jeremie/Drafts"]  # its own only
+    page.click(".free-chooser button[type=submit]")
+    page.wait_for_function(
+        "document.querySelector('.free-chooser .error').textContent.length > 0"
+    )
+    assert not page.evaluate("calls.some(c => c.path === '/api/me/free-project')")
+    # A choice made once: the browser asks first; dismissed, nothing is sent.
+    page.once("dialog", lambda dialog: dialog.dismiss())
+    page.check(".free-chooser input[value='jeremie/Drafts']")
+    page.click(".free-chooser button[type=submit]")
+    page.wait_for_timeout(100)
+    assert not page.evaluate("calls.some(c => c.path === '/api/me/free-project')")
+    messages = []
+
+    def accept(dialog):
+        messages.append(dialog.message)
+        dialog.accept()
+
+    page.once("dialog", accept)
+    page.click(".free-chooser button[type=submit]")
+    page.wait_for_function("!document.querySelector('.free-chooser')")
+    assert "Keep editing Drafts?" in messages[0]
+    post = page.evaluate("calls.find(c => c.path === '/api/me/free-project')")
+    assert post["method"] == "POST" and post["body"] == {"project": "jeremie/Drafts"}
+    page.wait_for_selector(".project-card[data-project='jeremie/Drafts'] .free-project")
+    assert "Drafts is the project you keep editing" in page.inner_text(".plan-notice")
+    assert page.errors == []
+    page.close()
+
+
+def test_a_free_account_to_choose_cannot_create_first(browser_and_url):  # noqa: F811
+    extra = choose_answers()
+    extra["GET /api/me/organizations"] = [200, {"organizations": []}]
+    page = open_home(browser_and_url, "#new", extra)
+    page.wait_for_selector("main .free-note")
+    assert "choose the project you keep editing" in page.inner_text("main .free-note")
+    page.click("main .free-note a[href='#']")
+    page.wait_for_selector(".free-chooser")
+    page.close()
+
+
+def test_free_projects_all_in_the_trash(browser_and_url):  # noqa: F811
+    extra = choose_answers()
+    extra["GET /api/me/projects"] = [200, {"projects": []}]
+    page = open_home(browser_and_url, extra=extra)
+    page.wait_for_selector(".free-chooser")
+    assert "restore the one you want" in page.inner_text(".free-chooser")
+    assert page.query_selector(".free-chooser form") is None
+    page.close()
+
+
+def test_a_seat_only_free_outside_its_organization(browser_and_url):  # noqa: F811
+    # A Studio seat counts in its organization only: outside it, Free.
+    extra = free_me(level="studio", seatIn=["uplustype"], notices=[])
+    page = open_home(browser_and_url, extra=extra)
+    page.wait_for_selector(".project-card")
+    assert page.inner_text("h2 .badge.level") == "Studio"
+    page.click("a[href='#new'] button")
+    assert owner_choices(page) == ["jeremie", "uplustype"]
+    page.close()
+    # Its Free project taken, and no organization of its own.
+    extra = free_me(
+        level="studio", seatIn=["uplustype"], notices=[], freeProject="jeremie/Sketches"
+    )
+    extra["GET /api/me/organizations"] = [
+        200,
+        {"organizations": [{"login": "uplustype", "name": "U+Type", "role": "member"}]},
+    ]
+    page = open_home(browser_and_url, "#new", extra)
+    page.wait_for_selector("main .free-note.seat-note")
+    note = page.inner_text("main .free-note")
+    assert "Your Studio seat counts in uplustype only" in note
+    assert FREE_LIMIT_PROJECT in note
+    assert page.errors == []
+    page.close()
+
+
+def test_before_the_opening_nothing_changes(browser_and_url):  # noqa: F811
+    # hive-api says guest or solo before subscriptions open; freeProject is
+    # null and nothing is to choose, which must not offer a project to a guest.
+    guest = free_me(level="guest", notices=[])
+    page = open_home(browser_and_url, extra=guest)
+    page.wait_for_selector(".project-card")
+    assert page.query_selector("a[href='#new']") is None
+    assert page.query_selector(".guest-note") is not None
+    assert page.query_selector(".free-chooser") is None
+    assert page.query_selector(".badge.free-project") is None
+    page.close()
+    solo = free_me(level="solo", accountType="full", ownPlan=True, notices=[])
+    page = open_home(browser_and_url, "#new", solo)
+    assert owner_choices(page) == ["jeremie", "uplustype"]
+    assert "you, or an organization you own" in page.inner_text("form")
     assert page.errors == []
     page.close()

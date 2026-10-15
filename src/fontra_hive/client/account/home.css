@@ -56,6 +56,8 @@ main h3 { font-size: 1.05em; margin: 1.8em 0 0.6em; }
 .badge.guest { background: #3b82f622; color: inherit; margin-left: 0.4em; }
 .guest-note { margin: 0 0 1.2em; }
 .badge.level { margin-left: 0.6em; font-size: 0.55em; vertical-align: middle; }
+.badge.free-project { background: #e9b02a33; }
+.free-chooser .choices { margin: 0.4em 0 0.2em; }
 .plan-notice { margin: 0 0 1em; padding: 0.6em 0.9em; border-left: 3px solid #e9b02a; background: #e9b02a1a; border-radius: 0.4em; }
 .link-button { background: none; color: inherit; padding: 0.2em 0.4em; margin: 0; text-decoration: underline; opacity: 0.75; border-radius: 0.3em; }
 .link-button:hover { opacity: 1; background: #8882; }
