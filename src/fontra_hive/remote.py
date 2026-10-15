@@ -44,7 +44,9 @@ interface to say so. A ``.fontra`` remote gets every change, file by file.
 Credentials (``Remote.username``/``password``: for GitHub a token as
 password) are given by the caller and never stored here. URLs are checked
 against SSRF (:func:`check_url`): HTTPS to public addresses only, unless
-``allow_local`` (tests, development).
+``allow_local`` (tests, development); the name is resolved once and every
+connection goes to the address checked, redirects included
+(:func:`_pinned_pool_manager`).
 """
 
 from __future__ import annotations
@@ -150,15 +152,41 @@ class Remote:
 # --- addresses ----------------------------------------------------------------------
 
 
-def check_url(url: str, *, allow_local: bool = False) -> None:
-    """Refuse URLs a server must not fetch on a user's behalf: anything but
-    HTTPS, and hosts that resolve to private, loopback, link-local or
-    reserved addresses (SSRF). ``allow_local``: also local paths, ``file://``,
-    ``http://`` and private addresses (tests, development)."""
+# Schemes the server fetches on a user's behalf (the tests add "http").
+SAFE_SCHEMES = ("https",)
+
+
+def _is_public(address) -> bool:
+    return address.is_global and not address.is_multicast
+
+
+def _resolve(host: str, port: int) -> list[str]:
+    """The addresses of ``host``, all of them public, or UnsafeURLError."""
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except (socket.gaierror, UnicodeError):
+        raise UnsafeURLError(f"Unknown host {host}.")
+    addresses = []
+    for info in infos:
+        try:
+            address = ipaddress.ip_address(info[4][0])
+        except ValueError:  # a scoped IPv6 address (fe80::1%eth0) and the like
+            raise UnsafeURLError(f"{host} is not a public address.")
+        if not _is_public(address):
+            raise UnsafeURLError(f"{host} is not a public address.")
+        addresses.append(str(address))
+    if not addresses:
+        raise UnsafeURLError(f"Unknown host {host}.")
+    return addresses
+
+
+def _checked(url: str, allow_local: bool) -> tuple[str, str] | None:
+    """Check ``url`` (see :func:`check_url`) and return the host and the
+    address the connection must be pinned to; None with ``allow_local``."""
     parsed = urllib.parse.urlsplit(url)
     if allow_local:
-        return
-    if parsed.scheme != "https":
+        return None
+    if parsed.scheme not in SAFE_SCHEMES:
         raise UnsafeURLError("Only https:// remote URLs are accepted.")
     if parsed.username or parsed.password:
         raise UnsafeURLError("Put credentials in the token field, not in the URL.")
@@ -166,20 +194,86 @@ def check_url(url: str, *, allow_local: bool = False) -> None:
     if not host:
         raise UnsafeURLError("The remote URL has no host.")
     try:
-        infos = socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM)
-    except socket.gaierror:
-        raise UnsafeURLError(f"Unknown host {host}.")
-    for info in infos:
-        address = ipaddress.ip_address(info[4][0])
-        if not address.is_global or address.is_multicast:
-            raise UnsafeURLError(f"{host} is not a public address.")
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        raise UnsafeURLError("The remote URL has an invalid port.")
+    return host, _resolve(host, port)[0]
+
+
+def check_url(url: str, *, allow_local: bool = False) -> None:
+    """Refuse URLs a server must not fetch on a user's behalf: anything but
+    HTTPS, and hosts that resolve to private, loopback, link-local or
+    reserved addresses (SSRF). ``allow_local``: also local paths, ``file://``,
+    ``http://`` and private addresses (tests, development). The connection
+    itself is then pinned to the address checked (:func:`_client`)."""
+    _checked(url, allow_local)
+
+
+def _pinned_pool_manager(host: str, address: str):
+    """A urllib3 pool manager for dulwich whose connections all go to
+    ``address``, the one checked, and only for ``host``.
+
+    On its own, dulwich resolves the name again when it connects and
+    follows HTTP redirects to any host, so a redirect, or a DNS answer
+    changed in between, could reach an internal address. Here a redirect
+    may stay on ``host`` (a renamed repository), on the same address; any
+    other host is refused before a connection is opened. The TLS
+    certificate is still checked against ``host``."""
+    import urllib3
+    from urllib3.connection import HTTPConnection, HTTPSConnection
+    from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
+    from urllib3.util.connection import create_connection
+
+    expected = host.lower().rstrip(".")
+
+    def connect(conn, scheme):
+        target = (conn.host or "").lower().rstrip(".")
+        if target != expected or scheme not in SAFE_SCHEMES:
+            raise UnsafeURLError(
+                f"The remote repository sent Hive to another address ({scheme}://{conn.host}): "
+                "refused."
+            )
+        return create_connection(
+            (address, conn.port),
+            conn.timeout,
+            source_address=conn.source_address,
+            socket_options=conn.socket_options,
+        )
+
+    class PinnedHTTPSConnection(HTTPSConnection):
+        def _new_conn(self):
+            return connect(self, "https")
+
+    class PinnedHTTPConnection(HTTPConnection):
+        def _new_conn(self):
+            return connect(self, "http")
+
+    class PinnedHTTPSPool(HTTPSConnectionPool):
+        ConnectionCls = PinnedHTTPSConnection
+
+    class PinnedHTTPPool(HTTPConnectionPool):
+        ConnectionCls = PinnedHTTPConnection
+
+    try:
+        from dulwich.client import default_user_agent_string
+
+        agent = default_user_agent_string()
+    except ImportError:  # pragma: no cover
+        agent = "git/dulwich"
+    manager = urllib3.PoolManager(headers={"User-agent": agent}, cert_reqs="CERT_REQUIRED")
+    manager.pool_classes_by_scheme = {"https": PinnedHTTPSPool, "http": PinnedHTTPPool}
+    return manager
 
 
 def _client(remote: Remote, allow_local: bool):
-    check_url(remote.url, allow_local=allow_local)
+    pinned = _checked(remote.url, allow_local)
     kwargs = {}
+    if pinned is not None:
+        kwargs["pool_manager"] = _pinned_pool_manager(*pinned)
     if remote.username is not None or remote.password is not None:
-        kwargs = {"username": remote.username or "", "password": remote.password}
+        kwargs.update(username=remote.username or "", password=remote.password)
+    if pinned is not None:  # never without the pin
+        return get_transport_and_path(remote.url, **kwargs)
     try:
         return get_transport_and_path(remote.url, **kwargs)
     except TypeError:  # a transport without credentials (local path)

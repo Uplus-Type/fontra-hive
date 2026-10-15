@@ -4,8 +4,10 @@
 import asyncio
 import pathlib
 import re
+import socket
 import threading
 from contextlib import aclosing
+from types import SimpleNamespace
 
 import pytest
 from conftest import FIXTURE, files_of
@@ -121,6 +123,167 @@ def test_unsafe_urls_are_refused(url):
 def test_local_urls_when_allowed():
     check_url("/srv/repos/a.git", allow_local=True)
     check_url("http://127.0.0.1:8000/a.git", allow_local=True)
+
+
+# --- one resolution, a pinned address, no redirect elsewhere ---------------------
+
+
+class _Recorder:
+    """A local HTTP server that records the paths asked of it and answers
+    each with ``answer(path) -> (status, headers)``."""
+
+    def __init__(self, answer):
+        import http.server
+
+        hits = self.hits = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                hits.append(self.path)
+                status, headers = answer(self.path)
+                self.send_response(status)
+                for name, value in headers.items():
+                    self.send_header(name, value)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self.server.server_port
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@pytest.fixture
+def pinned_world(monkeypatch):
+    """``git.example`` "resolves" to a public address that is in fact a
+    local server (the attacker's), which redirects into the private network
+    (another local server, standing for 169.254.169.254 or a service on the
+    LAN). http:// is allowed here only to spare TLS in a test."""
+    internal = _Recorder(lambda path: (200, {"Content-Type": "text/plain"}))
+    targets = {}
+
+    def answer(path):
+        if path.startswith("/same/"):
+            return 404, {}
+        target = targets[path.split("/")[1]]
+        return 302, {"Location": target + "/x.git/info/refs?service=git-upload-pack"}
+
+    attacker = _Recorder(answer)
+    targets.update(
+        {
+            "to-ip": f"http://127.0.0.1:{internal.port}",
+            "to-name": f"http://internal.example:{internal.port}",
+            "to-meta": "http://169.254.169.254",
+            "to-same": f"http://git.example:{attacker.port}/same",
+        }
+    )
+    lookups = []
+
+    def resolve(host, port):
+        lookups.append(host)
+        if host == "git.example":
+            return ["127.0.0.1"]
+        raise hive_remote.UnsafeURLError(f"{host} is not a public address.")
+
+    monkeypatch.setattr(hive_remote, "SAFE_SCHEMES", ("https", "http"))
+    monkeypatch.setattr(hive_remote, "_resolve", resolve)
+    yield SimpleNamespace(attacker=attacker, internal=internal, lookups=lookups)
+    attacker.close()
+    internal.close()
+
+
+def test_a_redirect_to_another_host_is_refused_before_connecting(pinned_world):
+    for target in ("to-ip", "to-name", "to-meta"):
+        url = f"http://git.example:{pinned_world.attacker.port}/{target}/x.git"
+        with pytest.raises(hive_remote.RemoteError):
+            hive_remote.remote_head(Remote(url, password="token"))
+    assert len(pinned_world.attacker.hits) == 3
+    assert pinned_world.internal.hits == []  # never reached
+    assert pinned_world.lookups == ["git.example"] * 3  # once per operation
+
+
+def test_without_the_pin_dulwich_would_follow(pinned_world):
+    # Why: the plain client follows the redirect to the internal host.
+    from dulwich.client import get_transport_and_path
+
+    client, path = get_transport_and_path(
+        f"http://127.0.0.1:{pinned_world.attacker.port}/to-ip/x.git"
+    )
+    try:
+        client.get_refs(path)
+    except Exception:
+        pass  # whatever dulwich makes of the answer, the request went out
+    assert pinned_world.internal.hits == ["/x.git/info/refs?service=git-upload-pack"]
+
+
+def test_a_redirect_on_the_same_host_stays_on_the_same_address(pinned_world, monkeypatch):
+    # A renamed repository redirects on its own host: allowed, to the
+    # address checked, without asking the DNS again (no rebinding).
+    getaddrinfo = socket.getaddrinfo
+
+    def no_dns(host, *args, **kwargs):
+        if host != "127.0.0.1":  # the pinned address itself is no lookup
+            raise AssertionError(f"{host} resolved again")
+        return getaddrinfo(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", no_dns)
+    url = f"http://git.example:{pinned_world.attacker.port}/to-same/x.git"
+    with pytest.raises(hive_remote.RemoteError) as error:
+        hive_remote.remote_head(Remote(url))
+    assert not isinstance(error.value, UnsafeURLError)
+    assert pinned_world.attacker.hits[-1].startswith("/same/x.git/info/refs")
+    assert pinned_world.internal.hits == []
+
+
+def test_the_pool_manager_connects_to_the_address_checked_only(pinned_world):
+    manager = hive_remote._pinned_pool_manager("git.example", "127.0.0.1")
+    port = pinned_world.attacker.port
+    response = manager.request("GET", f"http://git.example:{port}/same/a", redirect=False)
+    assert response.status == 404
+    for url in (f"http://internal.example:{port}/", f"http://127.0.0.1:{port}/"):
+        with pytest.raises(UnsafeURLError):
+            manager.request("GET", url)
+    assert pinned_world.attacker.hits == ["/same/a"]
+
+
+def test_every_address_of_a_name_must_be_public(monkeypatch):
+    def getaddrinfo(host, port, type=0):
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.215.14", port)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.7", port)),
+        ]
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    with pytest.raises(UnsafeURLError):
+        check_url("https://mixed.example/a.git")
+
+    def scoped(host, port, type=0):
+        return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("fe80::1%eth0", port, 0, 2))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", scoped)
+    with pytest.raises(UnsafeURLError):
+        check_url("https://scoped.example/a.git")
+
+
+def test_the_connection_is_pinned_to_the_first_public_address(monkeypatch):
+    seen = []
+
+    def getaddrinfo(host, port, type=0):
+        seen.append(host)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.215.14", port))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    client, path = hive_remote._client(Remote("https://git.example/a.git"), False)
+    assert seen == ["git.example"]
+    assert path == "/a.git"
+    pools = client.pool_manager.pool_classes_by_scheme
+    assert pools["https"].ConnectionCls.__name__ == "PinnedHTTPSConnection"
 
 
 def test_remote_format_and_names():
