@@ -291,6 +291,22 @@ function isGuest() {
   return (me?.level ?? (me?.accountType === "guest" ? "guest" : "solo")) === "guest";
 }
 
+// Projects of one's own take a plan of one's own (trial, offered access,
+// Solo): a Studio seat counts in its organization only (hive-api's ownPlan;
+// an older hive-api does not send it: then any non-guest has one).
+function hasOwnPlan() {
+  return me?.ownPlan ?? !isGuest();
+}
+
+function seatOnlyNote() {
+  const where = (me?.seatIn || []).join(", ") || "your organization";
+  return el("p", { class: "note seat-note" }, [
+    `Your Studio seat counts in ${where} only: you can work on its projects there. `,
+    "Projects of your own need a Solo plan.",
+    me?.billingUrl ? el("span", {}, [" ", el("a", { href: me.billingUrl }, ["Plan and billing"])]) : null,
+  ]);
+}
+
 function guestNote() {
   return el("p", { class: "note guest-note" }, [
     el("span", { class: "badge guest" }, ["Guest"]),
@@ -321,7 +337,14 @@ async function newProjectSection() {
     return;
   }
   const { organizations } = await get("/api/me/organizations");
-  const owners = [me.username, ...organizations.filter((o) => o.role === "owner").map((o) => o.login)];
+  const owners = [
+    ...(hasOwnPlan() ? [me.username] : []),
+    ...organizations.filter((o) => o.role === "owner").map((o) => o.login),
+  ];
+  if (!owners.length) {
+    main().replaceChildren(el("h2", {}, ["New project"]), seatOnlyNote());
+    return;
+  }
   const owner = el("select", { name: "owner" }, owners.map((o) => el("option", { value: o }, [o === me.username ? `${o} (you)` : o])));
   const name = el("input", { name: "name", required: true, maxlength: 100, pattern: "[A-Za-z0-9._\\-]+" });
   const description = el("input", { name: "description", maxlength: 300 });
@@ -337,7 +360,15 @@ async function newProjectSection() {
   const status = el("p", { class: "note" });
   const f = form(
     [
-      field("Owner", owner, organizations.some((o) => o.role === "owner") ? "you, or an organization you own" : null),
+      field(
+        "Owner",
+        owner,
+        !hasOwnPlan()
+          ? "an organization you own (your seat does not cover projects of your own)"
+          : organizations.some((o) => o.role === "owner")
+            ? "you, or an organization you own"
+            : null
+      ),
       field("Name", name, "letters, digits, '-', '_' and '.'"),
       field("Description", description, "optional"),
       el("div", { class: "choices" }, [
