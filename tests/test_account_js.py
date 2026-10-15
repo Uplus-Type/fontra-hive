@@ -94,6 +94,30 @@ def test_login_page(browser_and_url):
                          m.safeRef('https://evil.example'), m.safeRef(null)];
         }""")
     assert page.evaluate("window.safe") == ["/editor.html?project=a/b", "/", "/", "/"]
+    # Whatever the browser makes of it, the page stays on this site: a
+    # backslash reads as a slash, tabs and newlines are dropped.
+    hostile = [
+        "/\\evil.example",
+        "/\\\\evil.example",
+        "\\evil.example",
+        "/\t/evil.example",
+        "/\n/evil.example",
+        "/%5cevil.example",
+        "/ok/path",
+    ]
+    origins = page.evaluate(
+        """(refs) => refs.map((r) => {
+             const kept = window.accountModule.safeRef(r);
+             return [kept, new URL(kept, location.href).origin === location.origin];
+           })""",
+        hostile,
+    )
+    assert all(same for _, same in origins), origins
+    assert [kept for kept, _ in origins] == ["/"] * 6 + ["/ok/path"]
+    # The unprotected check would have gone elsewhere: the test sees it.
+    assert page.evaluate(
+        "new URL('/\\\\evil.example', location.href).origin !== location.origin"
+    )
     # Run the page itself: a second copy of the module, which starts.
     page.evaluate("""async () => {
           window.__hiveAccountNoAutoStart = false;

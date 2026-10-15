@@ -107,6 +107,20 @@ def test_safe_ref():
     assert _safeRef("/editor.html?project=A") == "/editor.html?project=A"
     for bad in ["//evil.example/x", "https://evil.example", None, "", "editor.html"]:
         assert _safeRef(bad) == "/"
+    # Paths a browser would send to another site (a backslash reads as a
+    # slash; tabs and newlines are dropped).
+    for bad in [
+        "/\\evil.example",
+        "/\\\\evil.example",
+        "/%5cevil.example",
+        "/%5Cevil.example",
+        "\\evil.example",
+        "/\t/evil.example",
+        "/\n/evil.example",
+        "/a/\\..\\x",
+    ]:
+        assert _safeRef(bad) == "/", repr(bad)
+    assert _safeRef("/%2f%2fevil.example") == "/%2f%2fevil.example"  # stays here
 
 
 def test_presence_heartbeats(manager, monkeypatch):

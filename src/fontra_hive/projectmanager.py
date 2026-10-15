@@ -1897,8 +1897,20 @@ def _htmlResponse(text: str) -> web.Response:
     )
 
 
+# A slash, then anything but a second slash or a backslash: browsers read a
+# backslash as a slash and drop tabs and newlines, so a slash then a
+# backslash would lead to another site like "//host".
+_SAFE_REF_RE = re.compile(r"/(?:[^/\\][^\\]*)?")
+
+
 def _safeRef(ref) -> str:
-    """Where to go after signing in: a path on this site, never elsewhere."""
-    if isinstance(ref, str) and ref.startswith("/") and not ref.startswith("//"):
+    """Where to go after signing in: a path on this site, never elsewhere
+    (no backslash anywhere, encoded or not, and no control character)."""
+    if (
+        isinstance(ref, str)
+        and _SAFE_REF_RE.fullmatch(ref)
+        and "%5c" not in ref.lower()
+        and not any(ord(c) < 0x20 or ord(c) == 0x7F for c in ref)
+    ):
         return ref
     return "/"

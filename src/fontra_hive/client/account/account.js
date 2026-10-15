@@ -35,9 +35,18 @@ function messageOf(data) {
   return "";
 }
 
-// Where to go after signing in: a path on this site, never elsewhere.
+// Where to go after signing in: a path on this site, never elsewhere. A
+// browser reads a backslash as a slash and drops tabs and newlines, so a
+// slash then a backslash would lead to another site like "//host": a slash,
+// then anything but a second slash; no backslash anywhere, encoded or not,
+// and no control character.
 export function safeRef(ref) {
-  return typeof ref === "string" && ref.startsWith("/") && !ref.startsWith("//") ? ref : "/";
+  return typeof ref === "string" &&
+    /^\/(?:[^/\\][^\\]*)?$/.test(ref) &&
+    !/%5c/i.test(ref) &&
+    !/[\u0000-\u001f\u007f]/.test(ref)
+    ? ref
+    : "/";
 }
 
 export function tokenFromFragment() {
