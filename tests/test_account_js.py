@@ -602,16 +602,86 @@ def free_share_answers(free_project):
 
 def test_share_dialog_on_ones_free_project(browser_and_url):
     page = open_share(browser_and_url, free_share_answers("uplustype/Mutator"))
+    # One line under the invite field: the limits replace the general one.
+    assert len(page.query_selector_all(".hive-dialog .invite-legend")) == 1
     line = page.query_selector(".hive-dialog .free-line")
     assert line is not None
-    assert FREE_LIMIT in line.inner_text()
+    # Fabio (manager: the designer's place) and Ana (observer) are collaborators;
+    # the pending invitation is a designer's: the reviewer's place is left.
+    assert line.inner_text() == (
+        "Free includes one designer, one reviewer and one observer besides you, "
+        "pending invitations included. Taken: designer, observer. "
+        "Subscribe to Solo to add more. Plan and billing"
+    )
     assert line.query_selector("a").get_attribute("href") == "/billing"
+    assert "They receive an email" not in page.inner_text(".hive-dialog")
     # Over the limits, hive-api says no, and the dialog says why.
     page.fill(".hive-dialog .add input", "zoe")
     page.click(".hive-dialog .add button")
     page.wait_for_selector(".hive-dialog .error")
     assert page.inner_text(".hive-dialog .error") == FREE_LIMIT
     assert page.errors == []
+    page.close()
+
+
+def test_share_dialog_free_project_of_the_hive_team(browser_and_url):
+    """The team's account may invite anyone, but not past a Free project's
+    limits: the line says so, and not "Anyone"."""
+    answers = free_share_answers("uplustype/Mutator")
+    members = answers[f"GET {BASE}/members"][1]
+    members["roles"] = ["observer", "reviewer", "designer", "manager", "admin"]
+    members["inviteNew"] = list(members["roles"])
+    page = open_share(browser_and_url, answers)
+    legend = page.inner_text(".hive-dialog .invite-legend")
+    assert "Taken: designer, observer." in legend
+    assert "These limits hold for the Hive team's account too." in legend
+    assert "Anyone" not in page.inner_text(".hive-dialog")
+    page.close()
+    # Elsewhere, the team's account may invite anyone.
+    answers = share_answers()
+    members = answers[f"GET {BASE}/members"][1]
+    members["roles"] = ["observer", "reviewer", "designer", "manager", "admin"]
+    members["inviteNew"] = list(members["roles"])
+    page = open_share(browser_and_url, answers)
+    assert page.inner_text(".hive-dialog .invite-legend") == (
+        "Anyone, by username or email. "
+        "They receive an email with a link, valid 7 days, and join when they accept."
+    )
+    assert page.query_selector(".hive-dialog .free-line") is None
+    page.close()
+
+
+def test_free_places_taken(browser_and_url):
+    page = open_share(browser_and_url, share_answers())
+    result = page.evaluate("""async () => {
+        const m = await import('/views/hive-views.js');
+        const member = (username, role) => ({ username, via: 'collaborator', collaboratorRole: role });
+        const owner = { username: 'ana', via: 'owner', collaboratorRole: null };
+        const legend = (data) => m.inviteLegend('ana/Font', data, { free: true });
+        return {
+          none: m.freePlacesTaken('ana/Font', { members: [owner], invitations: [] }),
+          // the owner is never a place; a manager or an admin takes the designer's
+          admin: m.freePlacesTaken('ana/Font', {
+            members: [owner, { ...owner, collaboratorRole: 'designer' }, member('tom', 'admin')],
+          }),
+          pending: m.freePlacesTaken('ana/Font', {
+            members: [owner, member('tom', 'reviewer')],
+            invitations: [{ role: 'observer' }],
+          }),
+          noneText: legend({ members: [owner], invitations: [], roles: ['observer'] }),
+          allText: legend({
+            members: [owner, member('tom', 'manager'), member('zoe', 'reviewer')],
+            invitations: [{ role: 'observer' }],
+            roles: ['observer'],
+          }),
+        };
+      }""")
+    assert result["none"] == []
+    assert result["admin"] == ["designer"]
+    assert result["pending"] == ["reviewer", "observer"]
+    assert "None is taken yet." in result["noneText"]
+    assert "All three places are taken." in result["allText"]
+    assert "Hive team" not in result["allText"]
     page.close()
 
 

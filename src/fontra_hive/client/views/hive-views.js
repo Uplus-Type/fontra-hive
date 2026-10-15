@@ -1393,10 +1393,55 @@ function planBadge(me) {
 export const LIMITED_LABEL = "reviewer at most";
 export const LIMITED_TITLE = "For now, this person can look and comment here, not change the fonts";
 
-// Free, on the person's own Free project (hive-api's words for its limits).
-export const FREE_LIMIT_TEXT =
-  "Free includes one designer, one reviewer and one observer. Subscribe to Solo to add more.";
+// On a Free project, the places besides its owner: designer (designer,
+// manager or admin), reviewer, observer, one each (hive-api's FREE_LIMITS).
+const FREE_PLACES = ["designer", "reviewer", "observer"];
+const freePlace = (role) => (role === "manager" || role === "admin" ? "designer" : role);
 
+// The places of a Free project taken, as hive-api counts them: its
+// collaborators other than the owner, and the pending invitations.
+export function freePlacesTaken(projectName, data) {
+  const owner = projectName.split("/")[0];
+  const taken = new Set();
+  for (const m of data.members || []) {
+    if (m.collaboratorRole && m.username !== owner) taken.add(freePlace(m.collaboratorRole));
+  }
+  for (const inv of data.invitations || []) taken.add(freePlace(inv.role));
+  return FREE_PLACES.filter((place) => taken.has(place));
+}
+
+// The one line under the invite field: what this person may do on this
+// project. On their Free project, its limits (they hold for the Hive team's
+// account too); elsewhere, who may be invited (data.inviteNew: the roles a
+// new address may get; all of them for the team's account).
+export function inviteLegend(projectName, data, { free = false } = {}) {
+  const inviteNew = data.inviteNew || [];
+  const team = inviteNew.length > 0 && inviteNew.length === (data.roles || []).length;
+  if (free) {
+    const taken = freePlacesTaken(projectName, data);
+    const places =
+      taken.length === FREE_PLACES.length
+        ? "All three places are taken."
+        : taken.length
+        ? `Taken: ${taken.join(", ")}.`
+        : "None is taken yet.";
+    return (
+      "Free includes one designer, one reviewer and one observer besides you, " +
+      `pending invitations included. ${places} ` +
+      (team ? "These limits hold for the Hive team's account too. " : "") +
+      "Subscribe to Solo to add more."
+    );
+  }
+  return (
+    (inviteNew.length && !team
+      ? "People who already have a Hive account, by username or by the address of their account; " +
+        "anyone else by email, as reviewer or observer (they open a free account). "
+      : team
+      ? "Anyone, by username or email. "
+      : "People who already have a Hive account, by username or by the address of their account. ") +
+    "They receive an email with a link, valid 7 days, and join when they accept."
+  );
+}
 
 // People and invitations of a hive-api project: who has which role (and
 // from where), change roles up to one's own, invite by username or email,
@@ -1530,20 +1575,10 @@ export function openShareDialog(projectName, { onClose, free = false, billingUrl
       add.addEventListener("click", invite);
       who.addEventListener("keydown", (e) => e.key === "Enter" && invite());
       dialog.append(el("div", { class: "add" }, [who, role, add]), guestLine);
-      if (free) {
-        dialog.append(el("p", { class: "note free-line" }, [
-          FREE_LIMIT_TEXT,
-          billingUrl ? el("span", {}, [" ", el("a", { href: billingUrl, target: "_blank" }, ["Plan and billing"])]) : null,
-        ]));
-      }
-      dialog.append(el("p", { class: "note" }, [
-        (inviteNew.length && inviteNew.length < data.roles.length
-          ? "People who already have a Hive account, by username or by the address of their account; " +
-            "anyone else by email, as reviewer or observer (they open a free account). "
-          : inviteNew.length
-          ? "Anyone, by username or email. "
-          : "People who already have a Hive account, by username or by the address of their account. ") +
-          "They receive an email with a link, valid 7 days, and join when they accept.",
+      const legend = inviteLegend(projectName, data, { free });
+      dialog.append(el("p", { class: free ? "note invite-legend free-line" : "note invite-legend" }, [
+        legend,
+        free && billingUrl ? el("span", {}, [" ", el("a", { href: billingUrl, target: "_blank" }, ["Plan and billing"])]) : null,
       ]));
     } else {
       dialog.append(el("p", { class: "note" }, ["Managers and admins can invite people and change roles."]));
