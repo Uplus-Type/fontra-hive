@@ -1580,3 +1580,73 @@ def test_before_the_opening_nothing_changes(browser_and_url):  # noqa: F811
     assert "you, or an organization you own" in page.inner_text("form")
     assert page.errors == []
     page.close()
+
+
+def test_the_terms_are_asked_before_anything_else(browser_and_url):  # noqa: F811
+    terms = {
+        "version": "2026-10-20",
+        "url": "https://fontrahive.com/terms",
+        "text": "Fontra Hive has new terms of use and sale.",
+    }
+    page = open_home(
+        browser_and_url,
+        "",
+        {
+            "GET /api/me": [200, {"user": {**ME, "termsToAccept": terms}}],
+            "POST /api/me/accept-terms": [200, {"user": {**ME, "termsToAccept": None}}],
+        },
+    )
+    page.wait_for_selector(".terms-panel")
+    assert page.query_selector(".project-card") is None
+    assert page.get_attribute(".terms-panel a", "href") == "https://fontrahive.com/terms#en"
+    page.click(".terms-panel button[type=submit]")  # not ticked: refused here
+    page.wait_for_function(
+        "document.querySelector('.terms-panel .error').textContent.length > 0"
+    )
+    assert not page.evaluate("calls.some(c => c.path === '/api/me/accept-terms')")
+    page.check(".terms-panel input[name=accept]")
+    page.click(".terms-panel button[type=submit]")
+    page.wait_for_selector(".project-card")
+    sent = page.evaluate("calls.find(c => c.path === '/api/me/accept-terms')")
+    assert sent["body"] == {"version": "2026-10-20"}
+    assert page.errors == []
+    page.close()
+
+
+def test_an_import_refused_before_the_file_is_sent(browser_and_url):  # noqa: F811
+    new_one = project("uplustype", "New-One", "admin")
+    page = open_home(
+        browser_and_url,
+        "#new",
+        {
+            "GET /api/projects/uplustype/New-One": [200, {"project": new_one}],
+            "GET /api/hive/projects/uplustype%2FNew-One/repository": [
+                200,
+                {"exists": False},
+            ],
+            # (fetch is mocked: the answer comes from here)
+            "GET /api/hive/projects/uplustype%2FNew-One/import/check": [
+                429,
+                "Free includes 10 imports a day: try again tomorrow.",
+            ],
+        },
+    )
+    uploads = []
+    page.route(
+        lambda url: url.endswith("/import"),
+        lambda route: (uploads.append(1), route.fulfill(status=200, body="{}")),
+    )
+    page.wait_for_selector("form select[name=owner]")
+    page.select_option("select[name=owner]", "uplustype")
+    page.fill("input[name=name]", "New-One")
+    page.check("input[value=font]")
+    page.set_input_files(
+        "input[type=file]",
+        files=[{"name": "font.zip", "mimeType": "application/zip", "buffer": b"PK"}],
+    )
+    page.click("form button[type=submit]")
+    page.wait_for_selector(".no-font")
+    assert "Free includes 10 imports a day" in page.inner_text(".notice")
+    assert uploads == []
+    assert page.errors == []
+    page.close()

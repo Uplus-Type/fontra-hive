@@ -25,7 +25,7 @@ class FakeApi:
         self.refuse = refuse
         self.counted = []
 
-    async def importStarted(self, uid, project):
+    async def importStarted(self, uid, project, *, check=False):
         self.counted.append((uid, project))
         if self.refuse == "down":
             raise HiveApiUnavailable("down")
@@ -149,3 +149,30 @@ def test_min_free_disk_setting(monkeypatch):
     assert hivemanager.minFreeDisk() == 512 * 1024**2
     monkeypatch.setenv("HIVE_MIN_FREE_DISK_GB", "x")
     assert hivemanager.minFreeDisk() == 5 * 1024**3
+
+
+def test_the_check_asks_without_counting(tmp_path):
+    api = FakeApi()
+    calls = []
+
+    async def importStarted(uid, project, *, check=False):
+        calls.append(check)
+        return (429, "Free includes 10 imports a day.") if len(calls) > 1 else None
+
+    api.importStarted = importStarted
+    manager = make_manager(tmp_path, api)
+
+    async def go():
+        response = await manager.importCheckHandler(request())
+        assert response.status == 200
+        with pytest.raises(web.HTTPTooManyRequests) as refused:
+            await manager.importCheckHandler(request())
+        assert refused.value.text == "Free includes 10 imports a day."
+        assert calls == [True, True]
+        # While an import runs, the check says so too.
+        manager._importing.add("uid.git")
+        with pytest.raises(web.HTTPConflict):
+            await manager.importCheckHandler(request())
+
+    run(go())
+

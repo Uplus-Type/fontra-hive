@@ -56,6 +56,15 @@ logger = logging.getLogger(__name__)
 IMPORTS_AT_ONCE = 2
 
 
+async def noFraming(request: web.Request, response: web.StreamResponse) -> None:
+    """No page of Hive may be shown inside another site's frame (security
+    review, S-3: a page asking for a password, or the editor, under a
+    transparent frame of a page that steers the clicks). Caddy sets the same
+    headers in production; these cover a server reached without it."""
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
+
+
 def minFreeDisk() -> int:
     """Below this many free bytes on the disk of the repositories, imports
     are refused (``HIVE_MIN_FREE_DISK_GB``, 5 by default): an import can
@@ -356,6 +365,7 @@ class HiveProjectManager(DevHiveProjectManager):
             self._remoteTask = asyncio.create_task(self._pullMovedPeriodically())
 
         server.httpApp.on_startup.append(startSweeping)
+        server.httpApp.on_response_prepare.append(noFraming)
 
     # --- remote git repositories ------------------------------------------------
     # The remote and its credentials come from hive-api (/api/internal/remote);
@@ -499,16 +509,34 @@ class HiveProjectManager(DevHiveProjectManager):
         """Replace a project's font with an uploaded one (multipart field
         ``file``), converted from any format Fontra reads. A new commit:
         the history before it stays. Admins who may change the font."""
-        name = request.match_info["name"]
-        projectAccess = await self._projectAccess(request, name)
+        projectAccess = await self._importAccess(request)
+        key = projectAccess.repo  # the repository: a rename keeps it
+        self._importing.add(key)  # before any await: two requests at once
+        try:
+            await self._countImport(projectAccess, check=False)
+            return await self._import(request, projectAccess)
+        finally:
+            self._importing.discard(key)
+
+    async def importCheckHandler(self, request: web.Request) -> web.Response:
+        """Would an import go now? Asked by the page before it sends the file:
+        a refusal sent while hundreds of MB are still on their way often
+        reaches the browser as a broken connection, without its text."""
+        projectAccess = await self._importAccess(request)
+        await self._countImport(projectAccess, check=True)
+        return web.json_response({"ok": True})
+
+    async def _importAccess(self, request: web.Request) -> ProjectAccess:
+        """Who may import now, and where: refusals before the upload is read
+        (audit L-1: one import at a time per project, disk kept free)."""
+        projectAccess = await self._projectAccess(request, request.match_info["name"])
         if not projectAccess.access.can("administer"):
             raise web.HTTPForbidden(
                 text="Only the admins of a project can import a font."
             )
         if not projectAccess.access.can("edit"):
             raise web.HTTPForbidden(text=_cannotChange(projectAccess.access))
-        key = projectAccess.repo  # the repository: a rename keeps it
-        if key in self._importing:
+        if projectAccess.repo in self._importing:
             raise web.HTTPConflict(
                 text="An import is already running for this project: wait for it."
             )
@@ -517,26 +545,25 @@ class HiveProjectManager(DevHiveProjectManager):
             raise web.HTTPInsufficientStorage(
                 text="The server is short of space for now: try again later."
             )
-        self._importing.add(key)  # before any await: two requests at once
+        return projectAccess
+
+    async def _countImport(self, projectAccess: ProjectAccess, *, check: bool) -> None:
+        """The account's imports a day, counted by hive-api (``check``: only
+        asked, not counted)."""
+        user = projectAccess.access.user
+        if not user.uid:
+            return
         try:
-            user = projectAccess.access.user
-            if user.uid:
-                try:
-                    refused = await self.api.importStarted(
-                        user.uid, projectAccess.projectId
-                    )
-                except HiveApiUnavailable:
-                    raise web.HTTPServiceUnavailable(
-                        text="Hive is not answering: try again."
-                    )
-                if refused:
-                    status, text = refused
-                    if status == 429:
-                        raise web.HTTPTooManyRequests(text=text)
-                    raise web.HTTPForbidden(text=text)
-            return await self._import(request, projectAccess)
-        finally:
-            self._importing.discard(key)
+            refused = await self.api.importStarted(
+                user.uid, projectAccess.projectId, check=check
+            )
+        except HiveApiUnavailable:
+            raise web.HTTPServiceUnavailable(text="Hive is not answering: try again.")
+        if refused:
+            status, text = refused
+            if status == 429:
+                raise web.HTTPTooManyRequests(text=text)
+            raise web.HTTPForbidden(text=text)
 
     async def _import(self, request: web.Request, projectAccess) -> web.Response:
         reader = await request.multipart()
@@ -660,6 +687,7 @@ class HiveProjectManager(DevHiveProjectManager):
             web.get("/hive/logout", self.logoutPageHandler),
             *(web.get(path, self.accountPageHandler) for path in ACCOUNT_PAGES),
             web.post("/api/hive/projects/{name}/import", self.importHandler),
+            web.get("/api/hive/projects/{name}/import/check", self.importCheckHandler),
             web.get("/api/hive/projects/{name}/repository", self.repositoryHandler),
             web.post("/api/hive/sweep-deleted", self.sweepHandler),
             web.get("/api/hive/projects/{name}/remote", self.remoteStatusHandler),

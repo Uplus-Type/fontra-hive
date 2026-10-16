@@ -85,8 +85,34 @@ function roleSelect(roles, selected, attrs = {}) {
   return el("select", attrs, roles.map((r) => el("option", { value: r, selected: r === selected }, [r])));
 }
 
+// Would the server take an import now (imports a day, one at a time, disk)?
+// Asked before sending the file: a refusal sent while the file is still on its
+// way often reaches the page as a broken connection, without its words. A
+// server without the route (404) is not asked.
+async function importRefusal(projectId) {
+  try {
+    const response = await fetch(`/api/hive/projects/${encodeURIComponent(projectId)}/import/check`, {
+      credentials: "same-origin",
+    });
+    if (response.ok || response.status === 404) return null;
+    const text = await response.text();
+    try {
+      const data = JSON.parse(text); // aiohttp answers plain text; just in case
+      if (typeof data === "string") return data;
+      if (typeof data?.detail === "string") return data.detail;
+    } catch (error) {
+      // plain text
+    }
+    return text || `Error ${response.status}`;
+  } catch (error) {
+    return null; // the upload itself will tell
+  }
+}
+
 // Upload a font to a project, with progress (fetch cannot report it).
-export function uploadFont(projectId, file, onProgress) {
+export async function uploadFont(projectId, file, onProgress) {
+  const refusal = await importRefusal(projectId);
+  if (refusal) throw new Error(refusal);
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
     request.open("POST", `/api/hive/projects/${encodeURIComponent(projectId)}/import`);
@@ -1727,8 +1753,45 @@ export function parseHash(hash) {
   }
 }
 
+// New terms of use and sale to accept (hive-api, hive/terms.py): asked before
+// anything else on the home page, once, after the opening.
+function termsSection() {
+  const terms = me.termsToAccept;
+  const box = el("input", { type: "checkbox", name: "accept" });
+  const f = form(
+    [
+      el("label", { class: "check" }, [
+        box,
+        el("span", {}, ["I have read and I accept the terms of use and sale"]),
+      ]),
+    ],
+    "Accept and go on",
+    async () => {
+      if (!box.checked) throw new Error("Tick the box to accept the terms.");
+      const { user } = await call("/api/me/accept-terms", { version: terms.version });
+      me = { ...me, ...user };
+      route();
+    }
+  );
+  main().replaceChildren(
+    el("div", { class: "panel terms-panel" }, [
+      el("h2", { style: "margin-top:0" }, ["Terms of use and sale"]),
+      el("p", { class: "note" }, [
+        terms.text,
+        " ",
+        el("a", { href: `${terms.url}#en`, target: "_blank", rel: "noopener" }, ["Read the terms"]),
+      ]),
+      f,
+    ])
+  );
+}
+
 async function route() {
   const where = parseHash(location.hash);
+  if (me?.termsToAccept) {
+    termsSection();
+    return;
+  }
   for (const link of document.querySelectorAll("nav a")) {
     link.classList.toggle("current", link.dataset.section === where.section);
   }

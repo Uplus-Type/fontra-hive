@@ -299,13 +299,18 @@ class HiveApi:
         except aiohttp.ClientError as error:
             raise HiveApiUnavailable(f"{path}: {error}") from error
 
-    async def importStarted(self, uid: str, project: str) -> tuple[int, str] | None:
+    async def importStarted(
+        self, uid: str, project: str, *, check: bool = False
+    ) -> tuple[int, str] | None:
         """Count an import of ``project`` by ``uid`` (audit L-1: imports a day
         per account). None when it may go on; (429 or 403, the text to show)
-        when the account is over its limit or the import is refused. An older hive-api
-        without the route (a 404 page, not JSON) lets it go on."""
+        when the account is over its limit or the import is refused.
+        ``check``: only ask, without counting. An older hive-api without the
+        route (a 404 page, not JSON) lets it go on."""
         status, data = await self._call(
-            "POST", "/api/internal/import", json={"user": uid, "project": project}
+            "POST",
+            "/api/internal/import",
+            json={"user": uid, "project": project, "check": check},
         )
         detail = data.get("detail") if isinstance(data, dict) else None
         if status == 429:
