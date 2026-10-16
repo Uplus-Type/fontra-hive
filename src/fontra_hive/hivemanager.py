@@ -51,6 +51,21 @@ from .projectmanager import DevHiveProjectManager, _htmlResponse, _sameOrigin
 
 logger = logging.getLogger(__name__)
 
+# Conversions of imported fonts running at once on the server (each one in a
+# thread, up to 1 GB unpacked): the others wait their turn (audit L-1).
+IMPORTS_AT_ONCE = 2
+
+
+def minFreeDisk() -> int:
+    """Below this many free bytes on the disk of the repositories, imports
+    are refused (``HIVE_MIN_FREE_DISK_GB``, 5 by default): an import can
+    take a few GB while it is converted, and edits must still be saved."""
+    try:
+        gigabytes = float(os.environ.get("HIVE_MIN_FREE_DISK_GB", "5"))
+    except ValueError:
+        gigabytes = 5.0
+    return int(gigabytes * 1024**3)
+
 ACCOUNT_PAGES = {
     "/invitation": "invitation.html",
     "/forgot-password": "forgot-password.html",
@@ -179,6 +194,10 @@ class HiveProjectManager(DevHiveProjectManager):
         self._proxySession: aiohttp.ClientSession | None = None
         self._sweepLock = asyncio.Lock()
         self._sweepTask: asyncio.Task | None = None
+        # Imports (audit L-1): one at a time per project, a few conversions
+        # at once on the whole server, none when the disk runs short.
+        self._importing: set[str] = set()
+        self._conversions = asyncio.Semaphore(IMPORTS_AT_ONCE)
         self._remoteTask: asyncio.Task | None = None
         # Remote git repositories (GitHub…): credentials from hive-api.
         self.remoteSync = RemoteSync(
@@ -488,6 +507,38 @@ class HiveProjectManager(DevHiveProjectManager):
             )
         if not projectAccess.access.can("edit"):
             raise web.HTTPForbidden(text=_cannotChange(projectAccess.access))
+        key = projectAccess.repo  # the repository: a rename keeps it
+        if key in self._importing:
+            raise web.HTTPConflict(
+                text="An import is already running for this project: wait for it."
+            )
+        if shutil.disk_usage(self.rootPath).free < minFreeDisk():
+            logger.error("import refused: %s is short of space", self.rootPath)
+            raise web.HTTPInsufficientStorage(
+                text="The server is short of space for now: try again later."
+            )
+        self._importing.add(key)  # before any await: two requests at once
+        try:
+            user = projectAccess.access.user
+            if user.uid:
+                try:
+                    refused = await self.api.importStarted(
+                        user.uid, projectAccess.projectId
+                    )
+                except HiveApiUnavailable:
+                    raise web.HTTPServiceUnavailable(
+                        text="Hive is not answering: try again."
+                    )
+                if refused:
+                    status, text = refused
+                    if status == 429:
+                        raise web.HTTPTooManyRequests(text=text)
+                    raise web.HTTPForbidden(text=text)
+            return await self._import(request, projectAccess)
+        finally:
+            self._importing.discard(key)
+
+    async def _import(self, request: web.Request, projectAccess) -> web.Response:
         reader = await request.multipart()
         part = await reader.next()
         while part is not None and part.name != "file":
@@ -508,9 +559,10 @@ class HiveProjectManager(DevHiveProjectManager):
                         )
                     out.write(chunk)
             try:
-                font = await asyncio.to_thread(
-                    importer.convertToFontra, upload, filename, work
-                )
+                async with self._conversions:
+                    font = await asyncio.to_thread(
+                        importer.convertToFontra, upload, filename, work
+                    )
             except importer.ImportError_ as error:
                 raise web.HTTPUnprocessableEntity(text=str(error))
             message = f"Import {filename}"
