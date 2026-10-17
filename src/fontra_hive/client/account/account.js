@@ -132,7 +132,7 @@ function waitlist() {
         website: form.website.value,
       });
       form.classList.add("hidden");
-      sent.textContent = `Thank you, you are on the waiting list. We will write to ${email} with your invitation when the beta opens.`;
+      sent.textContent = `Thank you, you are on the waiting list. We will write to ${email} with your invitation when Fontra Hive opens.`;
       sent.classList.remove("hidden");
     });
   });
