@@ -149,7 +149,12 @@ export function fontProblem(file) {
 function importFields() {
   const input = el("input", { type: "file", name: "font", accept: FONT_ACCEPT });
   const bar = el("div", { class: "progress hidden" }, [el("div")]);
-  return { input, bar, elements: [field("Font", input, FONT_HINT), bar] };
+  // Said in red as soon as such a file is chosen, not only on submit.
+  const warning = el("div", { class: "font-problem", role: "alert" });
+  input.addEventListener("change", () => {
+    warning.textContent = fontProblem(input.files[0]) || "";
+  });
+  return { input, bar, elements: [field("Font", input, FONT_HINT), warning, bar] };
 }
 
 async function importWithProgress(projectId, file, bar, status) {

@@ -283,11 +283,19 @@ def test_a_designspace_alone_is_explained_before_anything_is_sent(browser_and_ur
             "input[type=file]",
             files=[{"name": name, "mimeType": "application/octet-stream", "buffer": b"<designspace/>"}],
         )
+        # Said in red as soon as the file is chosen.
+        assert says in page.inner_text(".font-problem")
+        assert page.evaluate("getComputedStyle(document.querySelector('.font-problem')).color") == "rgb(241, 23, 89)"
         page.click("form button[type=submit]")
         page.wait_for_function(
             "(says) => document.querySelector('form .error').textContent.includes(says)", arg=says
         )
     assert not page.evaluate("calls.some(c => c.path === '/api/projects' || c.path.endsWith('/import'))")
+    # A font that can be sent: the warning goes.
+    page.set_input_files(
+        "input[type=file]", files=[{"name": "MyFamily.zip", "mimeType": "application/zip", "buffer": b"PK"}]
+    )
+    assert page.inner_text(".font-problem") == "" and page.locator(".font-problem").is_hidden()
     assert page.errors == []
     page.close()
 

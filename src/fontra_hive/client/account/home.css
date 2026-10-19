@@ -102,6 +102,9 @@ table.people button { margin: 0; padding: 0.3em 0.7em; }
 .photo .avatar { width: 64px; height: 64px; font-size: 26px; }
 /* No empty space for messages that are not there. */
 .error:empty, .ok:empty, p.note:empty { display: none; }
+/* A font chosen that cannot be sent as is (home.js fontProblem): said in red at once. */
+.font-problem { color: var(--fontra-red-color, #f11759); font-size: 0.9em; margin: 0.5em 0 0.8em; }
+.font-problem:empty { display: none; }
 main h2 button { font-size: 0.68em; margin: 0; }
 main h2 .badge { font-size: 0.6em; font-weight: normal; }
 table.people td:nth-child(2), table.people td:nth-child(3) { width: 1%; white-space: nowrap; }
