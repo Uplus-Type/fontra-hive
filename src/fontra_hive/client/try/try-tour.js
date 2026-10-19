@@ -306,6 +306,23 @@ export class Tour {
     this.polling = null;
     this.onKey = (event) => this.key(event);
     this.onMove = () => this.place();
+    // The part of the interface a step points at may grow, shrink or move
+    // while it is shown (a panel resized, the window, a sidebar opening):
+    // the bubble and the ring follow it. A sidebar's tab does not change
+    // size when its panel is resized, it moves — the box around it does: the
+    // anchor and every box it sits in are watched.
+    this.watched = null;
+    this.placing = 0;
+    this.observer =
+      typeof ResizeObserver === "function"
+        ? new ResizeObserver(() => {
+            if (this.placing) return;
+            this.placing = requestAnimationFrame(() => {
+              this.placing = 0;
+              this.place();
+            });
+          })
+        : null;
   }
 
   static current = null;
@@ -530,6 +547,7 @@ export class Tour {
     const bh = bubble.offsetHeight;
     const clamp = (value, min, max) => Math.max(min, Math.min(value, max));
     const [dx, dy] = step.offset || [0, 0];
+    this.watch(anchor);
     const r = anchor ? anchor.getBoundingClientRect() : null;
     if (!r || (r.width === 0 && r.height === 0) || step.ring === false) {
       this.ring.hidden = true;
@@ -585,9 +603,25 @@ export class Tour {
     bubble.style.top = Math.round(clamp(top + dy, 8, vh - bh - 8)) + "px";
   }
 
+  // Watch the step's anchor and the boxes it sits in (through shadow roots),
+  // up to <body>; nothing when the step points at nothing here.
+  watch(anchor) {
+    if (!this.observer || anchor === this.watched) return;
+    this.observer.disconnect();
+    this.watched = anchor;
+    for (let node = anchor; node && node !== document.documentElement; ) {
+      this.observer.observe(node);
+      node = node.parentElement || node.getRootNode?.().host || null;
+    }
+  }
+
   // Take the bubble away, nothing remembered (another tab shows the tour now).
   close() {
     this.polling = null;
+    this.observer?.disconnect();
+    this.watched = null;
+    if (this.placing) cancelAnimationFrame(this.placing);
+    this.placing = 0;
     window.removeEventListener("keydown", this.onKey, true);
     window.removeEventListener("resize", this.onMove);
     window.removeEventListener("scroll", this.onMove, true);

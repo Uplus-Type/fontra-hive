@@ -1736,3 +1736,124 @@ def test_the_font_info_tour_goes_through_its_panels(server, browser):
     assert bubble.locator("button.next").inner_text() == "Back to the editor"
     assert not errors
     context.close()
+
+
+# The editor laid out as Fontra lays it out (editor.html, editor.css): the
+# sidebars' widths are CSS variables, their tabs sit in the main container,
+# at the edge of the panel — resizing a panel moves its tab.
+MOCK_FONTRA_LAYOUT = """() => {
+  document.head.insertAdjacentHTML("beforeend", `<style>
+    :root { --sidebar-content-width-left: 260px; --sidebar-content-width-right: 280px; }
+    html, body { margin: 0; height: 100%; }
+    .editor-container { display: grid; grid-template-columns: auto 1fr auto; grid-template-rows: 40px 1fr; height: 100%; }
+    .top-bar-container { grid-column: 1 / 4; display: flex; justify-content: flex-end; padding: 8px 120px 0 0; }
+    .sidebar-container { grid-row: 2; width: 0; }
+    .sidebar-container.left.visible { width: var(--sidebar-content-width-left); }
+    .sidebar-container.right.visible { width: var(--sidebar-content-width-right); }
+    .main-container { grid-row: 2; grid-column: 2; position: relative; }
+    #edit-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .main-overlay-container { position: absolute; inset: 0; display: grid; grid-template-columns: 3.5em 1fr 3.5em; }
+    .tab-overlay-container { display: grid; gap: 1em; padding-top: 1em; align-content: start; }
+    .tab-overlay-container.right { justify-items: end; }
+    .sidebar-tab { width: 3em; height: 2.8em; }
+    .tool-overlay-container { display: flex; justify-content: center; padding-top: 10px; align-items: start; }
+    #edit-tools { width: 300px; height: 30px; }
+    .hive-branch { width: 80px; height: 24px; }
+    .hive-try { position: fixed; left: 50%; bottom: 14px; width: 500px; height: 40px; transform: translateX(-50%); }
+  </style>`);
+  const sides = { left: ["text-entry", "glyph-search", "designspace-navigation"], right: ["hive-history", "hive-comments"] };
+  const tabs = (side) => sides[side].map((n) => `<div class="sidebar-tab" data-sidebar-name="${n}"></div>`).join("");
+  document.body.insertAdjacentHTML("beforeend", `
+    <div class="editor-container">
+      <div class="top-bar-container"><button class="hive-branch">main</button></div>
+      <div class="sidebar-container left"></div>
+      <div class="main-container">
+        <canvas id="edit-canvas"></canvas>
+        <div class="main-overlay-container">
+          <div class="tab-overlay-container left">${tabs("left")}</div>
+          <div class="tool-overlay-container"><div id="edit-tools"><div class="tool-button"></div></div></div>
+          <div class="tab-overlay-container right">${tabs("right")}</div>
+        </div>
+      </div>
+      <div class="sidebar-container right"></div>
+    </div>
+    <div class="hive-try"><button class="fonts">Your fonts</button></div>`);
+  window.editorController = {
+    fontController: {},
+    toggleSidebar: (name) => {
+      const side = sides.left.includes(name) ? "left" : "right";
+      for (const n of sides[side]) document.querySelector(`.sidebar-tab[data-sidebar-name="${n}"]`).classList.toggle("selected", n === name);
+      document.querySelector(`.sidebar-container.${side}`).classList.add("visible");
+    },
+  };
+}"""
+
+# Where the ring and the bubble are, where the anchor is, and where the
+# bubble would be if it were placed afresh now.
+PLACES = """() => {
+  const t = window.__t, ring = document.querySelector('.hive-tour-ring'), bubble = document.querySelector('.hive-tour');
+  const anchor = t.step.anchor ? window.__tour.deepQuery(t.step.anchor).getBoundingClientRect() : null;
+  const r = ring.getBoundingClientRect();
+  const was = [bubble.style.left, bubble.style.top, ring.hidden];
+  t.place();
+  return { anchor: anchor && [anchor.left, anchor.top, anchor.width, anchor.height],
+           ring: was[2] ? null : [r.left, r.top, r.width, r.height],
+           bubble: [was[0], was[1]], fresh: [bubble.style.left, bubble.style.top] };
+}"""
+
+FRAMES = "() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(r))))"
+
+
+def test_the_bubble_follows_a_resized_panel(server, browser):
+    """A panel resized while a step is shown (or the window): the ring and
+    the bubble follow the part of the interface they point at, on every
+    step of the editor's tour — not only where it was when the step showed."""
+    context, page, errors = _tourPage(browser, server)
+    page.evaluate(MOCK_FONTRA_LAYOUT)
+    # Panels left open from an earlier visit, as Fontra keeps them.
+    page.evaluate("() => ['glyph-search', 'hive-history'].forEach((n) => window.editorController.toggleSidebar(n))")
+    page.evaluate("() => { window.__t = window.__tour.startTour('editor', 'canvas'); }")
+    bubble = page.locator(".hive-tour")
+    page.evaluate(FRAMES)  # the sidebar opened by the step is in place
+    moved = set()
+    seen = []
+    for n in range(1, 9):
+        assert bubble.locator(".count").inner_text() == f"{n}/8"
+        step = page.evaluate("() => window.__t.step.id")
+        seen.append(step)
+        page.wait_for_timeout(750)  # the first 700 ms follow the sidebar opening anyway
+        for side, width in [("left", 380), ("right", 420), ("left", 220), ("right", 240)]:
+            before = page.evaluate(PLACES)["anchor"]
+            page.evaluate(
+                "([side, width]) => document.documentElement.style.setProperty(`--sidebar-content-width-${side}`, `${width}px`)",
+                [side, width],
+            )
+            page.evaluate(FRAMES)
+            places = page.evaluate(PLACES)
+            if places["anchor"] != before:
+                moved.add(step)
+            # The bubble is where it would be placed now, the ring around the anchor.
+            assert places["bubble"] == places["fresh"], (step, side, places)
+            if places["ring"]:
+                a, r = places["anchor"], places["ring"]
+                assert abs(r[0] - (a[0] - 4)) < 1 and abs(r[1] - (a[1] - 4)) < 1, (step, side, places)
+                assert abs(r[2] - (a[2] + 8)) < 1 and abs(r[3] - (a[3] + 8)) < 1, (step, side, places)
+        bubble.locator("button.next").click()
+    assert seen == ["canvas", "text", "tools", "designspace", "history", "branches", "comments", "bar"]
+    # Resizing a panel moves the panels' tabs, the tools and the canvas.
+    assert {"canvas", "text", "tools", "designspace", "history", "comments"} <= moved
+    assert page.locator(".hive-tour").count() == 0
+
+    # The window resized: the same.
+    page.evaluate("() => { window.__t = window.__tour.startTour('editor', 'comments'); }")
+    page.evaluate(FRAMES)
+    page.set_viewport_size({"width": 1200, "height": 800})
+    page.evaluate(FRAMES)
+    places = page.evaluate(PLACES)
+    assert places["bubble"] == places["fresh"]
+    assert abs(places["ring"][0] - (places["anchor"][0] - 4)) < 1
+    # Ended: nothing is watched any more.
+    page.evaluate("() => window.__t.end('skipped')")
+    assert page.evaluate("() => window.__t.watched") is None
+    assert not errors
+    context.close()
