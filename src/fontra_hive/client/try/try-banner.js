@@ -103,6 +103,14 @@ function when(iso) {
 
 const FONT_FILES = /\.(ttf|otf|woff2?|ttx|glyphs)$/i;
 const GLYPHS = /\.glyphs(package)?(\/|$)/i;
+// Fonts that are folders, picked as a file (a package on a Mac).
+const FOLDER_FONTS = /\.(ufo|fontra|glyphspackage)$/i;
+
+// What is said where a font is picked, and when a designspace comes alone.
+export const DESIGNSPACE_HINT = "Designspace: upload a .zip of the folder with its UFOs, or open that folder.";
+export const DESIGNSPACE_ALONE =
+  "A .designspace needs its UFOs. Make a .zip of the folder that holds the .designspace and its UFOs, " +
+  "and open the .zip (or open the folder itself with “Open a folder…”).";
 
 function hasFontra(paths) {
   return paths.some((p) => p.split("/").pop() === "font-data.json");
@@ -139,8 +147,10 @@ async function packageFromPick(fileList, onProgress) {
         label: stemOf(file.name),
       };
     }
-    if (/\.designspace$/i.test(file.name)) {
-      throw new Error("A designspace needs its UFOs: open the folder that holds them, or a .zip of it.");
+    if (/\.designspace$/i.test(file.name)) throw new Error(DESIGNSPACE_ALONE);
+    if (FOLDER_FONTS.test(file.name)) {
+      const ext = file.name.match(FOLDER_FONTS)[0].toLowerCase();
+      throw new Error(`A ${ext} is a folder: open it with “Open a folder…”, or open a .zip of it.`);
     }
     throw new Error("Open a .zip, a .glyphs, .ttf, .otf, .woff, .woff2 or .ttx file, or a folder.");
   }
@@ -195,7 +205,8 @@ function openPanel({ newFont = false } = {}) {
   const list = el("ul");
   const fileInput = el("input", {
     type: "file",
-    accept: ".zip,.glyphs,.ttf,.otf,.woff,.woff2,.ttx,application/zip",
+    // .designspace and .ufo too: not greyed out, the message says what to do.
+    accept: ".zip,.glyphs,.ttf,.otf,.woff,.woff2,.ttx,.designspace,.ufo,application/zip",
     hidden: "",
   });
   const folderInput = el("input", { type: "file", webkitdirectory: "", hidden: "" });
@@ -340,7 +351,7 @@ function openPanel({ newFont = false } = {}) {
         { class: "actions" },
         el(
           "button",
-          { type: "button", title: "A .glyphs, .ttf, .otf, .woff or .woff2 file, or a .zip of any font", onclick: () => fileInput.click() },
+          { type: "button", title: "A .glyphs, .ttf, .otf, .woff or .woff2 file, or a .zip of any font (a designspace: the folder with its UFOs, zipped)", onclick: () => fileInput.click() },
           "Open a file…"
         ),
         el(
@@ -367,6 +378,7 @@ function openPanel({ newFont = false } = {}) {
           "New font…"
         )
       ),
+      el("p", { class: "note designspace" }, DESIGNSPACE_HINT),
       newForm,
       progress,
       error,
@@ -377,7 +389,7 @@ function openPanel({ newFont = false } = {}) {
         " for a .glyphs, .ttf, .otf, .woff2, or a .zip of any font. ",
         el("strong", {}, "Open a folder…"),
         " for a .fontra, .ufo or .glyphspackage: they look like files on a Mac but are folders. " +
-          "For a designspace, choose the folder that holds it with its UFOs.",
+          "For a designspace, the folder that holds it with its UFOs: open it, or a .zip of it.",
         el("br"),
         "Fonts are kept by this browser only: clearing this site's data deletes them. File › Export as saves a copy on your computer."
       ),

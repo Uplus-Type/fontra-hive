@@ -115,6 +115,11 @@ def convertToFontra(
     suffix = pathlib.PurePath(filename).suffix.lstrip(".").lower()
     unpacked = work / "unpacked"
     unpacked.mkdir()
+    if suffix == "designspace":
+        raise ImportError_(
+            "A .designspace needs its UFOs: upload a .zip of the folder that holds "
+            "the .designspace and its UFOs."
+        )
     if suffix == "zip":
         unzip(upload, unpacked)
     elif suffix in extensions:

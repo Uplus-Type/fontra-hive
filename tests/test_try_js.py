@@ -1857,3 +1857,35 @@ def test_the_bubble_follows_a_resized_panel(server, browser):
     assert page.evaluate("() => window.__t.watched") is None
     assert not errors
     context.close()
+
+
+def test_your_fonts_says_how_to_open_a_designspace(server, browser):
+    """"Your fonts" says how to open a designspace (a .zip of the folder with
+    its UFOs, or the folder); a .designspace or a .ufo picked alone is not
+    refused without a word: the panel says what to do."""
+    context = browser.new_context(viewport={"width": 1400, "height": 850})
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.goto(f"{server}/bare.html")
+    page.evaluate("() => import('/hive/try/try-banner.js')")
+    page.click(".hive-try button.fonts")
+    panel = page.locator(".hive-try-panel")
+    assert panel.locator("p.designspace").inner_text() == (
+        "Designspace: upload a .zip of the folder with its UFOs, or open that folder."
+    )
+    accept = page.get_attribute(".hive-try-panel input[type=file]:not([webkitdirectory])", "accept")
+    assert ".designspace" in accept and ".ufo" in accept  # not greyed out in the file dialog
+    for name, says in [
+        ("MyFamily.designspace", "A .designspace needs its UFOs. Make a .zip of the folder that holds the .designspace and its UFOs"),
+        ("MyFamily-Bold.ufo", "A .ufo is a folder: open it with “Open a folder…”, or open a .zip of it."),
+    ]:
+        page.set_input_files(
+            ".hive-try-panel input[type=file]:not([webkitdirectory])",
+            files=[{"name": name, "mimeType": "application/octet-stream", "buffer": b"<designspace/>"}],
+        )
+        page.wait_for_function(
+            "(says) => document.querySelector('.hive-try-panel p.error').textContent.includes(says)", arg=says
+        )
+    assert not errors
+    context.close()

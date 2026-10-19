@@ -128,10 +128,23 @@ export async function uploadFont(projectId, file, onProgress) {
   });
 }
 
-const FONT_ACCEPT = ".zip,.ttf,.otf,.woff,.woff2,.ttx,.glyphs,.designspace";
+// .designspace and .ufo too: not greyed out, fontProblem() says what to do.
+const FONT_ACCEPT = ".zip,.ttf,.otf,.woff,.woff2,.ttx,.glyphs,.designspace,.ufo";
 const FONT_HINT =
-  "A font that is a folder (.designspace with its UFOs, .ufo, .fontra, .glyphspackage) as a .zip; " +
-  "or a single file: .ttf, .otf, .woff2, .glyphs…";
+  "Designspace: upload a .zip of the folder with its UFOs. A .ufo, .fontra or .glyphspackage is a folder too: " +
+  "upload a .zip of it. Or a single file: .ttf, .otf, .woff2, .glyphs…";
+
+// A font that cannot be sent as it was picked, with what to do (before the
+// upload, and before a new project is made for it); null when it can.
+export function fontProblem(file) {
+  const name = file?.name || "";
+  if (/\.designspace$/i.test(name)) {
+    return "A .designspace needs its UFOs: upload a .zip of the folder that holds the .designspace and its UFOs.";
+  }
+  const folder = name.match(/\.(ufo|fontra|glyphspackage)$/i);
+  if (folder) return `A ${folder[0].toLowerCase()} is a folder: upload a .zip of it.`;
+  return null;
+}
 
 function importFields() {
   const input = el("input", { type: "file", name: "font", accept: FONT_ACCEPT });
@@ -521,6 +534,7 @@ async function newProjectSection() {
     "Create the project",
     async () => {
       if (fromFont.checked && !file.files[0]) throw new Error("Choose a font file, or start a new font.");
+      if (fromFont.checked && fontProblem(file.files[0])) throw new Error(fontProblem(file.files[0]));
       const { project } = await call("/api/projects", {
         name: name.value.trim(),
         owner: owner.value,
@@ -1496,6 +1510,7 @@ async function projectSection(projectId) {
         ]),
         form([...elements, status], "Import", async () => {
           if (!file.files[0]) throw new Error("Choose a font file.");
+          if (fontProblem(file.files[0])) throw new Error(fontProblem(file.files[0]));
           await importWithProgress(project.id, file.files[0], bar, status);
           status.textContent = "";
           if (!withFont) {

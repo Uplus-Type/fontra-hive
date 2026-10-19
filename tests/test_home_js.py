@@ -262,6 +262,36 @@ def test_organization_page(browser_and_url):  # noqa: F811
     page.close()
 
 
+def test_a_designspace_alone_is_explained_before_anything_is_sent(browser_and_url):  # noqa: F811
+    """The import says how to send a designspace (a .zip of the folder with
+    its UFOs); a .designspace or a .ufo picked alone gets that answer at
+    once — no project made, nothing uploaded."""
+    page = open_home(browser_and_url, "#new")
+    page.wait_for_selector("form select[name=owner]")
+    hint = page.inner_text("label:has(input[type=file]) small")
+    assert hint.startswith("Designspace: upload a .zip of the folder with its UFOs.")
+    accept = page.get_attribute("input[type=file]", "accept")
+    assert ".designspace" in accept and ".ufo" in accept
+    page.select_option("select[name=owner]", "uplustype")
+    page.fill("input[name=name]", "New-One")
+    page.check("input[value=font]")
+    for name, says in [
+        ("MyFamily.designspace", "A .designspace needs its UFOs: upload a .zip of the folder that holds"),
+        ("MyFamily-Bold.ufo", "A .ufo is a folder: upload a .zip of it."),
+    ]:
+        page.set_input_files(
+            "input[type=file]",
+            files=[{"name": name, "mimeType": "application/octet-stream", "buffer": b"<designspace/>"}],
+        )
+        page.click("form button[type=submit]")
+        page.wait_for_function(
+            "(says) => document.querySelector('form .error').textContent.includes(says)", arg=says
+        )
+    assert not page.evaluate("calls.some(c => c.path === '/api/projects' || c.path.endsWith('/import'))")
+    assert page.errors == []
+    page.close()
+
+
 def test_a_failed_import_leaves_a_project_without_a_font(browser_and_url):  # noqa: F811
     """New project from a font, the import fails: the project page says so,
     offers to import again or start empty, and has no "Open" (which would

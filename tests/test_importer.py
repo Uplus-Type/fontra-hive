@@ -100,6 +100,16 @@ def test_refusals(tmp_path):
         importer.convertToFontra(tmp_path / "broken", "broken.zip", work4)
 
 
+def test_a_designspace_alone_says_to_zip_its_folder(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    (tmp_path / "upload").write_text("<designspace/>")
+    with pytest.raises(
+        importer.ImportError_, match=r"needs its UFOs: upload a \.zip of the folder"
+    ):
+        importer.convertToFontra(tmp_path / "upload", "MyFamily.designspace", work)
+
+
 def test_the_designspace_wins_over_its_ufos(tmp_path):
     (tmp_path / "Family" / "masters" / "Light.ufo").mkdir(parents=True)
     (tmp_path / "Family" / "masters" / "Bold.ufo").mkdir(parents=True)
