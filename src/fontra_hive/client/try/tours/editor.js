@@ -79,10 +79,12 @@ export const editor = {
     {
       id: "branches",
       anchor: ".hive-branch",
-      placement: "left", // its menu drops below the pill: leave it room
+      // Its menu drops below the pill, over the sidebar: the bubble goes to
+      // the left of the open panels and of the menu (try-tour.js, avoided).
+      placement: "left",
       title: "Branches",
       text:
-        "Try a bolder H on a branch of your own — open the menu and make one now, the tour " +
+        "Try a bolder M on a branch of your own — open the menu and make one now, the tour " +
         "follows. Merge it into main when it works, or drop it and nothing is lost.",
       teams: "everyone draws on their own branch, and a merge is reviewed before it reaches main.",
     },

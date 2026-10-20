@@ -1740,13 +1740,16 @@ def test_the_font_info_tour_goes_through_its_panels(server, browser):
 
 # The editor laid out as Fontra lays it out (editor.html, editor.css): the
 # sidebars' widths are CSS variables, their tabs sit in the main container,
-# at the edge of the panel — resizing a panel moves its tab.
+# at the edge of the panel — resizing a panel moves its tab. The top bar is
+# 35 px high; in Try, the font's name and the branch pill end it on the
+# right (hive-views.js, .hive-right), above the right sidebar.
 MOCK_FONTRA_LAYOUT = """() => {
   document.head.insertAdjacentHTML("beforeend", `<style>
     :root { --sidebar-content-width-left: 260px; --sidebar-content-width-right: 280px; }
     html, body { margin: 0; height: 100%; }
-    .editor-container { display: grid; grid-template-columns: auto 1fr auto; grid-template-rows: 40px 1fr; height: 100%; }
-    .top-bar-container { grid-column: 1 / 4; display: flex; justify-content: flex-end; padding: 8px 120px 0 0; }
+    .editor-container { display: grid; grid-template-columns: auto 1fr auto; grid-template-rows: 35px 1fr; height: 100%; }
+    .top-bar-container { grid-column: 1 / 4; display: flex; align-items: center; justify-content: flex-end; gap: 0.7em; padding-right: 0.6em; }
+    #fontra-project-name { width: 110px; height: 20px; }
     .sidebar-container { grid-row: 2; width: 0; }
     .sidebar-container.left.visible { width: var(--sidebar-content-width-left); }
     .sidebar-container.right.visible { width: var(--sidebar-content-width-right); }
@@ -1765,7 +1768,7 @@ MOCK_FONTRA_LAYOUT = """() => {
   const tabs = (side) => sides[side].map((n) => `<div class="sidebar-tab" data-sidebar-name="${n}"></div>`).join("");
   document.body.insertAdjacentHTML("beforeend", `
     <div class="editor-container">
-      <div class="top-bar-container"><button class="hive-branch">main</button></div>
+      <div class="top-bar-container"><div id="fontra-project-name"></div><button class="hive-branch">main</button></div>
       <div class="sidebar-container left"></div>
       <div class="main-container">
         <canvas id="edit-canvas"></canvas>
@@ -1857,6 +1860,86 @@ def test_the_bubble_follows_a_resized_panel(server, browser):
     assert page.evaluate("() => window.__t.watched") is None
     assert not errors
     context.close()
+
+
+# What the bubble covers: the ring, the open panels and the panels' tabs
+# (but the anchor and what it is in), the branch menu; whether it stays on
+# screen; where its arrow points.
+COVERS = """() => {
+  const t = window.__t, bubble = document.querySelector('.hive-tour');
+  const box = (e) => { const r = e.getBoundingClientRect(); return [r.left, r.top, r.right, r.bottom]; };
+  const meets = (a, b) => a[0] < b[2] - 0.5 && b[0] < a[2] - 0.5 && a[1] < b[3] - 0.5 && b[1] < a[3] - 0.5;
+  const b = box(bubble);
+  const anchor = t.step.anchor ? window.__tour.deepQuery(t.step.anchor) : null;
+  const ring = document.querySelector('.hive-tour-ring');
+  const covered = [];
+  if (!ring.hidden && meets(b, box(ring))) covered.push('ring');
+  for (const panel of document.querySelectorAll('.sidebar-container.visible, .sidebar-tab, .hive-menu')) {
+    if (!(anchor && panel.contains(anchor)) && meets(b, box(panel))) covered.push(panel.className);
+  }
+  const arrow = bubble.querySelector('.arrow');
+  return {
+    step: t.step.id, side: bubble.dataset.side || null, covered,
+    onScreen: b[0] >= 0 && b[1] >= 0 && b[2] <= innerWidth && b[3] <= innerHeight,
+    arrow: arrow.hidden ? null : box(arrow), anchor: anchor && box(anchor),
+  };
+}"""
+
+
+def test_no_bubble_hides_what_it_shows(server, browser):
+    """Every step of the editor's tour, full screen and in smaller windows:
+    the bubble stays on screen and covers neither the part of the interface
+    it points at nor an open panel or a panel's tab — the history panel and
+    its Snapshot button stay in view at "Branches", and so does the branch menu once
+    open; the arrow points at the branch pill from the left (R-9). Below
+    about 1000 px, with both panels open, the canvas between them is
+    narrower than a bubble: there it only keeps clear of the ring."""
+    for width, height in [(1920, 1080), (1512, 945), (1280, 800), (1024, 720), (920, 680)]:
+        roomy = width >= 1000
+
+        def clear(where):
+            return where["covered"] == [] if roomy else "ring" not in where["covered"]
+
+        context, page, errors = _tourPage(browser, server, viewport=(width, height))
+        page.evaluate(MOCK_FONTRA_LAYOUT)
+        page.evaluate(
+            "() => ['glyph-search', 'hive-history']"
+            ".forEach((n) => window.editorController.toggleSidebar(n))"
+        )
+        page.evaluate("() => { window.__t = window.__tour.startTour('editor', 'canvas'); }")
+        bubble = page.locator(".hive-tour")
+        seen = []
+        while page.locator(".hive-tour").count():
+            page.evaluate(FRAMES)
+            where = page.evaluate(COVERS)
+            seen.append(where["step"])
+            assert where["onScreen"], (width, where)
+            assert clear(where), (width, where)
+            if where["step"] == "branches":
+                text = bubble.locator("p").first.inner_text()
+                # The example opens on HAMBURGEFONSTIV: its M.
+                assert "bolder M" in text and " H " not in text, text
+                assert where["side"] == "left"
+                arrow, pill = where["arrow"], where["anchor"]
+                middle = (arrow[1] + arrow[3]) / 2
+                assert arrow[2] <= pill[0] and pill[1] <= middle <= pill[3], (width, where)
+                # The menu, opened as the step says (hive-views.js: right under the pill).
+                page.evaluate(
+                    """() => { const r = document.querySelector('.hive-branch').getBoundingClientRect();
+                               const m = document.createElement('div'); m.className = 'hive-menu';
+                               m.style = `position:fixed;top:${r.bottom + 4}px;right:${innerWidth - r.right}px;width:300px;height:260px`;
+                               document.body.append(m); }"""
+                )
+                page.evaluate(FRAMES)
+                where = page.evaluate(COVERS)
+                assert where["onScreen"] and clear(where), (width, where)
+                page.evaluate("() => document.querySelector('.hive-menu').remove()")
+            bubble.locator("button.next").click()
+        assert seen == [
+            "canvas", "text", "tools", "designspace", "history", "branches", "comments", "bar",
+        ]
+        assert not errors
+        context.close()
 
 
 def test_your_fonts_says_how_to_open_a_designspace(server, browser):

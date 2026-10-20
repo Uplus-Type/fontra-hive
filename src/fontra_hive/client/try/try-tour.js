@@ -285,6 +285,13 @@ function navigate(view, hash) {
   return target;
 }
 
+// The area two boxes {left, top, right, bottom} share.
+function overlap(a, b) {
+  const w = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+  const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+  return w > 0.5 && h > 0.5 ? w * h : 0;
+}
+
 // --- The tour --------------------------------------------------------------
 
 export class Tour {
@@ -312,17 +319,18 @@ export class Tour {
     // size when its panel is resized, it moves — the box around it does: the
     // anchor and every box it sits in are watched.
     this.watched = null;
+    this.watchedOthers = [];
     this.placing = 0;
-    this.observer =
-      typeof ResizeObserver === "function"
-        ? new ResizeObserver(() => {
-            if (this.placing) return;
-            this.placing = requestAnimationFrame(() => {
-              this.placing = 0;
-              this.place();
-            });
-          })
-        : null;
+    const later = () => {
+      if (this.placing) return;
+      this.placing = requestAnimationFrame(() => {
+        this.placing = 0;
+        this.place();
+      });
+    };
+    this.observer = typeof ResizeObserver === "function" ? new ResizeObserver(later) : null;
+    // A menu opened (Hive's are added to <body>): the bubble leaves it in view.
+    this.added = typeof MutationObserver === "function" ? new MutationObserver(later) : null;
   }
 
   static current = null;
@@ -339,6 +347,7 @@ export class Tour {
     window.addEventListener("keydown", this.onKey, true);
     window.addEventListener("resize", this.onMove);
     window.addEventListener("scroll", this.onMove, true);
+    this.added?.observe(document.body, { childList: true });
     this.show(index);
     return this;
   }
@@ -533,6 +542,30 @@ export class Tour {
     event.stopPropagation();
   }
 
+  // What the bubble must leave in view besides its anchor: the open sidebar
+  // panels (the history panel and its Snapshot button, at "Branches"), the
+  // panels' tabs, Hive's menus (the branch menu, opened as the step says)
+  // and the step's own `avoid` — but not the anchor or a panel it is in.
+  // Their boxes, and GAP around (kept clear where there is room).
+  avoided(anchor) {
+    const selectors = [".sidebar-container.visible", ".sidebar-tab", ".hive-menu", ...(this.step.avoid || [])];
+    const boxes = [];
+    for (const element of document.querySelectorAll(selectors.join(", "))) {
+      if (anchor && (element === anchor || element.contains(anchor))) continue;
+      const r = element.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) continue;
+      boxes.push({
+        element,
+        box: { left: r.left, top: r.top, right: r.right, bottom: r.bottom },
+        left: r.left - GAP,
+        top: r.top - GAP,
+        right: r.right + GAP,
+        bottom: r.bottom + GAP,
+      });
+    }
+    return boxes;
+  }
+
   // The bubble beside its anchor (or centred, with no anchor, or at the
   // bottom of a narrow screen), the ring around the anchor.
   place() {
@@ -547,7 +580,8 @@ export class Tour {
     const bh = bubble.offsetHeight;
     const clamp = (value, min, max) => Math.max(min, Math.min(value, max));
     const [dx, dy] = step.offset || [0, 0];
-    this.watch(anchor);
+    const avoid = anchor ? this.avoided(anchor) : [];
+    this.watch(anchor, avoid.map((box) => box.element));
     const r = anchor ? anchor.getBoundingClientRect() : null;
     if (!r || (r.width === 0 && r.height === 0) || step.ring === false) {
       this.ring.hidden = true;
@@ -566,60 +600,135 @@ export class Tour {
       bubble.style.top = Math.round(r ? Math.max(8, vh - bh - 72) : (vh - bh) / 2) + "px";
       return;
     }
-    let side = step.placement || (r.left + r.width / 2 < vw / 2 ? "right" : "left");
-    if (side === "right" && r.right + GAP + bw > vw) side = "left";
-    if (side === "left" && r.left - GAP - bw < 0) side = "right";
-    if (side === "bottom" && r.bottom + GAP + bh > vh) side = "top";
-    if (side === "top" && r.top - GAP - bh < 0) side = "bottom";
-    let left;
-    let top;
-    const inside = side.startsWith("inside-");
-    arrow.hidden = inside;
-    if (side === "inside-bottom") {
-      left = r.left + (r.width - bw) / 2;
-      top = r.bottom - bh - 24;
-    } else if (side === "inside-top") {
-      left = r.left + (r.width - bw) / 2;
-      top = r.top + 24;
-    } else if (side === "inside-right") {
-      left = r.right - bw - 24;
-      top = r.top + 24;
-    } else if (side === "right") {
-      left = r.right + GAP + RING_PAD;
-      top = r.top - 14;
-    } else if (side === "left") {
-      left = r.left - GAP - RING_PAD - bw;
-      top = r.top - 14;
-    } else if (side === "bottom") {
-      left = r.left + Math.min(r.width / 2, 40) - 31;
-      top = r.bottom + GAP + RING_PAD;
-    } else {
-      left = r.left + Math.min(r.width / 2, 40) - 31;
-      top = r.top - GAP - RING_PAD - bh;
+    const preferred = step.placement || (r.left + r.width / 2 < vw / 2 ? "right" : "left");
+    if (preferred.startsWith("inside-")) {
+      // Inside its anchor (the canvas): nothing to point at, nothing to avoid.
+      let left;
+      let top;
+      if (preferred === "inside-bottom") {
+        left = r.left + (r.width - bw) / 2;
+        top = r.bottom - bh - 24;
+      } else if (preferred === "inside-top") {
+        left = r.left + (r.width - bw) / 2;
+        top = r.top + 24;
+      } else {
+        left = r.right - bw - 24;
+        top = r.top + 24;
+      }
+      arrow.hidden = true;
+      bubble.removeAttribute("data-side");
+      bubble.style.left = Math.round(clamp(left + dx, 8, vw - bw - 8)) + "px";
+      bubble.style.top = Math.round(clamp(top + dy, 8, vh - bh - 8)) + "px";
+      return;
     }
-    if (inside) bubble.removeAttribute("data-side");
-    else bubble.setAttribute("data-side", side);
-    bubble.style.left = Math.round(clamp(left + dx, 8, vw - bw - 8)) + "px";
-    bubble.style.top = Math.round(clamp(top + dy, 8, vh - bh - 8)) + "px";
+    // The side asked for, else the one across, else the other two; on each,
+    // next to the anchor or moved out past what is to be left in view. The
+    // first place on screen that covers neither the ring nor any of it (nor
+    // the margin around it) wins; else the one that covers least.
+    const across = { left: "right", right: "left", top: "bottom", bottom: "top" };
+    const sides = [preferred, across[preferred], ...Object.keys(across).filter((s) => s !== preferred && s !== across[preferred])];
+    const ring = { left: r.left - RING_PAD, top: r.top - RING_PAD, right: r.right + RING_PAD, bottom: r.bottom + RING_PAD };
+    let best = null;
+    for (const side of sides) {
+      for (const at of this.beside(side, r, bw, bh, avoid)) {
+        const left = clamp(at.left + dx, 8, vw - bw - 8);
+        const top = clamp(at.top + dy, 8, vh - bh - 8);
+        const box = { left, top, right: left + bw, bottom: top + bh };
+        // Pushed back on screen across its own axis, a bubble may slide over
+        // what it points at: that place does not fit.
+        const fits = side === "left" || side === "right" ? left === at.left + dx : top === at.top + dy;
+        let cost = 1000 * overlap(box, ring) + (fits ? 0 : 1);
+        for (const a of avoid) cost += 100 * overlap(box, a.box) + overlap(box, a);
+        if (!best || cost < best.cost) best = { side, left, top, cost };
+      }
+      if (best.cost === 0) break;
+    }
+    const { side, left, top } = best;
+    bubble.setAttribute("data-side", side);
+    bubble.style.left = Math.round(left) + "px";
+    bubble.style.top = Math.round(top) + "px";
+    // The arrow points at the anchor, wherever the bubble had to go.
+    arrow.hidden = false;
+    if (side === "left" || side === "right") {
+      arrow.style.left = "";
+      arrow.style.top = Math.round(clamp(r.top + Math.min(r.height / 2, 20) - Math.round(top) - 7, 8, bh - 22)) + "px";
+    } else {
+      arrow.style.top = "";
+      arrow.style.left = Math.round(clamp(r.left + Math.min(r.width / 2, 40) - Math.round(left) - 7, 12, bw - 26)) + "px";
+    }
+  }
+
+  // Where the bubble may go on one side of the anchor (rectangle r), before
+  // it is kept on screen: next to it; when that covers something to be left
+  // in view, moved further out past it, away from the anchor (to the left of
+  // the open sidebar, for the branch pill above it), as long as that stays
+  // on screen; or slid along the anchor, as far as its arrow still reaches it.
+  beside(side, r, bw, bh, avoid) {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const across = side === "left" || side === "right";
+    // The point the arrow shows: the anchor's middle, near its start when it is long.
+    const target = across ? r.top + Math.min(r.height / 2, 20) : r.left + Math.min(r.width / 2, 40);
+    const base = across
+      ? { left: side === "right" ? r.right + GAP + RING_PAD : r.left - GAP - RING_PAD - bw, top: target - 27 }
+      : { left: target - 31, top: side === "bottom" ? r.bottom + GAP + RING_PAD : r.top - GAP - RING_PAD - bh };
+    const covering = (at) => avoid.filter((a) => overlap({ left: at.left, top: at.top, right: at.left + bw, bottom: at.top + bh }, a));
+    if (!covering(base).length) return [base];
+    const places = [base];
+    // Out, past what it covers.
+    let out = { ...base };
+    for (let rounds = 0, hit = covering(out); hit.length && rounds < 8; rounds++, hit = covering(out)) {
+      for (const a of hit) {
+        if (side === "left") out.left = Math.min(out.left, a.left - bw);
+        else if (side === "right") out.left = Math.max(out.left, a.right);
+        else if (side === "top") out.top = Math.min(out.top, a.top - bh);
+        else out.top = Math.max(out.top, a.bottom);
+      }
+    }
+    const onScreen = across ? out.left >= 8 && out.left + bw <= vw - 8 : out.top >= 8 && out.top + bh <= vh - 8;
+    if (onScreen) places.push(out);
+    // Along, with the arrow (8 to bh - 22 px down, 12 to bw - 26 px in) still on the target.
+    for (const a of covering(base)) {
+      if (across) {
+        for (const top of [a.bottom, a.top - bh]) {
+          if (target - 7 - top >= 8 && target - 7 - top <= bh - 22) places.push({ left: base.left, top });
+        }
+      } else {
+        for (const left of [a.right, a.left - bw]) {
+          if (target - 7 - left >= 12 && target - 7 - left <= bw - 26) places.push({ left, top: base.top });
+        }
+      }
+    }
+    return places;
   }
 
   // Watch the step's anchor and the boxes it sits in (through shadow roots),
-  // up to <body>; nothing when the step points at nothing here.
-  watch(anchor) {
-    if (!this.observer || anchor === this.watched) return;
+  // up to <body>, and what the bubble must leave in view; nothing when the
+  // step points at nothing here.
+  watch(anchor, others = []) {
+    if (!this.observer) return;
+    const same =
+      anchor === this.watched &&
+      others.length === this.watchedOthers.length &&
+      others.every((element, i) => element === this.watchedOthers[i]);
+    if (same) return;
     this.observer.disconnect();
     this.watched = anchor;
+    this.watchedOthers = others;
     for (let node = anchor; node && node !== document.documentElement; ) {
       this.observer.observe(node);
       node = node.parentElement || node.getRootNode?.().host || null;
     }
+    for (const element of others) this.observer.observe(element);
   }
 
   // Take the bubble away, nothing remembered (another tab shows the tour now).
   close() {
     this.polling = null;
     this.observer?.disconnect();
+    this.added?.disconnect();
     this.watched = null;
+    this.watchedOthers = [];
     if (this.placing) cancelAnimationFrame(this.placing);
     this.placing = 0;
     window.removeEventListener("keydown", this.onKey, true);
