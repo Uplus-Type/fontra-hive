@@ -728,6 +728,58 @@ def test_open_glyph_in_one_editor_tab_per_project(browser_and_url):  # noqa: F81
     page.close()
 
 
+def test_a_long_comment_wraps_and_open_glyph_stays_in_the_frame(browser_and_url):  # noqa: F811
+    """A long comment, and one long word: the text wraps in the room left;
+    "Open glyph" keeps its width, on one line, inside the list's frame — at
+    1280 px and on a phone; nothing makes the page scroll sideways (R-10)."""
+    hive = "/api/hive/projects/uplustype%2FMutator"
+    long = "The bowl is much too heavy next to the stems of the neighbouring letters. " * 4
+    comments = {
+        "head": "h",
+        "you": {"username": "jeremie", "name": "Jérémie Hornus"},
+        "can": {"comment": True},
+        "members": [],
+        "issues": [
+            comment(1, "A", text="Stem too thin"),
+            comment(2, "B", text=long, labels=["spacing"]),
+            comment(3, "uni0041.ss01.a_very_long_glyph_name", text="x" * 160),
+        ],
+    }
+    extra = {f"GET {hive}/comments": [200, comments]}
+    page = open_home(browser_and_url, "#project/uplustype/Mutator/comments", extra)
+    page.wait_for_selector("table.comments tr[data-number='3']")
+    measure = """() => {
+      const frame = document.querySelector('main .panel').getBoundingClientRect();
+      const rows = [...document.querySelectorAll('table.comments tr')].map((tr) => {
+        const button = tr.querySelector('td.open button');
+        const range = document.createRange();
+        range.selectNodeContents(button);
+        const text = tr.querySelector('td.text span').getBoundingClientRect();
+        return { n: tr.dataset.number, right: button.getBoundingClientRect().right,
+                 lines: new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size,
+                 width: button.getBoundingClientRect().width, textRight: text.right, textHeight: text.height };
+      });
+      return { frame: frame.right, page: document.documentElement.scrollWidth, view: innerWidth, rows };
+    }"""
+    for width in (1280, 390):
+        page.set_viewport_size({"width": width, "height": 900})
+        m = page.evaluate(measure)
+        assert m["page"] <= m["view"], (width, m)
+        widths = {round(r["width"]) for r in m["rows"]}
+        assert len(widths) == 1, (width, m)  # every button as wide as the short comment's
+        for row in m["rows"]:
+            assert row["right"] <= m["frame"], (width, row)
+            assert row["lines"] == 1, (width, row)  # "Open glyph", not "Open / glyph"
+            assert row["textRight"] <= m["frame"], (width, row)
+        tall = {r["n"]: r["textHeight"] for r in m["rows"]}
+        assert tall["2"] > 2 * tall["1"] and tall["3"] > 2 * tall["1"], (width, tall)  # wrapped
+    # A glyph's name cut short is in full in the cell's title.
+    title = page.get_attribute("tr[data-number='3'] td.glyph", "title")
+    assert title == "uni0041.ss01.a_very_long_glyph_name · Bold"
+    assert page.errors == []
+    page.close()
+
+
 def test_a_former_editor_tab_is_not_reused_for_the_editor(browser_and_url):  # noqa: F811
     """An editor tab that went to the home page (My projects) keeps its name
     across the visit: the page drops it, so that Open glyph opens a tab."""

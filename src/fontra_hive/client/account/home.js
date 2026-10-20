@@ -1323,7 +1323,7 @@ async function commentsSection(projectId) {
         const replies = issue.messages.length - 1;
         return el("tr", { "data-number": issue.number, class: issue.state }, [
           el("td", { class: "number" }, [`#${issue.number}`]),
-          el("td", {}, [
+          el("td", { class: "glyph", title: [issue.glyph, issue.source?.name].filter(Boolean).join(" · ") }, [
             el("b", {}, [issue.glyph]),
             el("small", {}, [issue.source?.name || ""]),
           ]),
@@ -1341,7 +1341,7 @@ async function commentsSection(projectId) {
             ]),
           ]),
           el("td", { class: "labels" }, (issue.labels || []).map((l) => el("span", { class: "label-chip" }, [l]))),
-          el("td", {}, [
+          el("td", { class: "open" }, [
             el("a", {
               href: issueLink(projectId, issue),
               target: editorTabName(projectId), // one editor tab per project, reused

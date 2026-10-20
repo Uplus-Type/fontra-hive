@@ -107,7 +107,7 @@ table.people button { margin: 0; padding: 0.3em 0.7em; }
 .font-problem:empty { display: none; }
 main h2 button { font-size: 0.68em; margin: 0; }
 main h2 .badge { font-size: 0.6em; font-weight: normal; }
-table.people td:nth-child(2), table.people td:nth-child(3) { width: 1%; white-space: nowrap; }
+table.people:not(.comments) td:nth-child(2), table.people:not(.comments) td:nth-child(3) { width: 1%; white-space: nowrap; }
 label.check { flex-direction: row; align-items: center; gap: 0.5em; }
 .downloads { flex-wrap: wrap; gap: 0.5em; }
 details.archived { margin-top: 0.8em; }
@@ -116,9 +116,39 @@ table.branches td:nth-child(4) { width: 1%; white-space: nowrap; }
 
 /* comments of a project */
 .comment-filters { flex-wrap: wrap; gap: 0.5em; margin-bottom: 0.6em; }
-.comment-filters select, .comment-filters input { width: auto; margin: 0; }
+.comment-filters select, .comment-filters input { width: auto; max-width: 100%; margin: 0; }
 table.comments td.number { opacity: 0.6; white-space: nowrap; width: 3em; }
+/* The text takes the room left and wraps, even a word without spaces; a
+   long glyph or source name is cut short (in full in its title); "Open glyph"
+   keeps its width, on one line, inside the frame. (The rule for the people
+   tables above made the text one line, as wide as the comment.) */
+table.comments td.glyph { width: 1%; white-space: nowrap; }
+table.comments td.glyph > * { display: block; max-width: 9em; overflow: hidden; text-overflow: ellipsis; }
+/* On a phone: the number, the glyph and "Open glyph" on one line, the text
+   under them, all the width. */
+@media (max-width: 600px) {
+  table.comments, table.comments tbody { display: block; }
+  table.comments tr {
+    display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; column-gap: 0.4em;
+    grid-template-areas: "number glyph open" "text text text" "labels labels labels";
+    border-top: 1px solid #8882; padding: 0.3em 0;
+  }
+  table.comments td, table.comments td.number, table.comments td.glyph, table.comments td.text,
+  table.comments td.labels, table.comments td.open { border-top: 0; width: auto; padding: 0.15em 0.4em; }
+  table.comments td.number { grid-area: number; }
+  table.comments td.glyph { grid-area: glyph; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  table.comments td.glyph > * { max-width: none; display: inline; }
+  table.comments td.glyph small { margin-left: 0.4em; }
+  table.comments td.text { grid-area: text; }
+  table.comments td.labels { grid-area: labels; }
+  table.comments td.labels:empty { display: none; }
+  table.comments td.open { grid-area: open; }
+}
+table.comments td.text { width: 100%; min-width: 0; overflow-wrap: anywhere; }
 table.comments td.text span { display: block; }
+table.comments td.labels { width: 1%; }
+table.comments td.open { width: 1%; white-space: nowrap; }
+table.comments td.open button { flex: none; white-space: nowrap; }
 table.comments tr.resolved td { opacity: 0.65; }
 .label-chip { display: inline-block; padding: 0 0.6em; margin: 0.1em; border-radius: 0.8em; background: #e9b02a33; font-size: 0.85em; }
 .comment-count { font-size: 0.85em; opacity: 0.75; cursor: pointer; }
