@@ -535,13 +535,16 @@ def test_project_branches(browser_and_url):  # noqa: F811
     # Not the default branch, not one someone has open.
     assert [r[3] for r in rows] == [None, True, False]
 
+    # The page is drawn again after the deletion: wait for the new table, not
+    # the old one (filling the old form raced with it, 21 Oct. 2026).
+    page.evaluate("document.querySelector('table.branches').dataset.old = '1'")
     page.click("tr[data-branch='bold'] .danger")
     page.wait_for_function("calls.some(c => c.method === 'DELETE')")
     deleted = page.evaluate("calls.find(c => c.method === 'DELETE')")
     assert deleted["query"] == "?branch=bold"
 
     # A new branch, from the branch chosen.
-    page.wait_for_selector("table.branches tr")
+    page.wait_for_selector("table.branches:not([data-old]) tr")
     page.fill("input[placeholder='e.g. bold-extension']", "ana/italic")
     page.select_option("select:not([aria-label])", "bold")
     page.click("text=Create")

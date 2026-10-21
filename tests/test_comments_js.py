@@ -988,7 +988,8 @@ def test_a_new_comment_can_be_a_drawing(page):
     posted = requests(p, "POST")[-1]["body"]
     assert posted["text"] == "" and posted["sketch"] == {"strokes": strokes}
     p.wait_for_function("comments.sketch === null && comments.openNumber === 1")
-    assert p.evaluate("card().querySelector('.sketch-mark')") is not None
+    # The post-it is drawn again on the next frame, with the posted topic.
+    p.wait_for_function("!!card()?.querySelector('.sketch-mark')")
 
 
 def test_undo_clear_and_draw_in_a_reply(page):
