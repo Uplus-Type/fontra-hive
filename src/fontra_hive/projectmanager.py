@@ -59,6 +59,12 @@ from .gitstore import (
     SnapshotInfo,
 )
 
+from .fontracompat import guard_feature_reading
+
+# Fontra reading OpenType features with an outside program (sr-aef): best
+# effort, in Try (no program in the browser) and on the server.
+guard_feature_reading()
+
 logger = logging.getLogger(__name__)
 
 # The font's history names the sources changed in commits touching at most

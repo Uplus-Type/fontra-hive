@@ -18,6 +18,12 @@ import zipfile
 from contextlib import aclosing
 from importlib.metadata import entry_points
 
+from .fontracompat import guard_feature_reading
+
+# Fontra reading OpenType features with an outside program (sr-aef): best
+# effort, in Try (no program in the browser) and on the server.
+guard_feature_reading()
+
 logger = logging.getLogger(__name__)
 
 MAX_UPLOAD = 300 * 1024 * 1024  # bytes, as sent
