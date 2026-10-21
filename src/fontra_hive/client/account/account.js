@@ -205,15 +205,22 @@ async function invitationPage() {
       event.preventDefault();
       busy(form, async () => {
         const password = checkSamePasswords(form);
-        // The terms are ticked, never assumed: hive-api records the date, and
-        // requires it once subscriptions are open.
-        if (!form.elements.terms.checked) throw new Error("Accept the terms to open an account.");
+        // The boxes are ticked, never assumed: hive-api records them with the
+        // date, and requires them once subscriptions are open.
+        const boxes = ["terms", "privacy", "age"].every((name) => form.elements[name].checked);
+        if (!boxes) {
+          throw new Error(
+            "Tick the three boxes: the terms of use, the privacy policy, and that you are 15 or older."
+          );
+        }
         await call("/api/invitations/signup", {
           token,
           username: form.username.value.trim(),
           name: form.elements.fullname.value.trim(), // not form.name: that is the form's own name
           password,
           acceptTerms: true,
+          readPrivacy: true,
+          certifyAge: true,
         });
         location.replace("/");
       });

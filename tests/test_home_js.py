@@ -1694,11 +1694,43 @@ def test_the_terms_are_asked_before_anything_else(browser_and_url):  # noqa: F81
         "document.querySelector('.terms-panel .error').textContent.length > 0"
     )
     assert not page.evaluate("calls.some(c => c.path === '/api/me/accept-terms')")
+    # The three boxes of the sign-up: one is not enough.
     page.check(".terms-panel input[name=accept]")
+    page.click(".terms-panel button[type=submit]")
+    page.wait_for_function(
+        "document.querySelector('.terms-panel .error').textContent.includes('three')"
+    )
+    assert not page.evaluate("calls.some(c => c.path === '/api/me/accept-terms')")
+    assert page.is_visible(".terms-panel a[href='/privacy']")
+    page.check(".terms-panel input[name=privacy]")
+    page.check(".terms-panel input[name=age]")
     page.click(".terms-panel button[type=submit]")
     page.wait_for_selector(".project-card")
     sent = page.evaluate("calls.find(c => c.path === '/api/me/accept-terms')")
-    assert sent["body"] == {"version": "2026-10-20"}
+    assert sent["body"] == {"version": "2026-10-20", "readPrivacy": True, "certifyAge": True}
+    assert page.errors == []
+    page.close()
+
+
+def test_the_profile_lets_one_stop_emails(browser_and_url):  # noqa: F811
+    me = {**ME, "emailPreferences": {"invitations": True, "news": True}}
+    page = open_home(
+        browser_and_url,
+        "#profile",
+        {
+            "GET /api/me": [200, {"user": me}],
+            "GET /api/auth/sessions": [200, {"sessions": []}],
+            "PATCH /api/me": [200, {"user": me}],
+        },
+    )
+    page.wait_for_selector(".emails-panel")
+    assert page.is_checked(".emails-panel input[name=email-invitations]")
+    assert page.is_checked(".emails-panel input[name=email-news]")
+    page.uncheck(".emails-panel input[name=email-news]")
+    page.click(".emails-panel button[type=submit]")
+    page.wait_for_function("document.querySelector('.emails-panel .ok').textContent === 'Saved.'")
+    sent = page.evaluate("calls.find(c => c.path === '/api/me' && c.method === 'PATCH')")
+    assert sent["body"] == {"emailPreferences": {"invitations": True, "news": False}}
     assert page.errors == []
     page.close()
 

@@ -8,6 +8,8 @@
 <link rel="stylesheet" href="/css/core.css">
 <link rel="stylesheet" href="/hive/account/account.css">
 <script type="module" src="/hive/account/account.js"></script>
+<!-- fontrahive.com: the cookie notice (hive-api/deploy/site/static); elsewhere a 404, harmless -->
+<script src="/site/cookie-notice.js" defer></script>
 </head>
 <body data-page="invitation">
   <img class="logo" src="/hive/icons/hive-icon.png" alt="">
@@ -37,7 +39,13 @@
       <label>Password <small>at least 10 characters</small>
         <input name="password" type="password" autocomplete="new-password" required minlength="10"></label>
       <label>Password, again <input name="password2" type="password" autocomplete="new-password" required></label>
-      <label class="check"><input name="terms" type="checkbox" required> <span>I accept the <a href="/terms#en" target="_blank">Terms</a>, and I have read the <a href="/legal#en-data" target="_blank">Privacy policy</a> and the <a href="/charter" target="_blank">Confidentiality charter</a>.</span></label>
+      <!-- Three boxes (U+ TYPE's lawyer, 21 October 2026): the terms of use,
+           the privacy policy (read, not accepted), the age of digital
+           consent in France. The terms of sale come with paying. -->
+      <label class="check"><input name="terms" type="checkbox" required> <span>I have read and I accept the <a href="/terms#en" target="_blank" rel="noopener">terms of use</a>.</span></label>
+      <label class="check"><input name="privacy" type="checkbox" required> <span>I have read the <a href="/privacy" target="_blank" rel="noopener">privacy policy</a>.</span></label>
+      <label class="check"><input name="age" type="checkbox" required> <span>I certify that I am 15 or older.</span></label>
+      <p class="note">How we treat your fonts: the <a href="/charter" target="_blank" rel="noopener">font charter</a>.</p>
       <div class="error"></div>
       <button type="submit">Create the account</button>
     </form>

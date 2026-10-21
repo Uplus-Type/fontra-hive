@@ -210,15 +210,17 @@ def test_invitation_page_signs_up(browser_and_url):
     page.fill("#signup input[name=fullname]", "Zoé")
     page.fill("#signup input[name=password]", "a good passphrase")
     page.fill("#signup input[name=password2]", "another one!!")
-    # The terms are a box to tick: the browser keeps the form until it is.
-    page.click("#signup button[type=submit]")
-    assert page.evaluate(
-        "!document.querySelector('#signup input[name=terms]').validity.valid"
-    )
-    assert not page.evaluate(
-        "calls.some(c => c.path === '/api/invitations/signup')"
-    )
-    page.check("#signup input[name=terms]")
+    # Three boxes to tick (the terms of use, the privacy policy, 15 or
+    # older): the browser keeps the form until they are.
+    for name in ("terms", "privacy", "age"):
+        page.click("#signup button[type=submit]")
+        assert page.evaluate(
+            f"!document.querySelector('#signup input[name={name}]').validity.valid"
+        )
+        assert not page.evaluate(
+            "calls.some(c => c.path === '/api/invitations/signup')"
+        )
+        page.check(f"#signup input[name={name}]")
     page.click("#signup button[type=submit]")
     page.wait_for_function(
         "document.querySelector('#signup .error').textContent.length > 0"
@@ -236,6 +238,8 @@ def test_invitation_page_signs_up(browser_and_url):
         "name": "Zoé",
         "password": "a good passphrase",
         "acceptTerms": True,
+        "readPrivacy": True,
+        "certifyAge": True,
     }
     assert page.errors == []
     page.close()
@@ -431,7 +435,9 @@ def test_invitation_page_says_a_guest_account(browser_and_url):
     assert "free" in page.inner_text("#signup .guest")
     assert "guest" not in page.inner_text("#signup .guest")
     assert page.is_visible("#signup a[href='/charter']")
-    assert page.is_visible("#signup label.check input[name=terms][required]")
+    for name in ("terms", "privacy", "age"):
+        assert page.is_visible(f"#signup label.check input[name={name}][required]")
+    assert page.is_visible("#signup a[href='/privacy']")
     assert page.errors == []
     page.close()
 

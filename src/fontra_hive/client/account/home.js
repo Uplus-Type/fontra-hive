@@ -1683,6 +1683,43 @@ function alertInPage(message) {
 
 // --- profile ------------------------------------------------------------------------
 
+// The emails one may stop (hive-api, hive/emailprefs.py), on by default. The
+// emails about the account and its plan always go.
+function emailsPanel(user) {
+  const prefs = user.emailPreferences || { invitations: true, news: true };
+  const invitations = el("input", { type: "checkbox", name: "email-invitations" });
+  const news = el("input", { type: "checkbox", name: "email-news" });
+  invitations.checked = prefs.invitations;
+  news.checked = prefs.news;
+  return el("div", { class: "panel emails-panel" }, [
+    el("h3", { style: "margin-top:0" }, ["Emails"]),
+    form(
+      [
+        el("label", { class: "check" }, [
+          invitations,
+          el("span", {}, ["When someone invites me to a project or an organization"]),
+        ]),
+        el("label", { class: "check" }, [
+          news,
+          el("span", {}, ["Hive's news: what changed in the editor, now and then"]),
+        ]),
+        el("p", { class: "note" }, [
+          "Invitations still wait for you here. Emails about your account and your plan always go.",
+        ]),
+      ],
+      "Save",
+      async () => {
+        await call(
+          "/api/me",
+          { emailPreferences: { invitations: invitations.checked, news: news.checked } },
+          "PATCH"
+        );
+        return "Saved.";
+      }
+    ),
+  ]);
+}
+
 async function profileSection() {
   const { user } = await get("/api/me");
   me = { ...me, ...user };
@@ -1726,6 +1763,7 @@ async function profileSection() {
         return "Saved.";
       }),
     ]),
+    emailsPanel(user),
     el("div", { class: "panel" }, [
       el("h3", { style: "margin-top:0" }, ["Password"]),
       form([field("Current password", current), field("New password", next, "at least 10 characters")], "Change the password", async () => {
@@ -1773,29 +1811,44 @@ export function parseHash(hash) {
   }
 }
 
-// New terms of use and sale to accept (hive-api, hive/terms.py): asked before
-// anything else on the home page, once, after the opening.
+// New terms of use to accept (hive-api, hive/terms.py): asked before anything
+// else on the home page, once, after the opening. The same three boxes as at
+// sign-up; the terms of sale come with paying.
 function termsSection() {
   const terms = me.termsToAccept;
   const box = el("input", { type: "checkbox", name: "accept" });
+  const privacy = el("input", { type: "checkbox", name: "privacy" });
+  const age = el("input", { type: "checkbox", name: "age" });
+  const link = (href, text) => el("a", { href, target: "_blank", rel: "noopener" }, [text]);
   const f = form(
     [
       el("label", { class: "check" }, [
         box,
-        el("span", {}, ["I have read and I accept the terms of use and sale"]),
+        el("span", {}, ["I have read and I accept the ", link(`${terms.url}#en`, "terms of use"), "."]),
       ]),
+      el("label", { class: "check" }, [
+        privacy,
+        el("span", {}, ["I have read the ", link("/privacy", "privacy policy"), "."]),
+      ]),
+      el("label", { class: "check" }, [age, el("span", {}, ["I certify that I am 15 or older."])]),
     ],
     "Accept and go on",
     async () => {
-      if (!box.checked) throw new Error("Tick the box to accept the terms.");
-      const { user } = await call("/api/me/accept-terms", { version: terms.version });
+      if (!box.checked || !privacy.checked || !age.checked) {
+        throw new Error("Tick the three boxes to go on.");
+      }
+      const { user } = await call("/api/me/accept-terms", {
+        version: terms.version,
+        readPrivacy: true,
+        certifyAge: true,
+      });
       me = { ...me, ...user };
       route();
     }
   );
   main().replaceChildren(
     el("div", { class: "panel terms-panel" }, [
-      el("h2", { style: "margin-top:0" }, ["Terms of use and sale"]),
+      el("h2", { style: "margin-top:0" }, ["Terms of use"]),
       el("p", { class: "note" }, [
         terms.text,
         " ",
