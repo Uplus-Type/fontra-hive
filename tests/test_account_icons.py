@@ -20,11 +20,15 @@ def test_account_pages_link_hives_icon():
 
 
 def test_sign_in_and_home_link_the_legal_pages():
-    # /legal and /terms are served by the deployment (hive-api/deploy/site,
+    # The legal pages are served by the deployment (hive-api/deploy/site,
     # through Caddy), not by this plug-in: they are U+ TYPE's, not the plug-in's.
+    # One page per document (U+ TYPE's lawyer, 21 October 2026), the same
+    # footer as hive-api's application pages (deploy/site-chrome.py).
     for page in ("login.html", "home.html"):
         html = (ACCOUNT / page).read_text(encoding="utf-8")
-        assert 'href="/terms' in html and 'href="/legal' in html, page
+        for path in ("/legal-notice", "/terms", "/terms-of-sale", "/privacy", "/charter"):
+            assert f'href="{path}"' in html, (page, path)
+        assert "data-cookie-notice" in html, page
     # Signing up from an invitation: the terms of use and the privacy policy,
     # next to their boxes (U+ TYPE's lawyer, 21 October 2026).
     html = (ACCOUNT / "invitation.html").read_text(encoding="utf-8")
