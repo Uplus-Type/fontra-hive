@@ -46,6 +46,7 @@ from . import merge as merging
 from .access import ROLES, Access, DevDirectory, token_for, username_from_token
 from .backend_git import GitFontraBackend
 from .commentroutes import CommentRoutesMixin
+from .environment import markEnvironment
 from .fonthandler import HiveFontHandler
 from .glyphdiff import changed_sources, font_source_names
 from .gitstore import (
@@ -1898,8 +1899,11 @@ def injectTryMeta(
 
 
 def _htmlResponse(text: str) -> web.Response:
+    # Every page Hive serves: a test deployment says so (environment.py).
     return web.Response(
-        text=text, content_type="text/html", headers={"Cache-Control": "no-cache"}
+        text=markEnvironment(text),
+        content_type="text/html",
+        headers={"Cache-Control": "no-cache"},
     )
 
 
