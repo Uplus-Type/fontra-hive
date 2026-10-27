@@ -2,9 +2,10 @@
 
 On the development deployment of Hive (hive-api's ``install.sh --dev``), the
 environment variable ``HIVE_ENVIRONMENT`` names it (``development``). Every
-page Hive serves then gets a small badge in a corner and its title starts
-with ``[dev]``, so that a browser tab of the test deployment is never taken
-for production. Unset (production): pages are left as they are.
+page Hive serves then gets a small badge in the bottom right corner (the
+cookie notice is on the left) and its title starts with ``[dev]``, so that a
+browser tab of the test deployment is never taken for production. Unset
+(production): pages are left as they are.
 
 Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
 """
@@ -39,7 +40,7 @@ def markEnvironment(page: str, name: str | None = None) -> str:
 
     badge = (
         f'<div id="{BADGE_ID}" role="status" aria-label="{label} deployment" '
-        'style="position:fixed;left:8px;bottom:8px;z-index:2147483647;'
+        'style="position:fixed;right:8px;bottom:8px;z-index:2147483647;'
         "pointer-events:none;padding:3px 8px;border-radius:4px;"
         "background:#7b2cbf;color:#fff;font:600 11px/1.4 system-ui,sans-serif;"
         'letter-spacing:.04em;text-transform:uppercase;opacity:.9">'
