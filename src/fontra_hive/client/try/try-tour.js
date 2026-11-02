@@ -193,6 +193,14 @@ export function deepQuery(selector, root = document) {
   return node;
 }
 
+// The tours say ⌘. Elsewhere Fontra's command key is Ctrl: say what is on
+// the reader's keyboard. (Fontra's own test for a Mac, in utils.ts.)
+const IS_MAC = navigator.userAgent.indexOf("Mac") != -1;
+
+export function forKeyboard(text, isMac = IS_MAC) {
+  return isMac ? text : text.replace(/⌘(-?)/g, (_, dash) => (dash ? "Ctrl-" : "Ctrl+"));
+}
+
 // What a step's `until` gets: Fontra's public objects, on whichever page.
 function context() {
   const editor = window.editorController || null;
@@ -393,7 +401,7 @@ export class Tour {
       el("h3", {}, step.title, el("span", { class: "check", "aria-label": "done" }, "✓")),
       // From another page, the step's text would be read too early: only
       // where it goes on.
-      el("p", {}, here ? step.text : step.away || `The next step is in ${VIEW_NAMES[view]}: open it to go on.`),
+      el("p", {}, here ? forKeyboard(step.text) : step.away || `The next step is in ${VIEW_NAMES[view]}: open it to go on.`),
       here && step.teams ? el("p", { class: "teams" }, el("b", {}, "Fontra Hive for teams: "), step.teams) : null,
       here && step.learn
         ? el("p", { class: "more" }, el("a", { class: "learn", href: step.learn, target: "_blank", rel: "noopener" }, "Learn more ↗"))

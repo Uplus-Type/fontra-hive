@@ -92,7 +92,7 @@ export const firstFont = {
       open: "selection-transformation",
       title: "Remove overlaps",
       text:
-        "Select all (⌘A or Ctrl+A), then Remove overlaps under Path Operations: the three boxes " +
+        "Select all (⌘A), then Remove overlaps under Path Operations: the three boxes " +
         "fuse into one outline, the H.",
       until: async ({ fontController }) => contourCount(await firstLayer(fontController, "H")) === 1,
     },
@@ -125,8 +125,8 @@ export const firstFont = {
       title: "Ellipse Tool",
       text:
         "Hold the Shape Tool down for its menu and pick the ellipse. Drag the outer oval, " +
-        "420 × 520 at x 40, y −10. Hold ⌘ while dragging the inner one, 220 × 320 at x 140, " +
-        "y 90: drawn the other way round, it is the counter.",
+        "420 × 520 at x 40, y −10, then the inner one, 220 × 320 at x 140, y 90. Right-click " +
+        "one of its points and choose Reverse Contour Direction: that makes it the counter.",
       until: async ({ fontController }) => {
         const turns = turnings(await firstLayer(fontController, "o"));
         return turns.length === 2 && turns[0] !== turns[1];
