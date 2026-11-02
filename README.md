@@ -50,6 +50,38 @@ The commercial side of Fontra Hive (accounts, roles, hosting) lives in
 separate services that talk to the Fontra server over HTTP; nothing of it is
 in this repository.
 
+## Can I run this myself?
+
+Yes. Two project managers are registered, and only one of them needs the
+accounts service:
+
+| Project manager | Roles come from | Needs the accounts service |
+| --- | --- | --- |
+| `fontra hive` | the accounts service | yes |
+| `fontra hive-dev` | a JSON file on disk | no |
+
+`hive-dev` needs nothing external: a folder of bare repositories and a
+`hive-dev-users.json` beside them. You keep the whole collaboration side —
+several people in one font at once, a commit per person, branches, merge with
+conflicts glyph by glyph, history, snapshots, comments and the five roles.
+"Try it" below sets it up; "Accounts and roles (development)" describes the
+file and the roles.
+
+> [!WARNING]
+> `hive-dev` is named after what it was written for: development and tests.
+> It has had no security review and comes with no support. Its sign-in page
+> lists the users and lets you pick one, with **no password**, and the cookie
+> is plain. Put it behind a VPN, an SSH tunnel, or a reverse proxy that does
+> its own authentication — not on the open internet as it stands.
+
+What only the accounts service does: sign-up, passwords and password reset,
+invitations by email, guest accounts, pull and push to a GitHub repository,
+plans and billing. If you need those, there are two ways — the hosted service
+at [fontrahive.com](https://fontrahive.com), or a private deployment against
+the accounts API, which can be licensed: get in touch with U+Type. Either way
+the git side is the same code as here, so nothing has to be migrated but
+identity.
+
 ## Try it
 
 ```bash
@@ -101,8 +133,10 @@ cp hive-dev-users.example.json repos/hive-dev-users.json   # then edit it
 fontra --launch hive-dev repos
 ```
 
-- `/` shows a sign-in page listing the users (development only: no password,
-  a plain cookie). *Log out*: `/hive/logout`.
+- `/` shows a sign-in page listing the users. **No password**: anyone who can
+  reach the server can sign in as anyone, so put your own authentication in
+  front of it (see "Can I run this myself?" above). *Log out*:
+  `/hive/logout`.
 - The project list only shows the projects you have a role on; opening
   another one is refused.
 - Roles: observer (read), reviewer (+ comment), designer (+ edit, restore,
