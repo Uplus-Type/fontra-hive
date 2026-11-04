@@ -1552,8 +1552,10 @@ def test_the_list_follows_the_caret(page):
     for _ in " at this":
         p.keyboard.press("ArrowLeft")
     assert suggestions(p) == ["bobBob Designer"]
-    # Out of the word by End: Enter sends the whole text.
-    p.keyboard.press("End")
+    # Out of the word (with the arrows: End moves nothing on a Mac): Enter
+    # sends the whole text.
+    for _ in " at this":
+        p.keyboard.press("ArrowRight")
     assert suggestions(p) == []
     p.keyboard.press("Enter")
     p.wait_for_function("comments.issue(1).messages.length === 2")
