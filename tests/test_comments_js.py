@@ -1168,10 +1168,10 @@ def test_the_card_of_a_font_topic(page):
     )
     p.evaluate("card().querySelector('.compose button.primary').click()")
     p.wait_for_function("comments.issue(1).messages.length === 2")
-    p.evaluate(
-        "[...card().querySelectorAll('button')]"
-        ".find(b => b.textContent === 'Resolve').click()"
-    )
+    # Disabled while sending: wait for the card redrawn after the reply.
+    resolve = "[...card().querySelectorAll('button')].find(b => b.textContent === 'Resolve')"
+    p.wait_for_function(f"!{resolve}.disabled")
+    p.evaluate(f"{resolve}.click()")
     p.wait_for_function("comments.issue(1).state === 'resolved'")
     p.evaluate("frame()")
     assert p.evaluate("card().classList.contains('resolved')")

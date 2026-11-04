@@ -583,6 +583,10 @@ def test_project_branches(browser_and_url):  # noqa: F811
     assert not page.is_visible("tr[data-tag='archive/light']")
     page.click("details.archived summary")
     assert "4 changes not in main" in page.inner_text("tr[data-tag='archive/light']")
+    # (Restoring reloads the section: mark what is there to wait for the new one.)
+    download = "select[aria-label='Branch to download']"
+    page.wait_for_selector(download)
+    page.eval_on_selector(download, "select => (select.dataset.before = '1')")
     page.click("tr[data-tag='archive/light'] button")
     page.wait_for_selector(".hive-dialog input")
     page.click(".hive-dialog button.blue")
@@ -591,8 +595,8 @@ def test_project_branches(browser_and_url):  # noqa: F811
     assert restore["query"] == "?tag=archive%2Flight&name=light"
 
     # Download: from the branch chosen.
-    page.wait_for_selector("select[aria-label='Branch to download']")
-    page.select_option("select[aria-label='Branch to download']", "wide")
+    page.wait_for_selector(download + ":not([data-before])")
+    page.select_option(download, "wide")
     page.click("text=Fontra package")
     page.wait_for_function("calls.some(c => c.path.endsWith('/export'))")
     export = page.evaluate("calls.find(c => c.path.endsWith('/export'))")
