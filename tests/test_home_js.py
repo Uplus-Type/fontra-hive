@@ -965,6 +965,29 @@ def test_a_link_opens_a_font_topic_on_the_comments_page(browser_and_url):  # noq
     page.close()
 
 
+def test_links_between_topics_on_the_comments_page(browser_and_url):  # noqa: F811
+    page = font_topics_page(
+        browser_and_url,
+        "/2",
+        issues=[comment(1, "A", text="See #2"), font_comment(2, title="Family name")],
+    )
+    page.wait_for_function(f"{CARD}?.dataset.number === '2'")
+    assert "mentioned in #2" not in page.text_content("tr[data-number='1'] td.text")
+    assert "mentioned in #1" in page.text_content("tr[data-number='2'] td.text")
+    # A glyph's topic is in the editor: its tab for the project.
+    page.evaluate(
+        f"""
+        window.open = (url, name) => (window.opened = [url, name]);
+        {CARD}.querySelector('.mentioned-in').click();
+        """
+    )
+    opened = page.evaluate("window.opened")
+    assert "hive-issue=1" in opened[0]
+    assert opened[1] == "hive-editor-uplustype/Mutator"
+    assert page.errors == []
+    page.close()
+
+
 def test_leaving_the_comments_page_while_it_loads(browser_and_url):  # noqa: F811
     """The answer arrives on another page: it must not put back a page whose
     card is gone, with buttons that do nothing."""

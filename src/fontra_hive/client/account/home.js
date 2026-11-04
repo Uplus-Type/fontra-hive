@@ -35,6 +35,7 @@ import {
   isFontTopic,
   issueLink,
   issueTitle,
+  mentionedInText,
   mountTopics,
   relativeTime,
 } from "../plugin/comments.js";
@@ -1363,6 +1364,7 @@ async function commentsSection(projectId, issueNumber = null) {
                   ? `resolved by ${issue.resolved?.by?.name || issue.resolved?.by?.username || "?"}`
                   : null,
                 issue.assignee ? `→ ${issue.assignee.name || issue.assignee.username}` : null,
+                mentionedInText(card.mentionedIn(issue.number)),
               ].filter(Boolean).join(" · "),
             ]),
           ]),
@@ -1396,7 +1398,6 @@ async function commentsSection(projectId, issueNumber = null) {
     ]),
     el("div", { class: "panel" }, [filters, count, table]),
   );
-  render();
   // The list follows the card (a topic opened here, a reply from elsewhere).
   let seen = card.dataVersion + 1;
   card.listeners.add(() => {
@@ -1406,6 +1407,7 @@ async function commentsSection(projectId, issueNumber = null) {
     render();
   });
   card.take(data);
+  render();
 }
 
 // Whether the project has its font yet (a repository on the Fontra server).

@@ -472,6 +472,14 @@ thread of replies, open or resolved. What concerns no glyph in particular
   `#project/<owner>/<name>/comments/<n>`; `hive-issue=<n>` opens them in the
   editor too. `anchor`, an optional text kept with a topic, is not read yet:
   it is there for "fontinfo", "kerning:A/V" and the like.
+- **Mentions and links.** `@ana` and `#16` stay plain text in a message.
+  Typing `@` or `#` proposes the project's members and topics; on display a
+  member is highlighted and a topic is a chip (number, glyph, title, state)
+  that goes to it, and a link copied with "Copy link" reads the same way.
+  A topic says which others mention it ("Mentioned in #15"), worked out from
+  the messages. Addresses are clickable. Only members can be mentioned, at
+  most 20 per message; the routes that write a message answer with who it
+  newly names (`mentions`), for the notifications to come.
 - **The red pen.** "Draw" under a message being written (a new comment, a
   reply, an edit) turns the canvas into a sheet: freehand strokes over the
   glyph, in glyph units (they follow the zoom), simplified to stay light,

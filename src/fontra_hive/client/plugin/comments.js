@@ -24,6 +24,10 @@
 // panel opens one. The project's comments page shows the same card, without
 // an editor (mountTopics).
 //
+// In a message, "@ana" and "#16" stay plain text: they are read at display
+// time (messageParts), so the JSON stays simple. Typing @ or # proposes the
+// project's members and topics, and a topic shows the others that mention it.
+//
 // Who may do what is decided by the server; the "can" part of its answer
 // only hides what would be refused.
 //
@@ -42,6 +46,10 @@ const SKETCH_ALPHA_PALE = 0.3; // sketches of closed post-its, on their own sour
 const SKETCH_MIN_STEP = 1.5; // screen pixels between two recorded points
 const SKETCH_TOLERANCE = 0.75; // screen pixels: simplification of a stroke
 const FONT_TOPIC_LABELS = ["font info", "naming", "production"]; // suggestions
+const MAX_SUGGESTIONS = 8;
+const MESSAGE_TOKENS =
+  /(https?:\/\/[^\s<>"]+)|(?<![\p{L}\p{N}_@.])@([\p{L}\p{N}_][\p{L}\p{N}_.-]*)|(?<![\p{L}\p{N}_#&/])#([1-9]\d*)(?![\p{L}\p{N}_])/gu;
+const SUGGESTION_TOKEN = /(?:^|[\s(])([@#])([\p{L}\p{N}_.-]*)$/u;
 
 const COLORS = {
   light: { open: "#e9b02a", resolved: "#8a8a8a", text: "#1c1c1c", ring: "#1c1c1c", pen: "#e5484d" },
@@ -384,6 +392,78 @@ const CARD_STYLES = `
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     line-height: 1.35;
+  }
+  .mention {
+    padding: 0 2px;
+    border-radius: 3px;
+    background: rgba(233, 176, 42, 0.28);
+  }
+  .text a {
+    color: inherit;
+  }
+  .issue-link {
+    display: inline-block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+    padding: 0 6px;
+    border: none;
+    border-radius: 9px;
+    background: rgba(233, 176, 42, 0.22);
+  }
+  .issue-link.resolved {
+    background: var(--card-line);
+    color: var(--card-muted);
+  }
+  .references {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px 0;
+    font-size: 12px;
+    color: var(--card-muted);
+  }
+  .compose {
+    position: relative;
+  }
+  .suggestions {
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    bottom: calc(100% - 4px);
+    z-index: 1;
+    max-height: 220px;
+    overflow-y: auto;
+    padding: 3px;
+    background: var(--card-bg);
+    border: 1px solid var(--card-line);
+    border-radius: 6px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  }
+  .suggestions.below {
+    bottom: auto;
+    top: 70px;
+  }
+  .suggestion {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 5px;
+    border-radius: 4px;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .suggestion.chosen {
+    background: rgba(233, 176, 42, 0.25);
+  }
+  .suggestion .detail {
+    color: var(--card-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .compose {
     display: flex;
@@ -820,6 +900,83 @@ function stopKeys(element) {
   }
 }
 
+// The topic a link of this project points to (what "Copy link" gives), or
+// null: such a link reads as the topic's number.
+export function issueNumberInLink(href, projectName, origin = window.location.origin) {
+  let url;
+  try {
+    url = new URL(href);
+  } catch (error) {
+    return null;
+  }
+  if (url.origin !== origin) return null;
+  const inEditor = url.searchParams.get("hive-issue");
+  if (inEditor) {
+    const project = parseProjectIdentifier(url.searchParams.get("project") || "").name;
+    return project === projectName && /^[1-9]\d*$/.test(inEditor) ? Number(inEditor) : null;
+  }
+  const onPage = url.hash.match(/^#project\/(.+)\/comments\/([1-9]\d*)$/);
+  if (!onPage) return null;
+  try {
+    return decodeURI(onPage[1]) === projectName ? Number(onPage[2]) : null;
+  } catch (error) {
+    return null; // anyone may write anything in a message
+  }
+}
+
+// An address in a sentence: without the punctuation around it, but keeping
+// the ")" of ".../Garamond_(typeface)".
+function trimAddress(url) {
+  for (;;) {
+    const trimmed = url.replace(/[.,;:!?]+$/, "");
+    const unbalanced = trimmed.split(")").length > trimmed.split("(").length;
+    url = trimmed.endsWith(")") && unbalanced ? trimmed.slice(0, -1) : trimmed;
+    if (url === trimmed) return url;
+  }
+}
+
+// A message as text and things to show differently: strings, and
+// {kind: "mention", text, member}, {kind: "issue", text, issue} and
+// {kind: "url", text}. What names nobody and no topic stays text, as written.
+export function messageParts(text, { member, issue, projectName, origin }) {
+  const parts = [];
+  let last = 0;
+  const push = (end, part) => {
+    if (end > last) parts.push(text.slice(last, end));
+    parts.push(part);
+  };
+  for (const match of (text || "").matchAll(MESSAGE_TOKENS)) {
+    const [token, url, name, number] = match;
+    if (url) {
+      const clean = trimAddress(url);
+      const linked = issue(issueNumberInLink(clean, projectName, origin));
+      push(match.index, linked ? { kind: "issue", text: clean, issue: linked } : { kind: "url", text: clean });
+      last = match.index + clean.length;
+    } else if (name) {
+      const clean = name.replace(/[.-]+$/, "");
+      const person = member(clean);
+      if (!person) continue;
+      push(match.index, { kind: "mention", text: `@${clean}`, member: person });
+      last = match.index + 1 + clean.length;
+    } else {
+      const found = issue(Number(number));
+      if (!found) continue;
+      push(match.index, { kind: "issue", text: token, issue: found });
+      last = match.index + token.length;
+    }
+  }
+  if (last < (text || "").length) parts.push(text.slice(last));
+  return parts;
+}
+
+// What typing @ or # just before the caret asks for: {sign, query, start},
+// or null.
+export function suggestionAt(value, caret) {
+  const match = value.slice(0, caret).match(SUGGESTION_TOKEN);
+  if (!match) return null;
+  return { sign: match[1], query: match[2], start: caret - match[2].length - 1 };
+}
+
 // Where the pin of a comment is drawn (screen), for a point in glyph units.
 export function pinCenter(tip) {
   return { x: tip.x, y: tip.y - PIN_LIFT };
@@ -964,6 +1121,65 @@ export class HiveComments {
 
   issue(number) {
     return this.issues.find((issue) => issue.number === number) || null;
+  }
+
+  memberNamed(name) {
+    const wanted = name.toLowerCase();
+    return this.members.find((m) => m.username.toLowerCase() === wanted) || null;
+  }
+
+  partsOf(text) {
+    return messageParts(text, {
+      member: (name) => this.memberNamed(name),
+      issue: (number) => this.issue(number),
+      projectName: this.projectName,
+    });
+  }
+
+  // Who points to whom, read from the messages when they change: both ways,
+  // by number.
+  links() {
+    if (this.linksVersion !== this.dataVersion) {
+      const to = new Map();
+      const from = new Map();
+      for (const issue of this.issues) {
+        const numbers = new Set();
+        for (const message of issue.messages || []) {
+          for (const part of this.partsOf(message.text)) {
+            if (part.kind === "issue") numbers.add(part.issue.number);
+          }
+        }
+        numbers.delete(issue.number);
+        to.set(issue.number, numbers);
+        for (const target of numbers) {
+          if (!from.has(target)) from.set(target, []);
+          from.get(target).push(issue.number);
+        }
+      }
+      this.linksCache = { to, from };
+      this.linksVersion = this.dataVersion;
+    }
+    return this.linksCache;
+  }
+
+  // The topics a topic's messages point to, itself aside.
+  referencesOf(issue) {
+    return this.links().to.get(issue.number) || new Set();
+  }
+
+  // The topics that mention one, by number.
+  mentionedIn(number) {
+    return this.links().from.get(number) || [];
+  }
+
+  // Go to a topic from another one. Without an editor, a glyph's topic opens
+  // in the project's editor tab.
+  goToIssue(issue) {
+    if (this.withoutEditor && !isFontTopic(issue)) {
+      window.open(issueLink(this.projectName, issue), editorTabName(this.projectName));
+    } else {
+      this.show(issue);
+    }
   }
 
   issuesOf(glyphName) {
@@ -1591,6 +1807,12 @@ export class HiveComments {
       target.kind,
       target.issue ?? null,
       this.draft?.glyph,
+      target.issue ? this.mentionedIn(target.issue.number) : null,
+      // What its links show of the topics they point to.
+      target.issue
+        ? [...this.referencesOf(target.issue)].map((n) => [n, this.issue(n)?.state, issueTitle(this.issue(n))])
+        : null,
+      this.members,
       this.editing,
       this.renaming,
       this.earlierShown,
@@ -1626,11 +1848,11 @@ export class HiveComments {
       for (const textarea of this.cardElement.querySelectorAll("textarea[data-role]")) {
         const role = textarea.dataset.role;
         if (typed.has(role)) textarea.value = typed.get(role);
-        textarea.dispatchEvent(new Event("input"));
         if (role === focusedRole) {
           textarea.focus();
           if (caret) textarea.setSelectionRange(caret[0], caret[1]);
         }
+        textarea.dispatchEvent(new Event("input")); // after the focus: it may reopen a list
       }
       const messages = this.cardElement.querySelector(".messages");
       if (messages && scrollTop) messages.scrollTop = scrollTop;
@@ -1747,11 +1969,14 @@ export class HiveComments {
         this.changed();
       }
     };
+    const suggestions = this.suggestionsFor(textarea);
     textarea.addEventListener("input", () => {
       if (this.draft && role === "draft") this.draft.text = textarea.value;
       update();
+      suggestions.refresh();
     });
     textarea.addEventListener("keydown", (event) => {
+      if (suggestions.handleKey(event)) return;
       if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
         go();
@@ -1805,6 +2030,7 @@ export class HiveComments {
         ])
       : null;
     return el("div", { class: `compose${first ? " first" : ""}` }, [
+      suggestions.element,
       textarea,
       pen,
       el("div", { class: "row" }, [
@@ -1812,6 +2038,175 @@ export class HiveComments {
         onCancel && first ? el("button", { onclick: () => onCancel() }, ["Cancel"]) : null,
         submit,
       ]),
+    ]);
+  }
+
+  // What typing @ or # proposes: the list above a compose box, its keys.
+  suggestionsFor(textarea) {
+    const element = el("div", { class: "suggestions", hidden: true });
+    let items = [];
+    let chosen = 0;
+    let token = null;
+    let asked = null; // what the list answers, to start again at its top
+    const close = () => {
+      items = [];
+      token = null;
+      asked = null;
+      chosen = 0;
+      element.hidden = true;
+    };
+    const take = (item) => {
+      const caret = textarea.selectionStart;
+      const inserted = `${token.sign}${item.value} `;
+      textarea.setRangeText(inserted, token.start, caret, "end");
+      close();
+      textarea.dispatchEvent(new Event("input"));
+      textarea.focus();
+    };
+    const show = () => {
+      element.replaceChildren(
+        ...items.map((item, i) =>
+          el(
+            "div",
+            {
+              class: `suggestion${i === chosen ? " chosen" : ""}`,
+              // Before the text box loses the focus.
+              onmousedown: (event) => {
+                event.preventDefault();
+                take(item);
+              },
+            },
+            [item.lead, el("span", { class: "detail" }, [item.detail])]
+          )
+        )
+      );
+      element.children[chosen]?.scrollIntoView?.({ block: "nearest" });
+    };
+    const refresh = () => {
+      token = textarea.matches(":focus")
+        ? suggestionAt(textarea.value, textarea.selectionStart)
+        : null;
+      items = token ? this.suggestions(token.sign, token.query) : [];
+      if (!items.length) {
+        close();
+        return;
+      }
+      const asking = token.sign + token.query;
+      chosen = asking === asked ? Math.min(chosen, items.length - 1) : 0;
+      asked = asking;
+      element.hidden = false;
+      const top = element.parentElement?.getBoundingClientRect().top ?? Infinity;
+      const hostTop = this.overlayHost?.getBoundingClientRect().top ?? 0;
+      element.classList.toggle("below", top - hostTop < 230);
+      show();
+    };
+    textarea.addEventListener("blur", close);
+    textarea.addEventListener("click", refresh);
+    textarea.addEventListener("keyup", (event) => {
+      if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) refresh();
+    });
+    return {
+      element,
+      refresh,
+      // True if the key was for the list.
+      handleKey(event) {
+        if (element.hidden || event.isComposing) return false;
+        refresh(); // the caret may have left what the list answers
+        if (element.hidden) return false;
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          const step = event.key === "ArrowDown" ? 1 : -1;
+          chosen = (chosen + step + items.length) % items.length;
+          show();
+        } else if ((event.key === "Enter" && !event.shiftKey) || event.key === "Tab") {
+          take(items[chosen]);
+        } else if (event.key === "Escape") {
+          close();
+        } else {
+          return false;
+        }
+        event.preventDefault();
+        return true;
+      },
+    };
+  }
+
+  // Members for @, topics for # (newest first), filtered by what was typed.
+  suggestions(sign, query) {
+    const wanted = query.toLowerCase();
+    const has = (...values) => values.some((v) => v?.toLowerCase().includes(wanted));
+    if (sign === "@") {
+      return this.members
+        .filter((m) => m.username !== this.you?.username && has(m.username, m.name))
+        .slice(0, MAX_SUGGESTIONS)
+        .map((m) => ({
+          value: m.username,
+          lead: el("b", {}, [m.username]),
+          detail: m.name && m.name !== m.username ? m.name : "",
+        }));
+    }
+    return [...this.issues]
+      .filter((i) => i.number !== this.openNumber)
+      .filter((i) => String(i.number).startsWith(query) || has(i.glyph, issueTitle(i)))
+      // What is typed exactly comes first: "#1" is #1, not #12.
+      .sort((a, b) => (String(b.number) === query) - (String(a.number) === query) || b.number - a.number)
+      .slice(0, MAX_SUGGESTIONS)
+      .map((i) => ({
+        value: String(i.number),
+        lead: el("b", {}, [`#${i.number}`]),
+        detail: [isFontTopic(i) ? "Font" : i.glyph, issueTitle(i)].join(" · "),
+      }));
+  }
+
+  // A message's text, with its mentions, links to topics and addresses.
+  textElement(text) {
+    return el(
+      "div",
+      { class: "text" },
+      this.partsOf(text).map((part) => {
+        if (typeof part === "string") return part;
+        if (part.kind === "mention") {
+          return el("span", { class: "mention", title: part.member.name || part.member.username }, [part.text]);
+        }
+        if (part.kind === "url") {
+          return el("a", { href: part.text, target: "_blank", rel: "noopener noreferrer" }, [part.text]);
+        }
+        return this.issueLinkElement(part.issue);
+      })
+    );
+  }
+
+  // "#16 · p · The title": a click goes to that topic.
+  issueLinkElement(issue) {
+    const what = [`#${issue.number}`, isFontTopic(issue) ? "Font" : issue.glyph, issueTitle(issue)];
+    const label = what.join(" · ");
+    return el(
+      "button",
+      {
+        class: `issue-link${issue.state === "resolved" ? " resolved" : ""}`,
+        title: `${label}${issue.state === "resolved" ? " (resolved)" : ""}`,
+        onclick: () => this.goToIssue(issue),
+      },
+      [label]
+    );
+  }
+
+  // "Mentioned in #15, #18": the way back.
+  referencesRow(issue) {
+    const numbers = this.mentionedIn(issue.number);
+    if (!numbers.length) return null;
+    return el("div", { class: "references" }, [
+      "Mentioned in ",
+      ...numbers.map((number) =>
+        el(
+          "button",
+          {
+            class: "link mentioned-in",
+            title: issueTitle(this.issue(number)),
+            onclick: () => this.goToIssue(this.issue(number)),
+          },
+          [`#${number}`]
+        )
+      ),
     ]);
   }
 
@@ -1947,6 +2342,7 @@ export class HiveComments {
       this.titleRow(issue),
       this.organizeRow(issue),
       this.versionRow(issue),
+      this.referencesRow(issue),
       messages,
       this.error ? el("div", { class: "error" }, [this.error]) : null,
       this.can.comment
@@ -2206,7 +2602,7 @@ export class HiveComments {
           initial: message.text,
         })
       : message.text
-        ? el("div", { class: "text" }, [message.text])
+        ? this.textElement(message.text)
         : null;
     return el("div", { class: "message", dataset: { id: message.id } }, [
       el("div", { class: "meta" }, [
@@ -2737,6 +3133,10 @@ class HiveCommentTool {
 
 // --- the Comments sidebar panel --------------------------------------------------------------
 
+export function mentionedInText(numbers) {
+  return numbers.length ? `mentioned in ${numbers.map((n) => `#${n}`).join(", ")}` : null;
+}
+
 export class HiveCommentsPanel extends HTMLElement {
   identifier = "hive-comments";
   iconPath = "/hive/plugin/comments.svg";
@@ -2907,6 +3307,7 @@ export class HiveCommentsPanel extends HTMLElement {
       replies ? `${replies} repl${replies > 1 ? "ies" : "y"}` : null,
       issue.assignee ? `→ ${issue.assignee.name || issue.assignee.username}` : null,
       ...(issue.labels || []),
+      mentionedInText(this.comments.mentionedIn(issue.number)),
     ]
       .filter(Boolean)
       .join(" · ");

@@ -1318,3 +1318,295 @@ def test_a_deleted_font_topic_is_named_in_the_panel(page):
     assert "Font" in p.evaluate(
         "panel.listElement.querySelector('.deleted-issue .meta').textContent"
     )
+
+
+# --- step E: mentions and links between topics --------------------------------------
+
+
+def said(*texts, number=1, **kwargs):
+    """A topic whose messages say these things."""
+    issue = topic(number, **kwargs)
+    issue["messages"] = [
+        {**issue["messages"][0], "id": i, "text": text}
+        for i, text in enumerate(texts, start=1)
+    ]
+    return issue
+
+
+def type_in(p, role, text):
+    p.evaluate(f"textarea('{role}').focus()")
+    p.keyboard.type(text)
+
+
+def suggestions(p):
+    return p.evaluate(
+        "[...comments.overlayRoot.querySelectorAll('.suggestions:not([hidden]) .suggestion')]"
+        ".map(s => s.textContent)"
+    )
+
+
+PARTS = """(text) => JSON.parse(JSON.stringify(window.comments.partsOf(text).map(
+    (p) => typeof p === "string" ? p : p.kind + ":" + (p.issue?.number ?? p.text))))"""
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("plain", ["plain"]),
+        ("hi @ana.", ["hi ", "mention:@ana", "."]),
+        ("@ANA", ["mention:@ANA"]),
+        ("@nobody and a@ana", ["@nobody and a@ana"]),
+        ("see #2, then", ["see ", "issue:2", ", then"]),
+        ("#99 #000 a#2 #2x", ["#99 #000 a#2 #2x"]),  # no such topic, or not a number
+        ("(#2)", ["(", "issue:2", ")"]),
+        (
+            "go to https://example.com/a?b=1. Now",
+            ["go to ", "url:https://example.com/a?b=1", ". Now"],
+        ),
+        ("mail@ana.fr", ["mail@ana.fr"]),
+    ],
+)
+def test_what_a_message_says(page, text, expected):
+    p = page(issues=[topic(1), topic(2)])
+    assert p.evaluate(PARTS, text) == expected
+
+
+def test_a_copied_link_reads_as_the_topic(page):
+    p = page(issues=[topic(1), topic(2)])
+    origin = p.evaluate("location.origin")
+    here = f"{origin}/editor.html?project=Mutator&hive-issue=2"
+    assert p.evaluate(PARTS, f"see {here}") == ["see ", "issue:2"]
+    elsewhere = f"{origin}/editor.html?project=Other&hive-issue=2"
+    assert p.evaluate(PARTS, elsewhere) == [f"url:{elsewhere}"]
+    other_site = "https://example.com/editor.html?project=Mutator&hive-issue=2"
+    assert p.evaluate(PARTS, other_site) == [f"url:{other_site}"]
+    page_link = f"{origin}/#project/o/My%20font/comments/2"
+    number = "module.issueNumberInLink(%r, 'o/My font')" % page_link
+    assert p.evaluate(number) == 2
+
+
+def test_a_message_shows_mentions_and_links(page):
+    p = page(
+        issues=[said("Ask @ana about #2 and https://example.com"), topic(2, glyph="O")]
+    )
+    p.evaluate("comments.open(1)")
+    p.evaluate("frame()")
+    mention = "card().querySelector('.mention')"
+    assert p.evaluate(f"{mention}.textContent") == "@ana"
+    assert p.evaluate(f"{mention}.title") == "Ana Reviewer"
+    assert p.evaluate("card().querySelector('.text a').rel") == "noopener noreferrer"
+    link = "card().querySelector('.issue-link')"
+    assert p.evaluate(f"{link}.textContent") == "#2 · O · Topic 2"
+    # Text stays text: nothing in a message becomes markup.
+    p.evaluate("comments.issues[0].messages[0].text = '<img src=x onerror=boom> @ana'")
+    p.evaluate("comments.dataVersion++; comments.changed()")
+    p.evaluate("frame()")
+    assert p.evaluate("card().querySelector('img')") is None
+    assert p.evaluate("window.errors") == []
+
+
+def test_a_link_goes_to_its_topic_and_back(page):
+    p = page(issues=[said("See #2"), font_topic(2), said("Also #2", number=3)])
+    p.evaluate("comments.open(1)")
+    p.evaluate("frame()")
+    p.evaluate("card().querySelector('.issue-link').click()")
+    p.wait_for_function("comments.openNumber === 2")
+    p.evaluate("frame()")
+    # The way back, from the topic mentioned.
+    links = "[...card().querySelectorAll('.mentioned-in')]"
+    assert p.evaluate(f"{links}.map(b => b.textContent)") == ["#1", "#3"]
+    assert "Mentioned in" in p.evaluate("cardText()")
+    p.evaluate(f"{links}[1].click()")
+    p.wait_for_function("comments.openNumber === 3")
+    p.evaluate("frame()")
+    assert p.evaluate("card().querySelector('.references')") is None
+    # In the panel too; a topic does not mention itself.
+    p.evaluate("comments.issues[0].messages[0].text = 'See #2 and #1'")
+    p.evaluate("comments.dataVersion++; panel.render()")
+    assert "mentioned in #1, #3" in p.evaluate("panel.listElement.textContent")
+    assert p.evaluate("comments.mentionedIn(1)") == []
+    assert p.evaluate("window.errors") == []
+
+
+def test_mentioned_in_follows_the_messages(page):
+    p = page(issues=[topic(1), topic(2)])
+    assert p.evaluate("comments.mentionedIn(2)") == []
+    p.evaluate("comments.open(1)")
+    p.evaluate("frame()")
+    p.evaluate("comments.reply(1, 'See #2')")
+    p.wait_for_function("comments.mentionedIn(2).length === 1")
+    assert p.evaluate("comments.mentionedIn(2)") == [1]
+
+
+def test_typing_at_proposes_the_members(page):
+    p = page(issues=[topic(1)])
+    p.evaluate("comments.open(1)")
+    p.evaluate("frame()")
+    type_in(p, "reply", "Ask @")
+    # Not oneself (Ana).
+    assert suggestions(p) == ["bobBob Designer"]
+    p.keyboard.type("x")
+    assert suggestions(p) == []
+    p.keyboard.press("Backspace")
+    p.keyboard.type("Bo")
+    assert suggestions(p) == ["bobBob Designer"]
+    p.keyboard.press("Enter")  # takes the name, sends nothing
+    assert p.evaluate("textarea('reply').value") == "Ask @bob "
+    assert requests(p, "POST") == []
+    assert suggestions(p) == []
+    p.keyboard.type("now")
+    p.keyboard.press("Enter")
+    p.wait_for_function("comments.issue(1).messages.length === 2")
+    assert requests(p, "POST")[-1]["body"]["text"] == "Ask @bob now"
+
+
+def test_typing_hash_proposes_the_topics(page):
+    p = page(issues=[topic(n) for n in (1, 2, 12)] + [font_topic(13, title="Family")])
+    p.evaluate("comments.open(2)")
+    p.evaluate("frame()")
+    type_in(p, "reply", "See #")
+    # Newest first, not the topic being read.
+    assert suggestions(p) == [
+        "#13Font · Family",
+        "#12H · Topic 12",
+        "#1H · Topic 1",
+    ]
+    p.keyboard.type("1")
+    # What is typed exactly comes first.
+    assert suggestions(p)[0] == "#1H · Topic 1"
+    p.keyboard.press("Backspace")
+    p.keyboard.type("fam")
+    assert suggestions(p) == ["#13Font · Family"]
+    p.keyboard.press("Tab")
+    assert p.evaluate("textarea('reply').value") == "See #13 "
+
+
+def test_the_keys_and_the_mouse_on_the_list(page):
+    p = page(issues=[topic(1), topic(2), topic(3)])
+    p.evaluate("comments.open(3)")
+    p.evaluate("frame()")
+    type_in(p, "reply", "#")
+    p.keyboard.press("ArrowDown")
+    chosen = "comments.overlayRoot.querySelector('.suggestion.chosen').textContent"
+    assert p.evaluate(chosen).startswith("#1")
+    p.keyboard.press("ArrowDown")  # around
+    assert p.evaluate(chosen).startswith("#2")
+    p.keyboard.press("ArrowUp")
+    assert p.evaluate(chosen).startswith("#1")
+    # Escape closes the list, not the post-it.
+    p.keyboard.press("Escape")
+    assert suggestions(p) == []
+    assert p.evaluate("comments.openNumber") == 3
+    p.keyboard.type("2")
+    assert suggestions(p) == ["#2H · Topic 2"]
+    p.evaluate(
+        "comments.overlayRoot.querySelector('.suggestion')"
+        ".dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true}))"
+    )
+    assert p.evaluate("textarea('reply').value") == "#2 "
+    # Not a mention in the middle of a word; nor out of the box.
+    p.keyboard.type("C#")
+    assert suggestions(p) == []
+    p.keyboard.type(" @")
+    assert suggestions(p) != []
+    p.evaluate("textarea('reply').blur()")
+    assert suggestions(p) == []
+    assert p.evaluate("window.errors") == []
+
+
+def test_a_list_stays_in_the_canvas_near_its_top(page):
+    p = page(issues=[font_topic(1), font_topic(2)])
+    p.evaluate("comments.startFontTopic()")
+    p.evaluate("frame()")
+    type_in(p, "draft", "#")
+    box = p.evaluate(
+        "comments.overlayRoot.querySelector('.suggestions').getBoundingClientRect().top"
+    )
+    assert box >= 0
+
+
+def test_a_broken_address_in_a_message_breaks_nothing(page):
+    origin = "location.origin + '/#project/%ff/comments/1'"
+    p = page(issues=[topic(1), topic(2)])
+    p.evaluate(f"comments.issues[1].messages[0].text = {origin}; comments.dataVersion++")
+    p.evaluate("comments.open(2)")
+    p.evaluate("frame()")
+    assert p.evaluate("card().querySelector('.text a')")
+    assert p.evaluate("comments.mentionedIn(1)") == []
+    assert p.evaluate("window.errors") == []
+
+
+def test_addresses_keep_what_belongs_to_them(page):
+    p = page()
+    wiki = "https://en.wikipedia.org/wiki/Garamond_(typeface)"
+    assert p.evaluate(PARTS, f"see {wiki}.") == ["see ", f"url:{wiki}", "."]
+    assert p.evaluate(PARTS, f"({wiki})") == ["(", f"url:{wiki}", ")"]
+    assert p.evaluate(PARTS, "(https://a.fr/b)") == ["(", "url:https://a.fr/b", ")"]
+
+
+def test_the_list_follows_the_caret(page):
+    p = page(issues=[topic(1)])
+    p.evaluate("comments.open(1)")
+    p.evaluate("frame()")
+    type_in(p, "reply", "Look @bo at this")
+    for _ in " at this":
+        p.keyboard.press("ArrowLeft")
+    assert suggestions(p) == ["bobBob Designer"]
+    # Out of the word by End: Enter sends the whole text.
+    p.keyboard.press("End")
+    assert suggestions(p) == []
+    p.keyboard.press("Enter")
+    p.wait_for_function("comments.issue(1).messages.length === 2")
+    assert requests(p, "POST")[-1]["body"]["text"] == "Look @bo at this"
+
+
+def test_enter_with_the_caret_moved_without_a_key_event(page):
+    p = page(issues=[topic(1)])
+    p.evaluate("comments.open(1)")
+    p.evaluate("frame()")
+    type_in(p, "reply", "@bo rest")
+    for _ in " rest":
+        p.keyboard.press("ArrowLeft")
+    assert suggestions(p) != []
+    p.evaluate("textarea('reply').setSelectionRange(8, 8)")  # as a keyboard shortcut may
+    p.keyboard.press("Enter")
+    p.wait_for_function("comments.issue(1).messages.length === 2")
+    assert requests(p, "POST")[-1]["body"]["text"] == "@bo rest"
+
+
+def test_the_list_stays_through_a_refresh_of_the_card(page):
+    p = page(issues=[topic(1), {**topic(2)}])
+    p.evaluate("comments.open(1)")
+    p.evaluate("frame()")
+    type_in(p, "reply", "Ask @bo")
+    p.evaluate("comments.you = {...comments.you, username: 'someone'}; comments.changed()")
+    p.evaluate("frame()")
+    assert p.evaluate("textarea('reply').value") == "Ask @bo"
+    assert suggestions(p) == ["bobBob Designer"]
+    p.keyboard.press("Enter")
+    assert p.evaluate("textarea('reply').value") == "Ask @bob "
+    assert requests(p, "POST") == []
+
+
+def test_the_list_starts_again_at_its_top(page):
+    p = page(issues=[topic(n) for n in (1, 2, 3, 12)])
+    p.evaluate("comments.open(3)")
+    p.evaluate("frame()")
+    type_in(p, "reply", "#")
+    p.keyboard.press("ArrowDown")
+    p.keyboard.press("ArrowDown")
+    p.keyboard.press("Enter")
+    assert p.evaluate("textarea('reply').value") == "#1 "
+    p.keyboard.type("#1")
+    p.keyboard.press("Enter")  # #1, not the third line of before
+    assert p.evaluate("textarea('reply').value") == "#1 #1 "
+
+
+def test_shift_enter_is_a_new_line_even_with_the_list(page):
+    p = page(issues=[topic(1)])
+    p.evaluate("comments.open(1)")
+    p.evaluate("frame()")
+    type_in(p, "reply", "@bo")
+    p.keyboard.press("Shift+Enter")
+    assert p.evaluate("textarea('reply').value") == "@bo\n"
+    assert suggestions(p) == []
