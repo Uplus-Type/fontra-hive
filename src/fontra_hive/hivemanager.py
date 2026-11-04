@@ -201,6 +201,7 @@ class HiveProjectManager(DevHiveProjectManager):
         self.directory = api  # accounts are on (the base class checks this)
         self.proxy = proxy
         self._proxySession: aiohttp.ClientSession | None = None
+        self._notifying: set[asyncio.Task] = set()
         self._sweepLock = asyncio.Lock()
         self._sweepTask: asyncio.Task | None = None
         # Imports (audit L-1): one at a time per project, a few conversions
@@ -756,6 +757,22 @@ class HiveProjectManager(DevHiveProjectManager):
         except HiveApiUnavailable as error:
             logger.warning("hive-api unavailable: %s", error)
             return []
+
+    def sendNotifications(self, name: str, events: list[dict]) -> None:
+        """Without waiting: the comment is in git, whatever hive-api says.
+        If it is away, the notification is lost, not the comment."""
+        if not events:
+            return
+
+        async def send() -> None:
+            try:
+                await self.api.notify(name, events)
+            except (HiveApiUnavailable, asyncio.TimeoutError) as error:
+                logger.warning("notifications of %s not sent: %s", name, error)
+
+        task = asyncio.create_task(send())
+        self._notifying.add(task)  # the event loop keeps only a weak reference
+        task.add_done_callback(self._notifying.discard)
 
     async def setMemberHandler(self, request: web.Request) -> web.Response:
         raise web.HTTPNotFound(text="members are managed by hive-api: /api/projects/…")

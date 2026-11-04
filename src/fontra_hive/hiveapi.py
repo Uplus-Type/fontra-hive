@@ -349,6 +349,15 @@ class HiveApi:
         if status not in (200, 404):
             raise HiveApiUnavailable(f"/api/internal/remote/synced: HTTP {status}")
 
+    async def notify(self, project: str, events: list[dict]) -> None:
+        """What just happened in a project's comments: hive-api writes each
+        person's notifications."""
+        status, _ = await self._call(
+            "POST", "/api/internal/notify", json={"project": project, "events": events}
+        )
+        if status != 200:
+            raise HiveApiUnavailable(f"/api/internal/notify: HTTP {status}")
+
     async def members(self, project: str, ttl: float = 30.0) -> list[dict]:
         """Everyone with a role on a project: username, name, uid, avatar,
         role (kept ``ttl`` seconds: comments list them at each change)."""

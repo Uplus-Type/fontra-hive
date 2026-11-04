@@ -1,5 +1,6 @@
 """Comments on glyphs: the store on refs/hive/comments and its routes."""
 
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -1138,3 +1139,163 @@ def test_nobody_is_looked_up_for_who_may_not_write(team):
         assert asked == []
 
     run(go())
+
+
+# --- step F: who is told -------------------------------------------------------------
+
+
+def members_with_uids(team):
+    async def members(name):
+        return [
+            {"username": u, "name": u, "uid": f"u-{u}"}
+            for u in ("owner", "dan", "ria", "rex", "mona")
+        ]
+
+    team.projectMembers = members
+
+
+@pytest.fixture
+def told(team):
+    """(kind, recipient) of what the routes send, once people have uids."""
+    sent = []
+    team.sendNotifications = lambda name, events: sent.extend(events)
+    members_with_uids(team)
+    team.told = sent
+    return team
+
+
+def uid_of(user):
+    return {"uid": f"u-{user}", "username": user, "name": user}
+
+
+def seed(team, issue_author, assignee=None):
+    """A topic whose author (and assignee) have uids, as with accounts."""
+    store = GitRepoStore.open(team.rootPath / "Mutator.git")
+    comments = CommentStore(store)
+    topic = comments.create(
+        glyph=None,
+        source=None,
+        point=None,
+        text="Hm",
+        branch="main",
+        commit="abc",
+        by=uid_of(issue_author),
+    )
+    if assignee:
+        comments.organize(topic["number"], assignee=uid_of(assignee))
+    store.close()
+    return topic["number"]
+
+
+def kinds(team):
+    return sorted((e["type"], e["recipient"]) for e in team.told)
+
+
+def test_who_is_told_of_a_reply(told):
+    number = seed(told, "ria", assignee="dan")
+    run(told.replyCommentHandler(request("rex", body={"text": "Ok"}, number=number)))
+    assert kinds(told) == [("replied", "u-dan"), ("replied", "u-ria")]
+    event = told.told[0]
+    assert event["issue"] == number and event["glyph"] is None
+    assert "actor" in event
+
+
+def test_the_author_of_a_reply_is_not_told(told):
+    number = seed(told, "ria")
+    run(told.replyCommentHandler(request("ria", body={"text": "Me"}, number=number)))
+    assert told.told == []
+
+
+def test_who_is_told_of_a_mention(told):
+    number = seed(told, "ria")
+    body = {"text": "@mona and @rex"}
+    run(told.replyCommentHandler(request("dan", body=body, number=number)))
+    assert kinds(told) == [
+        ("mentioned", "u-mona"),
+        ("mentioned", "u-rex"),
+        ("replied", "u-ria"),
+    ]
+
+
+def test_who_is_told_of_an_assignment(told):
+    number = seed(told, "ria")
+
+    async def go():
+        assign = {"assignee": "rex"}
+        await told.updateCommentHandler(request("dan", body=assign, number=number))
+        assert kinds(told) == [("assigned", "u-rex")]
+        told.told.clear()
+        # Labels, or the same person again: nothing new for them.
+        for body in (assign, {"labels": ["x"]}):
+            await told.updateCommentHandler(request("dan", body=body, number=number))
+        assert told.told == []
+
+    run(go())
+
+
+def test_who_is_told_of_a_resolution(told):
+    number = seed(told, "ria", assignee="mona")
+
+    async def go():
+        await told.updateCommentHandler(
+            request("dan", body={"state": "resolved"}, number=number)
+        )
+        assert kinds(told) == [("resolved", "u-mona"), ("resolved", "u-ria")]
+        told.told.clear()
+        await told.updateCommentHandler(
+            request("dan", body={"state": "open"}, number=number)
+        )
+        assert kinds(told) == [("reopened", "u-mona"), ("reopened", "u-ria")]
+
+    run(go())
+
+
+def test_a_refused_change_tells_nobody(told):
+    number = seed(told, "ria")
+
+    async def go():
+        with pytest.raises(web.HTTPForbidden):
+            await told.replyCommentHandler(
+                request("otto", body={"text": "@ria"}, number=number)
+            )
+        with pytest.raises(web.HTTPBadRequest):
+            await told.replyCommentHandler(
+                request("dan", body={"text": ""}, number=number)
+            )
+        assert told.told == []
+
+    run(go())
+
+
+def test_without_accounts_nobody_is_told(team):
+    async def go():
+        await team.createCommentHandler(request("owner", body={"text": "@ria"}))
+        # The base class has no one to tell, and the comment is written.
+        assert team.sendNotifications("Mutator", [{}]) is None
+
+    run(go())
+
+
+def test_hive_api_away_does_not_stop_a_comment():
+    from fontra_hive.hiveapi import HiveApiUnavailable
+    from fontra_hive.hivemanager import HiveProjectManager
+
+    calls = []
+
+    async def notify(project, events):
+        calls.append((project, events))
+        raise HiveApiUnavailable("away")
+
+    manager = HiveProjectManager.__new__(HiveProjectManager)
+    manager.api = SimpleNamespace(notify=notify)
+    manager._notifying = set()
+
+    async def go():
+        manager.sendNotifications("u/f", [{"type": "replied"}])
+        manager.sendNotifications("u/f", [])
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    run(go())
+    assert calls == [("u/f", [{"type": "replied"}])]
+    assert manager._notifying == set()

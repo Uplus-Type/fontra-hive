@@ -13,6 +13,10 @@ Who may do what:
 
 A topic's title: its author, or the project's admins (``administer``).
 
+Who is told (``sendNotifications``), never the person acting: those a message
+names, whoever a topic is assigned to, and the topic's author and assignee
+when someone replies, resolves or reopens.
+
 A person may also delete their own reply, and their own topic as long as
 nobody else has written in it. Without accounts (development), everyone may
 do everything.
@@ -54,6 +58,21 @@ def _can(access: Access | None, capability: str) -> bool:
 
 def _isAuthor(item: dict, who: dict) -> bool:
     return same_person(item.get("author"), who)
+
+
+def _events(kind: str, people: list, issue: dict, who: dict) -> list[dict]:
+    """For hive-api (uids): only those with an account, never the person acting."""
+    return [
+        {
+            "recipient": someone["uid"],
+            "type": kind,
+            "issue": issue["number"],
+            "glyph": issue.get("glyph"),
+            "actor": who.get("uid"),
+        }
+        for someone in people
+        if someone and someone.get("uid") and not same_person(someone, who)
+    ]
 
 
 def _number(request) -> int:
@@ -127,7 +146,10 @@ class CommentRoutesMixin:
             "administer": _can(access, "administer") and not self.readOnly,  # titles
         }
 
-    async def _newlyNamed(self, request, text, written: dict) -> list[str]:
+    def sendNotifications(self, name: str, events: list[dict]) -> None:
+        """Nothing without accounts: the Hive manager passes them to hive-api."""
+
+    async def _newlyNamed(self, request, text, written: dict) -> list[dict]:
         """Who a message just written names that it did not name before
         (``written``: ``who`` wrote it, ``before`` what it said), the writer
         aside. Asked once the change is made, so only of those who may
@@ -137,7 +159,7 @@ class CommentRoutesMixin:
         members = await self.projectMembers(request.match_info["name"])
         already = {m["username"] for m in mentions_in(written.get("before"), members)}
         return [
-            member["username"]
+            member
             for member in mentions_in(text, members)
             if member["username"] not in already
             and not same_person(
@@ -145,17 +167,21 @@ class CommentRoutesMixin:
             )
         ]
 
-    async def _commentChange(self, request, capability: str, change, named=None):
+    async def _commentChange(
+        self, request, capability: str, change, named=None, told=None
+    ):
         """Run ``change(comments, access, who, store)`` on the project's
         comments and answer with its result (a topic, or None when one was
         deleted) and the new head of the comments. ``named()``, if given, says
-        who the message newly names (the notifications will start here)."""
-        _, repoPath, access = await self._commentContext(request, capability)
+        who the message newly names, and ``told(topic)`` who else to tell:
+        (kind, people), or None."""
+        name, repoPath, access = await self._commentContext(request, capability)
         store = GitRepoStore.open(repoPath)
         try:
             comments = CommentStore(store)
+            who = _who(access, self.author)
             try:
-                result = change(comments, access, _who(access, self.author), store)
+                result = change(comments, access, who, store)
             except CommentNotFound as error:
                 raise web.HTTPNotFound(text=str(error))
             except CommentForbidden as error:
@@ -165,8 +191,15 @@ class CommentRoutesMixin:
             except RefMovedError:
                 raise web.HTTPConflict(text="too many comments at once, try again")
             answer = {"head": comments.head(), "issue": result}
+            events = []
             if named is not None:
-                answer["mentions"] = await named()
+                people = await named()
+                answer["mentions"] = [member["username"] for member in people]
+                events += _events("mentioned", people, result, who)
+            reason = told(result) if told is not None else None
+            if reason is not None:
+                events += _events(*reason, result, who)
+            self.sendNotifications(name, events)
             return web.json_response(answer)
         finally:
             store.close()
@@ -327,6 +360,7 @@ class CommentRoutesMixin:
             "comment",
             change,
             named=lambda: self._newlyNamed(request, body.get("text"), written),
+            told=lambda issue: ("replied", [issue["author"], issue.get("assignee")]),
         )
 
     async def updateCommentHandler(self, request) -> web.Response:
@@ -381,7 +415,13 @@ class CommentRoutesMixin:
                 author=signature,
             )
 
-        return await self._commentChange(request, "comment", change)
+        def told(issue):
+            kind = "resolved" if state == "resolved" else "reopened"
+            return (kind, [issue["author"], issue.get("assignee")])
+
+        return await self._commentChange(
+            request, "comment", change, told=told if state is not None else None
+        )
 
     async def _organizeComment(self, request, number: int, body: dict):
         assignee = ...
@@ -404,8 +444,10 @@ class CommentRoutesMixin:
                     member["username"], member.get("name"), member.get("uid")
                 )
         labels = body["labels"] if "labels" in body else ...
+        before: dict = {}
 
         def change(comments, access, who, store):
+            before["assignee"] = comments.issue(number).get("assignee")
             return comments.organize(
                 number,
                 assignee=assignee,
@@ -413,7 +455,13 @@ class CommentRoutesMixin:
                 author=_signature(access, self.author),
             )
 
-        return await self._commentChange(request, "edit", change)
+        def told(issue):
+            now = issue.get("assignee")
+            if now is None or same_person(now, before.get("assignee")):
+                return None
+            return ("assigned", [now])
+
+        return await self._commentChange(request, "edit", change, told=told)
 
     async def editMessageHandler(self, request) -> web.Response:
         number = _number(request)
