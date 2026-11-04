@@ -646,7 +646,7 @@ def test_routes_for_the_past(team):
             request("ria", body={"state": "resolved"}, number=2)
         )
         summary = await answer(await team.commentsSummaryHandler(request("otto")))
-        assert summary == {"open": 1, "resolved": 1}
+        assert summary["open"] == 1 and summary["resolved"] == 1
         history = await answer(
             await team.commentHistoryHandler(request("otto", number=1))
         )
@@ -689,7 +689,7 @@ def test_the_summary_never_creates_a_repository(tmp_path, fixture_fontra):
 
     async def go():
         summary = await answer(await manager.commentsSummaryHandler(hive()))
-        assert summary == {"open": 0, "resolved": 0}
+        assert summary == {"open": 0, "resolved": 0, "font": {"open": 0, "resolved": 0}}
         assert not (root / "p-1.git").exists()
         store = GitRepoStore.create(root / "p-1.git")
         store.import_directory(
@@ -709,7 +709,11 @@ def test_the_summary_never_creates_a_repository(tmp_path, fixture_fontra):
         )
         assert done["issue"]["assignee"]["uid"] == "u-dan"
         summary = await answer(await manager.commentsSummaryHandler(hive()))
-        assert summary == {"open": 1, "resolved": 0}
+        assert summary == {
+            "open": 1,
+            "resolved": 0,
+            "font": {"open": 0, "resolved": 0},
+        }
         await manager.aclose()
 
     run(go())
@@ -794,3 +798,228 @@ def test_sketch_routes(team):
             )
 
     run(go())
+
+
+# --- step D: topics about the font ---------------------------------------------------
+
+
+def font_topic(comments, by=ANA, text="Is the family name final?", **kwargs):
+    return comments.create(
+        glyph=None,
+        source=None,
+        point=None,
+        text=text,
+        branch="main",
+        commit="abc",
+        by=by,
+        **kwargs,
+    )
+
+
+def test_a_font_topic_is_a_topic_without_a_glyph(comments):
+    new(comments)
+    topic = font_topic(comments, title="  Family   name ", anchor="fontinfo")
+    new(comments, glyph="O")
+    assert topic["number"] == 2  # the same numbers as the glyphs' topics
+    assert (topic["glyph"], topic["source"], topic["point"]) == (None, None, None)
+    assert topic["title"] == "Family name" and topic["anchor"] == "fontinfo"
+    assert (topic["branch"], topic["commit"]) == ("main", "abc")
+    assert new(comments)["anchor"] is None
+    assert font_topic(comments)["anchor"] is None
+    assert [i["number"] for i in comments.issues()] == [1, 2, 3, 4, 5]
+    assert [i["number"] for i in comments.issues("H")] == [1, 4]
+    assert [i["number"] for i in comments.issues(font_only=True)] == [2, 5]
+    assert comments.issues("H", font_only=True) == []
+    log = list(comments.repo.get_walker(include=[comments.repo.refs[COMMENTS_REF]]))
+    assert log[-2].commit.message.decode().startswith("Comment #2 on the font\n")
+
+
+def test_a_font_topic_lives_like_the_others(comments):
+    font_topic(comments)
+    assert comments.reply(1, "Yes", by=BOB)["messages"][1]["text"] == "Yes"
+    assert comments.set_title(1, "Name")["title"] == "Name"
+    organized = comments.organize(1, assignee=BOB, labels=["naming"])
+    assert organized["assignee"] == BOB and organized["labels"] == ["naming"]
+    resolved = comments.set_state(1, "resolved", by=BOB, branch="main", commit="d")
+    assert resolved["state"] == "resolved"
+    assert comments.set_state(1, "open", by=ANA)["resolved"] is None
+    assert comments.edit_message(1, 2, "Yes!")["messages"][1]["edited"]
+    assert len(comments.history(1)) == 7
+    comments.delete(1)
+    assert comments.issues() == []
+    found = comments.deleted()
+    assert [d["number"] for d in found] == [1] and found[0]["issue"]["glyph"] is None
+    assert comments.restore(1)["glyph"] is None
+    assert comments.issue(1)["labels"] == ["naming"]
+    log = list(comments.repo.get_walker(include=[comments.repo.refs[COMMENTS_REF]]))
+    assert log[0].commit.message.decode().startswith("Restore #1 on the font\n")
+    assert log[1].commit.message.decode().startswith("Delete #1 on the font\n")
+
+
+STROKES = {"strokes": [[[0, 0], [10, 10]]]}
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"source": SOURCE},
+        {"point": {"x": 1, "y": 2}},
+        {"sketch": STROKES},
+        {"title": 12},
+        {"title": "x" * 201},
+        {"anchor": ""},
+        {"anchor": 3},
+        {"anchor": "x" * 201},
+    ],
+)
+def test_what_a_font_topic_cannot_have(comments, bad):
+    with pytest.raises(CommentError):
+        comments.create(
+            **{
+                "glyph": None,
+                "source": None,
+                "point": None,
+                "text": "Hm",
+                "branch": "main",
+                "commit": "abc",
+                "by": ANA,
+                **bad,
+            }
+        )
+    assert comments.head() is None
+
+
+def test_a_font_topic_has_no_place_and_no_sketch(comments):
+    font_topic(comments)
+    with pytest.raises(CommentError):
+        comments.move(1, {"x": 1, "y": 2})
+    with pytest.raises(CommentError):
+        comments.reply(1, "Look", by=BOB, sketch=STROKES)
+    with pytest.raises(CommentError):
+        comments.edit_message(1, 1, "Look", sketch=STROKES)
+    with pytest.raises(CommentError):
+        comments.reply(1, "", by=BOB)
+    assert len(comments.issue(1)["messages"]) == 1
+
+
+@pytest.mark.parametrize(
+    "missing", [{"point": None}, {"source": None}, {"point": None, "source": None}]
+)
+def test_a_glyphs_topic_still_needs_its_place(comments, missing):
+    with pytest.raises(CommentError):
+        new(comments, **missing)
+
+
+FONT = {"text": "Is the family name final?"}
+
+
+def test_every_role_on_a_font_topic(team):
+    async def status(handler, req):
+        try:
+            return (await handler(req)).status
+        except web.HTTPException as error:
+            return error.status
+
+    async def go():
+        for user, expected in [
+            ("otto", 403),  # observer
+            ("nobody", 404),  # not in the project: it does not exist for them
+            ("ria", 200),  # reviewer
+            ("dan", 200),  # designer
+            ("mona", 200),  # manager
+            ("owner", 200),
+        ]:
+            got = await status(team.createCommentHandler, request(user, body=FONT))
+            assert got == expected, user
+        # #1 is Ria's. Another reviewer answers, but cannot close or sort it.
+        reply = request("rex", body={"text": "No"}, number=1)
+        assert await status(team.replyCommentHandler, reply) == 200
+        for body in ({"state": "resolved"}, {"title": "Mine"}):
+            forbidden = request("rex", body=body, number=1)
+            assert await status(team.updateCommentHandler, forbidden) == 403
+        for body in ({"assignee": "dan"}, {"labels": ["naming"]}):
+            forbidden = request("ria", body=body, number=1)
+            assert await status(team.updateCommentHandler, forbidden) == 403
+        delete = request("rex", number=1)
+        assert await status(team.deleteCommentHandler, delete) == 403
+        # Its author titles and resolves it; designers sort it.
+        for user, body in [
+            ("ria", {"title": "Name"}),
+            ("ria", {"state": "resolved"}),
+            ("dan", {"state": "open"}),
+            ("dan", {"assignee": "ria", "labels": ["naming"]}),
+        ]:
+            allowed = request(user, body=body, number=1)
+            assert await status(team.updateCommentHandler, allowed) == 200
+        # Only managers delete a topic others have written in.
+        assert await status(team.deleteCommentHandler, request("dan", number=1)) == 403
+        assert await status(team.deleteCommentHandler, request("mona", number=1)) == 200
+        restored = request("mona", number=1)
+        assert await status(team.restoreCommentHandler, restored) == 200
+
+    run(go())
+
+
+def test_font_topics_through_the_routes(team):
+    async def go():
+        opened = await answer(
+            await team.createCommentHandler(
+                request(
+                    "ria",
+                    body={**FONT, "title": "Family name", "anchor": "fontinfo"},
+                )
+            )
+        )
+        topic = opened["issue"]
+        assert topic["number"] == 1 and topic["glyph"] is None
+        assert topic["title"] == "Family name" and topic["anchor"] == "fontinfo"
+        # The head of the default branch, even without a glyph.
+        assert topic["branch"] == "main" and len(topic["commit"]) == 40
+        await team.createCommentHandler(request("ria", body=NEW))
+        await team.createCommentHandler(request("dan", body=FONT))
+        await team.updateCommentHandler(
+            request("dan", body={"state": "resolved"}, number=3)
+        )
+
+        async def numbers(**query):
+            data = await answer(await team.commentsHandler(request("ria", **query)))
+            return [issue["number"] for issue in data["issues"]]
+
+        assert await numbers() == [1, 2, 3]
+        assert await numbers(glyph="H") == [2]
+        assert await numbers(scope="font") == [1, 3]
+        assert await numbers(scope="font", glyph="H") == []
+        with pytest.raises(web.HTTPBadRequest):
+            await team.commentsHandler(request("ria", scope="everything"))
+
+        summary = await answer(await team.commentsSummaryHandler(request("ria")))
+        assert summary == {
+            "open": 2,
+            "resolved": 1,
+            "font": {"open": 1, "resolved": 1},
+        }
+
+        refused = [
+            ({**FONT, "point": {"x": 1, "y": 2}}, team.createCommentHandler, {}),
+            ({**FONT, "source": SOURCE}, team.createCommentHandler, {}),
+            ({**FONT, "sketch": STROKES}, team.createCommentHandler, {}),
+            ({"title": "No message"}, team.createCommentHandler, {}),
+            ({**NEW, "point": None}, team.createCommentHandler, {}),
+            ({"text": "Look", "sketch": STROKES}, team.replyCommentHandler, {"number": 1}),
+            ({"point": {"x": 1, "y": 2}}, team.updateCommentHandler, {"number": 1}),
+        ]
+        for body, handler, match in refused:
+            with pytest.raises(web.HTTPBadRequest):
+                await handler(request("owner", body=body, **match))
+
+    run(go())
+
+
+def test_font_topics_do_not_disturb_the_font_history(team, root):
+    store = GitRepoStore.open(root / "Mutator.git")
+    head = store.head("main")
+    store.close()
+    run(team.createCommentHandler(request("ria", body=FONT)))
+    store = GitRepoStore.open(root / "Mutator.git")
+    assert store.head("main") == head
+    store.close()

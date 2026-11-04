@@ -1,4 +1,4 @@
-"""HTTP routes for comments on glyphs (see :mod:`fontra_hive.comments`).
+"""HTTP routes for comments (see :mod:`fontra_hive.comments`).
 
 A mixin of the project managers: it uses their ``_project`` (repository and
 access, with a capability), ``_defaultBranch``, ``readOnly`` and ``author``.
@@ -28,6 +28,7 @@ from .comments import (
     CommentForbidden,
     CommentNotFound,
     CommentStore,
+    is_font_topic,
     person,
     same_person,
 )
@@ -150,14 +151,18 @@ class CommentRoutesMixin:
     # --- reading --------------------------------------------------------------
 
     async def commentsHandler(self, request) -> web.Response:
-        """The project's topics (``glyph=`` for one glyph's), who is asking and
-        what they may do."""
+        """The project's topics (``glyph=`` for one glyph's, ``scope=font`` for
+        those about the font), who is asking and what they may do."""
         _, repoPath, access = await self._commentContext(request, "read")
         glyph = request.query.get("glyph") or None
+        scope = request.query.get("scope") or None
+        if scope not in (None, "font"):
+            raise web.HTTPBadRequest(text="scope can only be font")
         store = GitRepoStore.open(repoPath)
         try:
             comments = CommentStore(store)
-            head, issues = comments.head(), comments.issues(glyph)
+            head = comments.head()
+            issues = comments.issues(glyph, font_only=scope == "font")
         finally:
             store.close()
         members = await self.projectMembers(request.match_info["name"])
@@ -185,18 +190,30 @@ class CommentRoutesMixin:
             store.close()
 
     async def commentsSummaryHandler(self, request) -> web.Response:
-        """How many topics are open and resolved (for the project cards).
-        Never creates the project's repository: none yet, no comments."""
+        """How many topics are open and resolved (for the project cards), and
+        how many of these are about the font (``font``). Never creates the
+        project's repository: none yet, no comments."""
         repoPath, _ = await self._projectIfExists(request, request.match_info["name"])
         if repoPath is None:
-            return web.json_response({"open": 0, "resolved": 0})
+            return web.json_response(
+                {"open": 0, "resolved": 0, "font": {"open": 0, "resolved": 0}}
+            )
         store = GitRepoStore.open(repoPath)
         try:
             issues = CommentStore(store).issues()
         finally:
             store.close()
-        open_ = sum(1 for issue in issues if issue.get("state") == "open")
-        return web.json_response({"open": open_, "resolved": len(issues) - open_})
+
+        def counts(topics: list[dict]) -> dict:
+            open_ = sum(1 for issue in topics if issue.get("state") == "open")
+            return {"open": open_, "resolved": len(topics) - open_}
+
+        return web.json_response(
+            {
+                **counts(issues),
+                "font": counts([issue for issue in issues if is_font_topic(issue)]),
+            }
+        )
 
     async def commentHistoryHandler(self, request) -> web.Response:
         """Every change of a topic (edited messages included), newest first."""
@@ -234,6 +251,9 @@ class CommentRoutesMixin:
     # --- writing --------------------------------------------------------------
 
     async def createCommentHandler(self, request) -> web.Response:
+        """Open a topic: on a glyph (``glyph``, ``source``, ``point``), or
+        about the font (none of them). ``title`` is optional, ``anchor`` is
+        kept for later."""
         body = await _jsonBody(request)
         name = request.match_info["name"]
         branch = body.get("branch") or await self._defaultBranch(request, name)
@@ -250,6 +270,8 @@ class CommentRoutesMixin:
                 commit=store.head(branch),
                 by=who,
                 sketch=body.get("sketch"),
+                title=body.get("title"),
+                anchor=body.get("anchor"),
                 author=_signature(access, self.author),
             )
 

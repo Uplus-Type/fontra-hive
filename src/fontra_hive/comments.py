@@ -1,4 +1,5 @@
-"""Comments on glyphs: numbered topics pinned to a point of a glyph's source.
+"""Comments: numbered topics, pinned to a point of a glyph's source or about
+the font as a whole.
 
 Kept in the project's git repository, outside the font's history: a commit
 chain on ``refs/hive/comments`` whose tree holds one JSON file per topic
@@ -11,13 +12,18 @@ Every change is one commit whose author is the person who made it, and the
 reference is moved with compare-and-swap: two people commenting at the same
 time both get their comment, one after the other.
 
+A topic about the font (font info, naming, a decision…) is a topic like any
+other, in the same numbering, whose ``glyph``, ``source`` and ``point`` are
+null: it has no place to be drawn, so its messages have no sketches.
+
 A topic::
 
     {
       "number": 12,
-      "glyph": "H",
+      "glyph": "H" | null,  (null: a font topic, and so are the next two)
       "source": {"layer": "MM-Bold", "name": "Bold", "location": {"wght": 700}},
       "point": {"x": 312, "y": 540},
+      "anchor": null | "fontinfo",  (kept, not read yet: "kerning:A/V"…)
       "branch": "main",
       "commit": "<head of the branch when the topic was opened>",
       "title": null | "Terminal too heavy",  (optional: else the first message)
@@ -200,6 +206,16 @@ def with_sketch(message: dict, sketch: dict | None) -> dict:
     return message
 
 
+def clean_title(title: Any) -> str | None:
+    """Spaces collapsed; None or blank: no title."""
+    if title is not None and not isinstance(title, str):
+        raise CommentError("title must be text")
+    title = " ".join((title or "").split()) or None
+    if title and (len(title) > MAX_TITLE or "\x00" in title):
+        raise CommentError(f"a title has at most {MAX_TITLE} characters")
+    return title
+
+
 def clean_labels(labels: Any) -> list[str]:
     """Free labels ("curve", "spacing", "client"…): trimmed, inner spaces
     collapsed, duplicates dropped regardless of case, first spelling kept."""
@@ -231,6 +247,15 @@ def person(username: str, name: str | None, uid: str | None = None) -> dict:
     if uid:
         who["uid"] = uid
     return who
+
+
+def is_font_topic(issue: dict) -> bool:
+    return issue.get("glyph") is None
+
+
+def _subject(issue: dict) -> str:
+    """What a topic is about, for commit messages."""
+    return "the font" if is_font_topic(issue) else str(issue["glyph"])
 
 
 def same_person(a: dict | None, b: dict | None) -> bool:
@@ -268,8 +293,11 @@ class CommentStore:
     def _read(self, blob_id: bytes) -> Any:
         return json.loads(self.repo[blob_id].data)
 
-    def issues(self, glyph: str | None = None) -> list[dict]:
-        """Every topic (or the topics of one glyph), by number."""
+    def issues(
+        self, glyph: str | None = None, *, font_only: bool = False
+    ) -> list[dict]:
+        """Every topic, by number; or those of one glyph, or those about the
+        font."""
         files = self._files(self.repo.refs.read_ref(COMMENTS_REF))
         result = []
         for path, blob_id in sorted(files.items()):
@@ -278,6 +306,8 @@ class CommentStore:
             try:
                 issue = self._read(blob_id)
             except ValueError:
+                continue
+            if font_only and not is_font_topic(issue):
                 continue
             if glyph is None or issue.get("glyph") == glyph:
                 result.append(issue)
@@ -431,7 +461,7 @@ class CommentStore:
             if read(issue_path(number)) is not None:
                 raise CommentError(f"#{number} exists")
             message = (
-                f"Restore #{number} on {issue.get('glyph')}\n\nHive-Comment: {number}\n"
+                f"Restore #{number} on {_subject(issue)}\n\nHive-Comment: {number}\n"
             )
             return {issue_path(number): issue}, message, issue
 
@@ -442,21 +472,31 @@ class CommentStore:
     def create(
         self,
         *,
-        glyph: str,
-        source: dict,
-        point: dict,
+        glyph: str | None,
+        source: dict | None,
+        point: dict | None,
         text: str,
         branch: str,
         commit: str | None,
         by: dict,
         sketch: dict | None = None,
+        title: str | None = None,
+        anchor: str | None = None,
         author: Signature = SERVER_SIGNATURE,
     ) -> dict:
-        glyph = clean_name(glyph, "glyph")
-        source = clean_source(source)
-        point = clean_point(point)
+        """Open a topic; without ``glyph``, about the font: it then has no
+        source, point or sketch."""
+        if glyph is None:
+            if source is not None or point is not None or sketch is not None:
+                raise CommentError("a topic about the font has no source or point")
+        else:
+            glyph = clean_name(glyph, "glyph")
+            source = clean_source(source)
+            point = clean_point(point)
         text, sketch = clean_content(text, sketch)
         branch = clean_name(branch, "branch")
+        title = clean_title(title)
+        anchor = clean_name(anchor, "anchor", required=False)
 
         def apply(files, read):
             counter = read(COUNTER_FILE) or {}
@@ -472,12 +512,13 @@ class CommentStore:
                 "glyph": glyph,
                 "source": source,
                 "point": point,
+                "anchor": anchor,
                 "branch": branch,
                 "commit": commit,
                 "state": "open",
                 "author": by,
                 "created": created,
-                "title": None,  # optional; the first message stands for it
+                "title": title,  # optional; the first message stands for it
                 "resolved": None,
                 "assignee": None,
                 "labels": [],
@@ -494,7 +535,10 @@ class CommentStore:
                     )
                 ],
             }
-            message = f"Comment #{number} on {glyph}\n\nHive-Comment: {number}\n"
+            message = (
+                f"Comment #{number} on {'the font' if glyph is None else glyph}\n\n"
+                f"Hive-Comment: {number}\n"
+            )
             return (
                 {issue_path(number): issue, COUNTER_FILE: {"last": number}},
                 message,
@@ -534,6 +578,7 @@ class CommentStore:
         text, sketch = clean_content(text, sketch)
 
         def edit(issue):
+            _check_sketch_allowed(issue, sketch)
             if len(issue["messages"]) >= MAX_MESSAGES:
                 raise CommentError(
                     f"#{number} has {MAX_MESSAGES} messages: open a new topic"
@@ -597,11 +642,7 @@ class CommentStore:
         author: Signature = SERVER_SIGNATURE,
     ) -> dict:
         """Name a topic; None or blank: its first message is its title again."""
-        if title is not None and not isinstance(title, str):
-            raise CommentError("title must be text")
-        title = " ".join((title or "").split()) or None
-        if title and (len(title) > MAX_TITLE or "\x00" in title):
-            raise CommentError(f"a title has at most {MAX_TITLE} characters")
+        title = clean_title(title)
 
         def edit(issue):
             if check is not None:
@@ -624,6 +665,8 @@ class CommentStore:
         def edit(issue):
             if check is not None:
                 check(issue)
+            if is_font_topic(issue):
+                raise CommentError(f"#{number} is about the font: it has no point")
             issue["point"] = point
             return f"Move #{number}"
 
@@ -685,6 +728,8 @@ class CommentStore:
             message = _message(issue, message_id)
             if check is not None:
                 check(issue, message)
+            if sketch is not ...:
+                _check_sketch_allowed(issue, sketch)
             if sketch is ... and not text and not message.get("sketch"):
                 raise CommentError("text is required")
             message["text"] = text
@@ -731,11 +776,16 @@ class CommentStore:
             if check is not None:
                 check(issue)
             message = (
-                f"Delete #{number} on {issue.get('glyph')}\n\nHive-Comment: {number}\n"
+                f"Delete #{number} on {_subject(issue)}\n\nHive-Comment: {number}\n"
             )
             return {issue_path(number): None}, message, None
 
         self._change(apply, author)
+
+
+def _check_sketch_allowed(issue: dict, sketch: dict | None) -> None:
+    if sketch is not None and is_font_topic(issue):
+        raise CommentError("a topic about the font has no glyph to draw on")
 
 
 def _comment_number(message: str) -> int | None:
