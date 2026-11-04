@@ -29,6 +29,7 @@ from .comments import (
     CommentNotFound,
     CommentStore,
     is_font_topic,
+    mentions_in,
     person,
     same_person,
 )
@@ -126,10 +127,29 @@ class CommentRoutesMixin:
             "administer": _can(access, "administer") and not self.readOnly,  # titles
         }
 
-    async def _commentChange(self, request, capability: str, change):
+    async def _newlyNamed(self, request, text, written: dict) -> list[str]:
+        """Who a message just written names that it did not name before
+        (``written``: ``who`` wrote it, ``before`` what it said), the writer
+        aside. Asked once the change is made, so only of those who may
+        write. projectMembers() answers nobody when hive-api is away."""
+        if not isinstance(text, str) or "@" not in text:
+            return []
+        members = await self.projectMembers(request.match_info["name"])
+        already = {m["username"] for m in mentions_in(written.get("before"), members)}
+        return [
+            member["username"]
+            for member in mentions_in(text, members)
+            if member["username"] not in already
+            and not same_person(
+                person(member["username"], None, member.get("uid")), written["who"]
+            )
+        ]
+
+    async def _commentChange(self, request, capability: str, change, named=None):
         """Run ``change(comments, access, who, store)`` on the project's
         comments and answer with its result (a topic, or None when one was
-        deleted) and the new head of the comments."""
+        deleted) and the new head of the comments. ``named()``, if given, says
+        who the message newly names (the notifications will start here)."""
         _, repoPath, access = await self._commentContext(request, capability)
         store = GitRepoStore.open(repoPath)
         try:
@@ -144,7 +164,10 @@ class CommentRoutesMixin:
                 raise web.HTTPBadRequest(text=str(error))
             except RefMovedError:
                 raise web.HTTPConflict(text="too many comments at once, try again")
-            return web.json_response({"head": comments.head(), "issue": result})
+            answer = {"head": comments.head(), "issue": result}
+            if named is not None:
+                answer["mentions"] = await named()
+            return web.json_response(answer)
         finally:
             store.close()
 
@@ -257,8 +280,10 @@ class CommentRoutesMixin:
         body = await _jsonBody(request)
         name = request.match_info["name"]
         branch = body.get("branch") or await self._defaultBranch(request, name)
+        written: dict = {}
 
         def change(comments, access, who, store):
+            written["who"] = who
             if not isinstance(branch, str) or store.head(branch) is None:
                 raise CommentError(f"no branch {branch}")
             return comments.create(
@@ -275,13 +300,20 @@ class CommentRoutesMixin:
                 author=_signature(access, self.author),
             )
 
-        return await self._commentChange(request, "comment", change)
+        return await self._commentChange(
+            request,
+            "comment",
+            change,
+            named=lambda: self._newlyNamed(request, body.get("text"), written),
+        )
 
     async def replyCommentHandler(self, request) -> web.Response:
         number = _number(request)
         body = await _jsonBody(request)
+        written: dict = {}
 
         def change(comments, access, who, store):
+            written["who"] = who
             return comments.reply(
                 number,
                 body.get("text"),
@@ -290,7 +322,12 @@ class CommentRoutesMixin:
                 author=_signature(access, self.author),
             )
 
-        return await self._commentChange(request, "comment", change)
+        return await self._commentChange(
+            request,
+            "comment",
+            change,
+            named=lambda: self._newlyNamed(request, body.get("text"), written),
+        )
 
     async def updateCommentHandler(self, request) -> web.Response:
         """Resolve or reopen (``state``), move the pin (``point``) — its
@@ -382,11 +419,14 @@ class CommentRoutesMixin:
         number = _number(request)
         messageId = _messageId(request)
         body = await _jsonBody(request)
+        written: dict = {}
 
         def change(comments, access, who, store):
             def check(issue, message):
                 if not _isAuthor(message, who):
                     raise CommentForbidden("only its author can edit a message")
+                # Only who was not named yet: an edit says nothing new to the others.
+                written.update(who=who, before=message.get("text"))
 
             return comments.edit_message(
                 number,
@@ -397,7 +437,12 @@ class CommentRoutesMixin:
                 author=_signature(access, self.author),
             )
 
-        return await self._commentChange(request, "comment", change)
+        return await self._commentChange(
+            request,
+            "comment",
+            change,
+            named=lambda: self._newlyNamed(request, body.get("text"), written),
+        )
 
     async def deleteMessageHandler(self, request) -> web.Response:
         number = _number(request)

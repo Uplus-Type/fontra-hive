@@ -13,6 +13,7 @@ from fontra_hive.comments import (
     CommentError,
     CommentNotFound,
     CommentStore,
+    mentions_in,
     person,
 )
 from fontra_hive.gitstore import GitRepoStore, Signature
@@ -1023,3 +1024,117 @@ def test_font_topics_do_not_disturb_the_font_history(team, root):
     store = GitRepoStore.open(root / "Mutator.git")
     assert store.head("main") == head
     store.close()
+
+
+# --- step E: mentions ----------------------------------------------------------------
+
+MEMBERS = [
+    {"username": "ana", "name": "Ana"},
+    {"username": "Bob.Lee", "name": "Bob", "uid": "u-bob"},
+    {"username": "dan-k", "name": "Dan"},
+]
+
+
+def named(text):
+    return [m["username"] for m in mentions_in(text, MEMBERS)]
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("@ana look", ["ana"]),
+        ("@ANA and @bob.lee", ["ana", "Bob.Lee"]),  # whatever the case
+        ("(@ana), @dan-k.", ["ana", "dan-k"]),  # punctuation is not the name
+        ("@ana @ana", ["ana"]),  # once
+        ("@nobody", []),  # only the project's members
+        ("mail ana@example.com", []),  # an address names nobody
+        ("@@ana", []),
+        ("", []),
+    ],
+)
+def test_who_a_message_mentions(text, expected):
+    assert named(text) == expected
+
+
+def test_a_message_mentions_twenty_people_at_most():
+    members = [{"username": f"u{i}"} for i in range(30)]
+    text = " ".join(f"@u{i}" for i in range(30))
+    assert [m["username"] for m in mentions_in(text, members)] == [
+        f"u{i}" for i in range(20)
+    ]
+
+
+def test_the_routes_say_who_is_newly_mentioned(team):
+    async def go():
+        body = {**NEW, "text": "@ria @dan @nobody @OWNER"}
+        opened = await answer(await team.createCommentHandler(request("owner", body=body)))
+        # Not the writer; only members; the text stays as written.
+        assert opened["mentions"] == ["ria", "dan"]
+        assert opened["issue"]["messages"][0]["text"] == body["text"]
+        font = await answer(
+            await team.createCommentHandler(request("owner", body={"text": "@ria"}))
+        )
+        assert font["mentions"] == ["ria"]
+        reply = await answer(
+            await team.replyCommentHandler(
+                request("dan", body={"text": "@mona @dan"}, number=1)
+            )
+        )
+        assert reply["mentions"] == ["mona"]
+        # An edit: only who was not named before.
+        edited = await answer(
+            await team.editMessageHandler(
+                request("dan", body={"text": "@mona @rex"}, number=1, message=2)
+            )
+        )
+        assert edited["mentions"] == ["rex"]
+        plain = await answer(
+            await team.replyCommentHandler(
+                request("dan", body={"text": "No one"}, number=1)
+            )
+        )
+        assert plain["mentions"] == []
+
+    run(go())
+
+
+def test_a_comment_is_written_when_the_members_are_unknown(team):
+    async def nobody(name):
+        return []  # hive-api away: what projectMembers answers
+
+    team.projectMembers = nobody
+
+    async def go():
+        body = {"text": "@ria"}
+        opened = await answer(await team.createCommentHandler(request("owner", body=body)))
+        assert opened["mentions"] == [] and opened["issue"]["number"] == 1
+
+    run(go())
+
+
+def test_an_address_names_nobody():
+    assert named("https://medium.com/@ana/post and @dan-k") == ["dan-k"]
+
+
+def test_nobody_is_looked_up_for_who_may_not_write(team):
+    asked = []
+
+    async def members(name):
+        asked.append(name)
+        return []
+
+    team.projectMembers = members
+
+    async def go():
+        for user in ("otto", "nobody", None):
+            with pytest.raises((web.HTTPForbidden, web.HTTPNotFound)):
+                await team.createCommentHandler(request(user, body={"text": "@ria"}))
+        assert asked == []
+        # A message refused for what it says neither.
+        with pytest.raises(web.HTTPBadRequest):
+            await team.createCommentHandler(
+                request("ria", body={"text": "@ria", "point": {"x": 1, "y": 2}})
+            )
+        assert asked == []
+
+    run(go())

@@ -44,6 +44,7 @@ from __future__ import annotations
 import datetime
 import json
 import math
+import re
 import time
 from typing import Any, Callable
 
@@ -75,7 +76,10 @@ MAX_SKETCH_POINTS = 5000  # per message, all strokes together
 MAX_NAME = 200
 MAX_COORDINATE = 1_000_000
 MAX_LOCATION_AXES = 64
+MAX_MENTIONS = 20  # per message
 STATES = ("open", "resolved")
+MENTION = re.compile(r"(?<![\w@.])@(\w[\w.-]*)")
+ADDRESS = re.compile(r"https?://\S+")  # what follows an @ in one names nobody
 
 
 class CommentError(ValueError):
@@ -247,6 +251,21 @@ def person(username: str, name: str | None, uid: str | None = None) -> dict:
     if uid:
         who["uid"] = uid
     return who
+
+
+def mentions_in(text: str, members: list[dict]) -> list[dict]:
+    """The project's members named by a ``@username`` of a message, in order,
+    each once, at most ``MAX_MENTIONS``, whatever the case. Anything else
+    after an @ is text: a name that is nobody's says nothing about who exists."""
+    by_name = {member["username"].casefold(): member for member in members}
+    found: dict[str, dict] = {}
+    for match in MENTION.finditer(ADDRESS.sub(" ", text or "")):
+        member = by_name.get(match[1].rstrip(".-").casefold())
+        if member is not None:
+            found.setdefault(member["username"], member)
+            if len(found) == MAX_MENTIONS:
+                break
+    return list(found.values())
 
 
 def is_font_topic(issue: dict) -> bool:
