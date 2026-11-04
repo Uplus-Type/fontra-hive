@@ -458,8 +458,8 @@ thread of replies, open or resolved. What concerns no glyph in particular
   reopen it. Snapshots show how many comments were resolved since the
   previous one (✓ 3). Restoring never changes the comments themselves: a
   discussion goes forward even when the drawing goes back.
-- **The project's comments** on Hive's home page (project → "See all
-  comments", `#project/<owner>/<name>/comments`): every topic, filtered by
+- **The project's comments** on Hive's home page ("See all comments" in the
+  project and in the Comments panel, `#project/<owner>/<name>/comments`): every topic, filtered by
   state, glyphs or font, glyph, person (wrote in it or assigned), label,
   branch and text, each with a link to open it in the editor.
 - **Font topics.** "New topic", on the project's comments page and at the
@@ -475,7 +475,8 @@ thread of replies, open or resolved. What concerns no glyph in particular
 - **Mentions and links.** `@ana` and `#16` stay plain text in a message.
   Typing `@` or `#` proposes the project's members and topics; on display a
   member is highlighted and a topic is a chip (number, glyph, title, state)
-  that goes to it, and a link copied with "Copy link" reads the same way.
+  that goes to it. A link copied with "Copy link" becomes `#16` when it is
+  pasted, and reads the same way if it was kept whole.
   A topic says which others mention it ("Mentioned in #15"), worked out from
   the messages. Addresses are clickable. Only members can be mentioned, at
   most 20 per message; the routes that write a message answer with who it

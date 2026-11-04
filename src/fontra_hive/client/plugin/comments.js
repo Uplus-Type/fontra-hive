@@ -421,10 +421,10 @@ const CARD_STYLES = `
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 4px;
-    padding: 4px 10px 0;
+    gap: 4px 6px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--card-line);
     font-size: 12px;
-    color: var(--card-muted);
   }
   .compose {
     position: relative;
@@ -581,14 +581,26 @@ const PANEL_STYLES = `
     font-size: 0.85em;
     opacity: 0.6;
   }
-  .new-topic {
-    align-self: flex-start;
+  .panel-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4em;
+  }
+  .panel-actions button, .panel-actions a {
     font: inherit;
     font-size: 0.9em;
     padding: 0.15em 0.6em;
     cursor: pointer;
+    border: 1px solid rgba(128, 128, 128, 0.5);
+    border-radius: 0.3em;
+    background: transparent;
+    color: inherit;
+    text-decoration: none;
   }
-  .new-topic[hidden] {
+  .panel-actions button:hover, .panel-actions a:hover {
+    background: rgba(128, 128, 128, 0.18);
+  }
+  .panel-actions [hidden] {
     display: none;
   }
   .svg-icon {
@@ -630,6 +642,14 @@ const PANEL_STYLES = `
   }
   .issue.current {
     outline: 1.5px solid var(--hive-accent);
+  }
+  .issue .mentioned {
+    grid-column: 2;
+    opacity: 0.85;
+    font-weight: bold;
+  }
+  .issue .mentioned::first-letter {
+    text-transform: uppercase;
   }
   .issue .badge {
     grid-row: span 2;
@@ -792,6 +812,14 @@ export function icon(name) {
   return span;
 }
 
+// The project's comments page, on Hive's home page: only "owner/name"
+// projects have one (there are no accounts behind the others).
+export function commentsPageLink(projectName, origin = window.location.origin) {
+  if (!projectName.includes("/")) return null;
+  const path = projectName.split("/").map(encodeURIComponent).join("/");
+  return new URL(`/#project/${path}/comments`, origin).toString();
+}
+
 // A topic about the font rather than a glyph.
 export function isFontTopic(issue) {
   return issue?.glyph === null || issue?.glyph === undefined;
@@ -806,10 +834,8 @@ export function isFontTopic(issue) {
 // the editor opens it too: there, "hive-issue" opens the docked card.
 export function issueLink(projectName, issue, origin = window.location.origin) {
   const font = isFontTopic(issue);
-  if (font && projectName.includes("/")) {
-    const path = projectName.split("/").map(encodeURIComponent).join("/");
-    return new URL(`/#project/${path}/comments/${issue.number}`, origin).toString();
-  }
+  const page = commentsPageLink(projectName, origin);
+  if (font && page) return `${page}/${issue.number}`;
   const url = new URL("/editor.html", origin);
   url.searchParams.set("project", projectName);
   if (!font) {
@@ -828,6 +854,7 @@ export function issueLink(projectName, issue, origin = window.location.origin) {
 // editor (and connection) opens on the same font. Loading a link there goes
 // to its glyph and topic like any other load (register.js, takePendingIssue).
 export const EDITOR_TAB_PREFIX = "hive-editor-";
+export const COMMENTS_TAB_PREFIX = "hive-comments-";
 export function editorTabName(projectName) {
   return EDITOR_TAB_PREFIX + parseProjectIdentifier(projectName).name;
 }
@@ -1133,6 +1160,15 @@ export class HiveComments {
       member: (name) => this.memberNamed(name),
       issue: (number) => this.issue(number),
       projectName: this.projectName,
+    });
+  }
+
+  // ``text`` with the links to this project's topics as "#16".
+  shortenLinks(text) {
+    return text.replace(/https?:\/\/[^\s<>"]+/g, (url) => {
+      const clean = trimAddress(url);
+      const issue = this.issue(issueNumberInLink(clean, this.projectName));
+      return issue ? `#${issue.number}${url.slice(clean.length)}` : url;
     });
   }
 
@@ -1975,6 +2011,15 @@ export class HiveComments {
       update();
       suggestions.refresh();
     });
+    // A link to a topic of this project is its number from the start.
+    textarea.addEventListener("paste", (event) => {
+      const pasted = event.clipboardData?.getData("text") || "";
+      const shorter = this.shortenLinks(pasted);
+      if (shorter === pasted) return;
+      event.preventDefault();
+      textarea.setRangeText(shorter, textarea.selectionStart, textarea.selectionEnd, "end");
+      textarea.dispatchEvent(new Event("input"));
+    });
     textarea.addEventListener("keydown", (event) => {
       if (suggestions.handleKey(event)) return;
       if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
@@ -2176,13 +2221,13 @@ export class HiveComments {
   }
 
   // "#16 · p · The title": a click goes to that topic.
-  issueLinkElement(issue) {
+  issueLinkElement(issue, extraClass = "") {
     const what = [`#${issue.number}`, isFontTopic(issue) ? "Font" : issue.glyph, issueTitle(issue)];
     const label = what.join(" · ");
     return el(
       "button",
       {
-        class: `issue-link${issue.state === "resolved" ? " resolved" : ""}`,
+        class: `issue-link${issue.state === "resolved" ? " resolved" : ""} ${extraClass}`.trim(),
         title: `${label}${issue.state === "resolved" ? " (resolved)" : ""}`,
         onclick: () => this.goToIssue(issue),
       },
@@ -2195,18 +2240,8 @@ export class HiveComments {
     const numbers = this.mentionedIn(issue.number);
     if (!numbers.length) return null;
     return el("div", { class: "references" }, [
-      "Mentioned in ",
-      ...numbers.map((number) =>
-        el(
-          "button",
-          {
-            class: "link mentioned-in",
-            title: issueTitle(this.issue(number)),
-            onclick: () => this.goToIssue(this.issue(number)),
-          },
-          [`#${number}`]
-        )
-      ),
+      "Mentioned in",
+      ...numbers.map((number) => this.issueLinkElement(this.issue(number), "mentioned-in")),
     ]);
   }
 
@@ -3167,6 +3202,19 @@ export class HiveCommentsPanel extends HTMLElement {
       },
       ["New topic"]
     );
+    const page = commentsPageLink(comments.projectName);
+    this.seeAllLink = page
+      ? el(
+          "a",
+          {
+            class: "see-all",
+            href: page,
+            target: COMMENTS_TAB_PREFIX + comments.projectName, // one tab, reused
+            title: "All the comments of this project, on its page",
+          },
+          ["See all comments"]
+        )
+      : null;
     this.hintElement = el("div", { class: "hint" });
     this.listElement = el("div", { class: "list" });
     shadow.append(
@@ -3180,7 +3228,7 @@ export class HiveCommentsPanel extends HTMLElement {
             " Resolved",
           ]),
         ]),
-        this.newTopicButton,
+        el("div", { class: "panel-actions" }, [this.newTopicButton, this.seeAllLink]),
         this.hintElement,
         this.listElement,
       ])
@@ -3299,6 +3347,7 @@ export class HiveCommentsPanel extends HTMLElement {
     const first = issue.messages[0] || {};
     const replies = issue.messages.length - 1;
     const font = isFontTopic(issue);
+    const mentioned = mentionedInText(this.comments.mentionedIn(issue.number));
     const meta = [
       withGlyph ? (font ? "Font" : issue.glyph) : null,
       issue.source?.name,
@@ -3307,7 +3356,6 @@ export class HiveCommentsPanel extends HTMLElement {
       replies ? `${replies} repl${replies > 1 ? "ies" : "y"}` : null,
       issue.assignee ? `→ ${issue.assignee.name || issue.assignee.username}` : null,
       ...(issue.labels || []),
-      mentionedInText(this.comments.mentionedIn(issue.number)),
     ]
       .filter(Boolean)
       .join(" · ");
@@ -3323,6 +3371,7 @@ export class HiveCommentsPanel extends HTMLElement {
         el("span", { class: "badge" }, [String(issue.number)]),
         el("span", { class: "text" }, [font ? icon("typography") : null, issueTitle(issue)]),
         el("span", { class: "meta" }, [meta]),
+        mentioned ? el("span", { class: "meta mentioned" }, [mentioned]) : null,
       ]
     );
   }

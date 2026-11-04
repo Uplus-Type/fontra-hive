@@ -1385,6 +1385,42 @@ def test_a_copied_link_reads_as_the_topic(page):
     assert p.evaluate(number) == 2
 
 
+PASTE = """(text) => {
+    const box = window.textarea("reply");
+    box.focus();
+    const clipboardData = new DataTransfer();
+    clipboardData.setData("text", text);
+    const event = new ClipboardEvent("paste", { clipboardData, bubbles: true, cancelable: true });
+    box.dispatchEvent(event);
+    return [event.defaultPrevented, box.value];
+}"""
+
+
+def test_a_pasted_link_is_a_number_at_once(page):
+    p = page(issues=[topic(1), topic(2)])
+    p.evaluate("comments.open(1)")
+    p.evaluate("frame()")
+    origin = p.evaluate("location.origin")
+    link = f"{origin}/editor.html?project=Mutator&text=%22/H%22&hive-issue=2"
+    p.evaluate("textarea('reply').value = 'see '")
+    assert p.evaluate(PASTE, link) == [True, "see #2"]
+    # And the reply can be sent: the box knows it has changed.
+    assert p.evaluate("card().querySelector('.compose button.primary').disabled") is False
+    # In the middle of a text; its punctuation stays.
+    p.evaluate("textarea('reply').value = ''")
+    assert p.evaluate(PASTE, f"a {link}, b") == [True, "a #2, b"]
+    # What is no link to a topic here is pasted as it is, by the browser.
+    p.evaluate("textarea('reply').value = ''")
+    for other in (
+        "https://example.com/a",
+        f"{origin}/editor.html?project=Other&hive-issue=2",
+        f"{origin}/editor.html?project=Mutator&hive-issue=99",
+        "just text",
+    ):
+        assert p.evaluate(PASTE, other)[0] is False
+    assert p.evaluate("window.errors") == []
+
+
 def test_a_message_shows_mentions_and_links(page):
     p = page(
         issues=[said("Ask @ana about #2 and https://example.com"), topic(2, glyph="O")]
@@ -1414,7 +1450,10 @@ def test_a_link_goes_to_its_topic_and_back(page):
     p.evaluate("frame()")
     # The way back, from the topic mentioned.
     links = "[...card().querySelectorAll('.mentioned-in')]"
-    assert p.evaluate(f"{links}.map(b => b.textContent)") == ["#1", "#3"]
+    assert p.evaluate(f"{links}.map(b => b.textContent)") == [
+        "#1 · H · See #2",
+        "#3 · H · Also #2",
+    ]
     assert "Mentioned in" in p.evaluate("cardText()")
     p.evaluate(f"{links}[1].click()")
     p.wait_for_function("comments.openNumber === 3")
@@ -1426,6 +1465,33 @@ def test_a_link_goes_to_its_topic_and_back(page):
     assert "mentioned in #1, #3" in p.evaluate("panel.listElement.textContent")
     assert p.evaluate("comments.mentionedIn(1)") == []
     assert p.evaluate("window.errors") == []
+
+
+def test_mentioned_in_is_on_its_own_line_in_the_panel(page):
+    p = page(issues=[said("See #2"), topic(2, replies=[(ANA, "x")])])
+    p.evaluate("frame()")
+    line = "panel.listElement.querySelector('.issue[data-number=\"2\"] .mentioned')"
+    assert p.evaluate(f"{line}.textContent") == "mentioned in #1"
+    # Beside the badge, under the line that a long text cuts.
+    box = f"{line}.getBoundingClientRect()"
+    meta = "panel.listElement.querySelector('.issue[data-number=\"2\"] .meta')"
+    assert p.evaluate(f"{box}.top") > p.evaluate(f"{meta}.getBoundingClientRect().top")
+    badge = "panel.listElement.querySelector('.issue[data-number=\"2\"] .badge')"
+    assert p.evaluate(f"{box}.left") > p.evaluate(f"{badge}.getBoundingClientRect().right")
+
+
+def test_see_all_comments_from_the_panel(page):
+    p = page()
+    # Without accounts there is no such page.
+    assert p.evaluate("panel.seeAllLink") is None
+    assert p.evaluate("panel.shadowRoot.querySelector('.see-all')") is None
+    p.evaluate("editor.projectIdentifier = 'uplustype/My font@wide'")
+    assert p.evaluate(
+        "new module.HiveCommentsPanel(new module.HiveComments(editor)).seeAllLink.href"
+    ).endswith("/#project/uplustype/My%20font/comments")
+    assert p.evaluate(
+        "new module.HiveCommentsPanel(new module.HiveComments(editor)).seeAllLink.target"
+    ) == "hive-comments-uplustype/My font"
 
 
 def test_mentioned_in_follows_the_messages(page):
