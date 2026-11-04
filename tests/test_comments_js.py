@@ -1101,15 +1101,16 @@ def test_a_new_font_topic_from_the_panel(page):
     assert p.evaluate("card().classList.contains('docked')")
     assert "New topic" in p.evaluate("cardText()")
     assert p.evaluate("card().querySelector('.pen')") is None
-    # Docked at the top right of the canvas, whatever its size.
+    # Docked at the top right of the canvas, whatever its size, clear of
+    # Fontra's sidebar tabs (3em wide, over the canvas).
     box = """(() => {
         const c = card().getBoundingClientRect();
         const h = card().parentNode.host.getBoundingClientRect();
         return [c.top - h.top, h.right - c.right];
     })()"""
-    assert p.evaluate(box) == [16, 16]
+    assert p.evaluate(box) == [16, 56]
     p.evaluate("document.body.firstChild.style.width = '700px'")
-    assert p.evaluate(box) == [16, 16]
+    assert p.evaluate(box) == [16, 56]
     p.evaluate("document.body.firstChild.style.width = '300px'")
     assert p.evaluate("card().getBoundingClientRect().left") >= 0
     p.evaluate("document.body.firstChild.style.width = '900px'")
@@ -1186,38 +1187,62 @@ def test_font_labels_are_suggested_on_font_topics(page):
     assert p.evaluate(labels % 1) == ["curve", "Naming", "font info", "production"]
 
 
-def test_font_topics_in_the_panel(page):
-    p = page(issues=[topic(1), font_topic(2), font_topic(3, state="resolved")])
-    list_ = (
-        "[...panel.listElement.querySelectorAll('.issue')].map(r => +r.dataset.number)"
+SECTIONS = """[...panel.listElement.querySelectorAll('details.topics')].map((d) => [
+    d.querySelector('summary').textContent, d.open,
+    [...d.querySelectorAll('.issue')].map((r) => +r.dataset.number)])"""
+
+
+def test_the_sections_of_the_panel(page):
+    p = page(
+        issues=[
+            topic(1),
+            topic(2, state="resolved"),
+            font_topic(3, state="resolved"),
+            font_topic(4),
+            topic(5, glyph="O"),
+        ]
     )
-    # A glyph selected: its topics, and the font's folded away.
     p.evaluate("frame()")
-    assert p.evaluate(list_) == [1, 2, 3]
-    assert p.evaluate("panel.listElement.querySelector('details.font-topics').open") is False
-    assert "Font (2)" in p.evaluate("panel.listElement.textContent")
-    # It stays as it was left, through a refresh.
-    p.evaluate("panel.listElement.querySelector('details.font-topics').open = true")
-    p.evaluate("panel.render()")
-    assert p.evaluate("panel.listElement.querySelector('details.font-topics').open") is True
-    p.evaluate("panel.listElement.querySelector('details.font-topics').open = false")
-    # A click opens the docked card, and the topic stays in view.
-    p.evaluate("panel.listElement.querySelector('.issue[data-number=\"2\"]').click()")
-    p.wait_for_function("comments.openNumber === 2")
-    p.evaluate("panel.render()")
-    assert p.evaluate("panel.listElement.querySelector('details.font-topics').open") is True
-    p.evaluate("comments.close()")
-    # No glyph selected: all together, marked.
-    p.evaluate("editor.sceneController.sceneSettings.selectedGlyphName = null; panel.render()")
-    assert p.evaluate("panel.listElement.querySelector('details.font-topics')") is None
-    assert sorted(p.evaluate(list_)) == [1, 2, 3]
-    assert "Font" in p.evaluate(
-        "panel.listElement.querySelector('.issue[data-number=\"2\"] .meta').textContent"
+    # A glyph selected: the font first, unfolded, whatever the glyph.
+    assert p.evaluate(SECTIONS) == [
+        ["Font (2)", True, [4, 3]],
+        ["Glyph (1)", True, [1]],
+        ["Resolved (1)", True, [2]],
+    ]
+    # Without a glyph: the same sections, for the whole project.
+    p.evaluate(
+        "editor.sceneController.sceneSettings.selectedGlyphName = null; panel.render()"
     )
-    assert p.evaluate(
-        "panel.listElement.querySelector('.issue[data-number=\"2\"] .icon-typography')"
-    )
+    assert p.evaluate(SECTIONS) == [
+        ["Font (2)", True, [4, 3]],
+        ["Glyph (2)", True, [1, 5]],
+        ["Resolved (1)", True, [2]],
+    ]
+    row = "panel.listElement.querySelector('.issue[data-number=\"4\"]')"
+    assert p.evaluate(f"{row}.querySelector('.icon-typography')")
     assert p.evaluate("window.errors") == []
+
+
+def test_a_section_stays_folded(page):
+    p = page(issues=[topic(1), font_topic(2)])
+    p.evaluate("frame()")
+    fold = "panel.listElement.querySelector('details.glyph-topics').open = false"
+    p.evaluate(f"{fold}; 0")
+    p.evaluate("frame()")
+    p.evaluate("panel.render()")
+    assert p.evaluate(SECTIONS)[1][1] is False
+    assert p.evaluate(SECTIONS)[0][1] is True
+    # Unless the topic being read is in it.
+    p.evaluate("comments.open(1)")
+    p.evaluate("panel.render()")
+    assert p.evaluate(SECTIONS)[1][1] is True
+    assert p.evaluate("window.errors") == []
+
+
+def test_a_section_without_topics_is_not_shown(page):
+    p = page(issues=[font_topic(1)])
+    p.evaluate("frame()")
+    assert p.evaluate(SECTIONS) == [["Font (1)", True, [1]]]
 
 
 def test_a_font_topic_has_no_pin_and_leaves_the_canvas_alone(page):

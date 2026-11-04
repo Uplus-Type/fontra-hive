@@ -466,9 +466,9 @@ thread of replies, open or resolved. What concerns no glyph in particular
   top of the Comments panel, opens a topic without a glyph: an optional
   title and a first message. It has everything a topic has (replies, state,
   assignee, labels, title, history, rights), no pin and no red pen. Its
-  thread opens in a docked card, on the page as in the editor; in the panel
-  the font topics are in the whole project's list, and folded under "Font"
-  when a glyph is selected. Their address is
+  thread opens in a docked card, on the page as in the editor; the panel
+  shows them first, under "Font", above "Glyph" and "Resolved", sections that
+  fold. Their address is
   `#project/<owner>/<name>/comments/<n>`; `hive-issue=<n>` opens them in the
   editor too. `anchor`, an optional text kept with a topic, is not read yet:
   it is there for "fontinfo", "kerning:A/V" and the like.

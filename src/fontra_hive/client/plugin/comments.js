@@ -47,6 +47,7 @@ const SKETCH_MIN_STEP = 1.5; // screen pixels between two recorded points
 const SKETCH_TOLERANCE = 0.75; // screen pixels: simplification of a stroke
 const FONT_TOPIC_LABELS = ["font info", "naming", "production"]; // suggestions
 const MAX_SUGGESTIONS = 8;
+const TABS_MARGIN = 56; // screen pixels: Fontra's sidebar tabs are over the canvas
 const MESSAGE_TOKENS =
   /(https?:\/\/[^\s<>"]+)|(?<![\p{L}\p{N}_@.])@([\p{L}\p{N}_][\p{L}\p{N}_.-]*)|(?<![\p{L}\p{N}_#&/])#([1-9]\d*)(?![\p{L}\p{N}_])/gu;
 const SUGGESTION_TOKEN = /(?:^|[\s(])([@#])([\p{L}\p{N}_.-]*)$/u;
@@ -119,9 +120,9 @@ const CARD_STYLES = `
        the window changes size. --dock-* : where a page wants it. */
     top: var(--dock-top, 16px);
     bottom: var(--dock-bottom, auto);
-    right: 16px;
+    right: var(--dock-right, 56px); /* in the editor: clear of the sidebar tabs */
     width: 360px;
-    max-width: calc(100% - 32px);
+    max-width: calc(100% - 16px - var(--dock-right, 56px));
     max-height: calc(100% - 32px);
   }
   .card-header .where .svg-icon {
@@ -676,10 +677,10 @@ const PANEL_STYLES = `
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  details.deleted summary, details.font-topics summary {
+  details summary {
     cursor: pointer;
   }
-  details.font-topics[open] {
+  details.topics[open] {
     display: flex;
     flex-direction: column;
     gap: 0.35em;
@@ -1958,12 +1959,12 @@ export class HiveComments {
     if (this.sketch?.active) {
       // Drawing: the post-it steps aside, to the top right of the canvas,
       // so the glyph around the pin is free for the pen.
-      card.style.left = `${Math.round(Math.max(8, width - cardWidth - 16))}px`;
+      card.style.left = `${Math.round(Math.max(8, width - cardWidth - TABS_MARGIN))}px`;
       card.style.top = "16px";
       return;
     }
     let left = tip.x + PIN_RADIUS + 8;
-    if (left + cardWidth > width - 8) left = tip.x - PIN_RADIUS - 8 - cardWidth;
+    if (left + cardWidth > width - TABS_MARGIN) left = tip.x - PIN_RADIUS - 8 - cardWidth;
     let top = tip.y - PIN_LIFT - PIN_RADIUS;
     top = Math.min(top, height - cardHeight - 8);
     left = Math.max(8, left);
@@ -3180,6 +3181,7 @@ export class HiveCommentsPanel extends HTMLElement {
     super();
     this.comments = comments;
     this.visible = false;
+    this.folded = new Set(); // the sections of the list folded by hand
     const shadow = this.attachShadow({ mode: "open" });
     const style = document.createElement("style");
     style.textContent = PANEL_STYLES;
@@ -3253,8 +3255,6 @@ export class HiveCommentsPanel extends HTMLElement {
     this.newTopicButton.hidden = !comments.can.comment;
     const issues = glyphName ? comments.issuesOf(glyphName) : comments.issues;
     this.subtitleElement.textContent = glyphName ? glyphName : "whole project";
-    const open = issues.filter((i) => i.state === "open");
-    const resolved = issues.filter((i) => i.state !== "open");
     this.hintElement.textContent = !comments.loaded
       ? "Loading…"
       : !comments.can.comment
@@ -3268,28 +3268,18 @@ export class HiveCommentsPanel extends HTMLElement {
           : glyphName
             ? "No comments on this glyph. With the Comment tool, click in the glyph to add one."
             : "No comments yet. Select a glyph and use the Comment tool to add one.";
-    const rows = [];
-    if (open.length) {
-      rows.push(el("div", { class: "group-title" }, [`Open (${open.length})`]));
-      rows.push(...open.map((issue) => this.row(issue, !glyphName)));
-    }
-    if (resolved.length) {
-      rows.push(el("div", { class: "group-title" }, [`Resolved (${resolved.length})`]));
-      rows.push(...resolved.map((issue) => this.row(issue, !glyphName)));
-    }
-    const fontTopics = glyphName ? comments.fontIssues() : [];
-    if (fontTopics.length) {
-      const inOrder = [
-        ...fontTopics.filter((i) => i.state === "open"),
-        ...fontTopics.filter((i) => i.state !== "open"),
-      ];
-      rows.push(
-        el("details", { class: "font-topics" }, [
-          el("summary", { class: "group-title" }, [`Font (${fontTopics.length})`]),
-          ...inOrder.map((issue) => this.row(issue, false)),
-        ])
-      );
-    }
+    const isOpen = (issue) => issue.state === "open";
+    const fontTopics = comments.fontIssues();
+    const onGlyphs = issues.filter((issue) => !isFontTopic(issue));
+    const rows = [
+      // The font's topics concern everyone: first, whatever the glyph.
+      this.section("font-topics", "Font", [
+        ...fontTopics.filter(isOpen),
+        ...fontTopics.filter((issue) => !isOpen(issue)),
+      ]),
+      this.section("glyph-topics", "Glyph", onGlyphs.filter(isOpen), !glyphName),
+      this.section("resolved-topics", "Resolved", onGlyphs.filter((i) => !isOpen(i)), !glyphName),
+    ].filter(Boolean);
     if (comments.can.moderate && comments.deletedVersion !== comments.dataVersion) {
       comments.deletedVersion = comments.dataVersion; // one request per change
       comments.loadDeleted();
@@ -3330,17 +3320,33 @@ export class HiveCommentsPanel extends HTMLElement {
         ])
       );
     }
-    const openBefore = ["details.deleted", "details.font-topics"].filter(
-      (selector) => this.listElement.querySelector(selector)?.open
-    );
+    const deletedOpen = this.listElement.querySelector("details.deleted")?.open;
     this.listElement.replaceChildren(...rows);
-    for (const selector of openBefore) {
-      const details = this.listElement.querySelector(selector);
+    if (deletedOpen) {
+      const details = this.listElement.querySelector("details.deleted");
       if (details) details.open = true;
     }
     // The topic being read stays in view.
-    const current = this.listElement.querySelector("details.font-topics .issue.current");
+    const current = this.listElement.querySelector("details.topics .issue.current");
     if (current) current.closest("details").open = true;
+  }
+
+  // A part of the list: unfolded, until folded by hand. Nothing without topics.
+  section(name, title, issues, withGlyph = false) {
+    if (!issues.length) return null;
+    const details = el(
+      "details",
+      { class: `topics ${name}`, open: !this.folded.has(name) },
+      [
+        el("summary", { class: "group-title" }, [`${title} (${issues.length})`]),
+        ...issues.map((issue) => this.row(issue, withGlyph)),
+      ]
+    );
+    details.addEventListener("toggle", () => {
+      if (details.open) this.folded.delete(name);
+      else this.folded.add(name);
+    });
+    return details;
   }
 
   row(issue, withGlyph) {
@@ -3392,7 +3398,7 @@ export function mountTopics(projectName, { issue = null } = {}) {
   // Below the page's header, at the bottom right, away from the page's own
   // buttons; ":host" still lets clicks through around the card.
   comments.overlayHost.style.cssText =
-    "position:fixed;inset:60px 0 0 0;z-index:20;--dock-top:auto;--dock-bottom:16px";
+    "position:fixed;inset:60px 0 0 0;z-index:20;--dock-top:auto;--dock-bottom:16px;--dock-right:16px";
   comments.startPolling();
   return comments;
 }
