@@ -3406,6 +3406,7 @@ export function mountTopics(projectName, { issue = null } = {}) {
 export function initComments(editor, pluginPath) {
   const comments = new HiveComments(editor, pluginPath);
   comments.install();
+  window.hiveComments = comments; // a notification goes to its topic from here
   const panel = new HiveCommentsPanel(comments);
   panel.iconPath = `${pluginPath}/comments.svg`;
   editor.addSidebarPanel?.(panel, "right");

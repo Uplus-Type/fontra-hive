@@ -26,6 +26,8 @@
 //
 // Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
 
+import { NotificationBell, notificationText } from "./hive-notifications.js";
+
 const HEARTBEAT_MS = 5000;
 // hive-api's access cookie lasts 15 minutes: renew it well before.
 const REFRESH_MS = 10 * 60 * 1000;
@@ -765,6 +767,12 @@ export class HiveViews {
     this.chip = el("button", { class: "hive-chip", title: this.me.name, onclick: (e) => this.toggleUserMenu(e) }, [
       avatar(this.me, 26),
     ]);
+    if (this.source === "hive-api") {
+      this.bell = new NotificationBell({
+        username: this.me.username,
+        onClick: (event) => this.toggleNotifications(event),
+      });
+    }
     if (this.source === "try") {
       if (topBar && this.project) {
         const right = el("div", { class: "hive-right" });
@@ -787,6 +795,7 @@ export class HiveViews {
       right.append(this.stack);
       if (projectName) right.append(projectName); // moved next to ours
       if (this.project) right.append(this.makeBranchPill(projectName));
+      if (this.bell) right.append(this.bell.element);
       right.append(this.chip);
       if (this.access && this.access.role && !this.access.capabilities.includes("edit")) {
         // The accounts service may say why (its own words, and where to act).
@@ -802,7 +811,9 @@ export class HiveViews {
         );
       }
     } else {
-      document.body.append(el("div", { class: "hive-corner" }, [this.stack, this.chip]));
+      document.body.append(
+        el("div", { class: "hive-corner" }, [this.stack, this.bell?.element, this.chip])
+      );
     }
 
     if (this.project) {
@@ -811,7 +822,10 @@ export class HiveViews {
       this.heartbeat();
       this.timer = setInterval(() => this.heartbeat(), HEARTBEAT_MS);
     }
-    if (this.source === "hive-api") this.keepSessionAlive();
+    if (this.source === "hive-api") {
+      this.keepSessionAlive();
+      this.bell.start();
+    }
     document.addEventListener("click", (event) => {
       if (this.menu && !this.menu.contains(event.target) && !this.menuOwner?.contains(event.target)) {
         this.closeMenu();
@@ -908,6 +922,57 @@ export class HiveViews {
       el("a", { href: "/hive/logout" }, ["Sign out"]), // a page that signs out, then goes home
     ]);
     this.showMenu(this.chip, rect);
+  }
+
+  // The bell's menu: the latest ones, unread first.
+  async toggleNotifications(event) {
+    event.stopPropagation();
+    if (this.menu) {
+      const wasOurs = this.menuOwner === this.bell.element;
+      this.closeMenu();
+      if (wasOurs) return;
+    }
+    const rect = this.bell.element.getBoundingClientRect();
+    const asked = (this.notificationsAsked = {});
+    let list;
+    try {
+      list = await this.bell.list();
+    } catch (error) {
+      return;
+    }
+    this.bell.setCount(list.count);
+    // Another click or menu while it answered: that one wins.
+    if (this.menu || asked !== this.notificationsAsked) return;
+    const item = (n) =>
+      el(
+        "a",
+        {
+          class: `notification${n.read ? "" : " unread"}`,
+          onclick: () => {
+            this.closeMenu();
+            this.bell.open(n);
+          },
+        },
+        [notificationText(n), el("small", {}, [timeAgo(Date.parse(n.created) / 1000)])]
+      );
+    const markAll = el(
+      "a",
+      {
+        onclick: async () => {
+          this.closeMenu();
+          this.bell.closeBubble();
+          await this.bell.markRead({ all: true });
+        },
+      },
+      ["Mark all read"]
+    );
+    this.menu = el("div", { class: "hive-menu hive-notifications" }, [
+      el("div", { class: "head" }, ["Notifications", list.count ? markAll : null]),
+      ...(list.notifications.length
+        ? list.notifications.map(item)
+        : [el("div", { class: "note" }, ["Nothing yet."])]),
+    ]);
+    this.showMenu(this.bell.element, rect);
   }
 
   // The project's page on Hive's home page (hive-api only). Everyone has it

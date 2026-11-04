@@ -481,6 +481,16 @@ thread of replies, open or resolved. What concerns no glyph in particular
   the messages. Addresses are clickable. Only members can be mentioned, at
   most 20 per message; the routes that write a message answer with who it
   newly names (`mentions`), for the notifications to come.
+- **Notifications.** A bell in the top bar of every page and view, with the
+  unread count, and a bubble when something new arrives. Asked of hive-api
+  every 10 seconds (`/api/notifications/count`) by a tab that can be seen, and
+  at once by one that comes back. The bubble is shared by the tabs: it shows in
+  the one in use and comes back in the next until it is closed, clicked or has
+  lasted 8 seconds on screen. People are told when they are mentioned or
+  assigned, and a topic's author and assignee when someone replies, resolves
+  or reopens, never about what they did themselves. The comment routes send
+  this to hive-api (`POST /api/internal/notify`) without waiting: if hive-api
+  is away, the notification is lost, not the comment.
 - **The red pen.** "Draw" under a message being written (a new comment, a
   reply, an edit) turns the canvas into a sheet: freehand strokes over the
   glyph, in glyph units (they follow the zoom), simplified to stay light,
