@@ -12,6 +12,7 @@ ANA = {"username": "ana", "name": "Ana López", "avatar": None}
 CREATED = "2026-11-04T10:00:00+00:00"
 SEEN = "hive.notifications.seen.jeremie"
 BUBBLE = "hive.notifications.bubble.jeremie"
+COUNT = "hive.notifications.count.jeremie"
 
 
 def notification(number, kind="mentioned", glyph="H", read=False, issue=12):
@@ -213,16 +214,60 @@ def test_a_click_reads_it_and_goes_there(home):
     update(page, [notification(7)])
     page.evaluate("bell.poll()")
     page.evaluate("window.open = (url, name) => (window.opened = [url, name]); 0")
+    page.evaluate("window.answers['POST /api/notifications/read'] = [200, { count: 0 }]")
     page.click(".hive-bubble .text")
-    page.wait_for_function("window.calls.some(c => c.path.endsWith('/read'))")
+    page.wait_for_function("window.opened")
     read = page.evaluate("window.calls.find(c => c.path.endsWith('/read'))")
     assert read["body"] == {"id": 7}
     url, tab = page.evaluate("window.opened")
     assert "project=uplustype%2FGotham" in url and "hive-issue=12" in url
     assert tab == "hive-editor-uplustype/Gotham"
     assert bubble(page) is None
+    assert badge(page) is None  # the count goes down at once
     assert page.evaluate(f"localStorage['{BUBBLE}']") is None
     assert page.errors == []
+
+
+def test_the_count_is_told_to_the_other_tabs(home):
+    page = home([notification(1), notification(2)])
+    assert badge(page) == "2"
+    page.evaluate(
+        f"""localStorage.setItem('{COUNT}', '1');
+        window.dispatchEvent(new StorageEvent('storage', {{ key: '{COUNT}' }}));"""
+    )
+    assert badge(page) == "1"
+    # And this tab tells them.
+    page.evaluate("bell.markRead({ id: 2 })")
+    assert page.evaluate(f"localStorage['{COUNT}']") == "1"
+
+
+def test_it_goes_there_after_the_read_is_known(home):
+    page = home([], seen=0)
+    page.evaluate(
+        """() => {
+          window.open = () => (window.order = [...(window.order || []), 'open']);
+          const original = window.fetch;
+          window.fetch = async (url, options) => {
+            const answer = await original(url, options);
+            if (String(url).endsWith('/read')) window.order = ['read'];
+            return answer;
+          };
+        }"""
+    )
+    page.evaluate("bell.open({ id: 1, project: 'uplustype/Gotham', issue: 12, glyph: 'H' })")
+    assert page.evaluate("window.order") == ["read", "open"]
+
+
+def test_a_read_that_hangs_does_not_stop_the_link(home):
+    page = home([], seen=0)
+    page.evaluate(
+        """() => {
+          window.open = () => (window.opened = true);
+          window.fetch = () => new Promise(() => {});
+        }"""
+    )
+    page.evaluate("bell.open({ id: 1, project: 'uplustype/Gotham', issue: 12, glyph: 'H' })")
+    assert page.evaluate("window.opened") is True
 
 
 def test_a_font_topic_opens_on_the_comments_page(home):
@@ -231,6 +276,7 @@ def test_a_font_topic_opens_on_the_comments_page(home):
     page.evaluate("bell.poll()")
     page.evaluate("window.open = (url, name) => (window.opened = [url, name]); 0")
     page.click(".hive-bubble .text")
+    page.wait_for_function("window.opened")
     url, tab = page.evaluate("window.opened")
     assert url.endswith("/#project/uplustype/Gotham/comments/13")
     assert tab == "hive-comments-uplustype/Gotham"
@@ -267,7 +313,7 @@ def test_the_menu(home):
     page.wait_for_selector(".hive-notifications")
     page.click(".hive-notifications a.notification")
     assert page.query_selector(".hive-notifications") is None
-    page.wait_for_function("window.calls.some(c => c.path.endsWith('/read'))")
+    page.wait_for_function("window.opened")
     assert page.evaluate("window.opened[0]").count("hive-issue=12") == 1
     assert page.errors == []
 

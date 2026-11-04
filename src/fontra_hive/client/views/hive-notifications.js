@@ -15,6 +15,7 @@ const POLL_MS = 10000;
 const TICK_MS = 1000;
 const BUBBLE_MS = 8000;
 const MAX_BUBBLE = 20; // what it keeps to say, the latest
+const READ_WAIT_MS = 400;
 const MAX_BADGE = 99;
 
 const STYLE = `
@@ -112,6 +113,7 @@ export class NotificationBell {
   constructor({ username, onClick } = {}) {
     this.seenKey = `hive.notifications.seen.${username}`; // the newest id told
     this.bubbleKey = `hive.notifications.bubble.${username}`; // {items, shown, tickedAt}
+    this.countKey = `hive.notifications.count.${username}`; // told to the other tabs
     if (!document.getElementById("hive-notifications-style")) {
       document.head.append(el("style", { id: "hive-notifications-style" }, [STYLE]));
     }
@@ -142,6 +144,10 @@ export class NotificationBell {
     });
     window.addEventListener("storage", (event) => {
       if (event.key === this.bubbleKey || event.key === null) this.showBubble();
+      if (event.key === this.countKey) {
+        const count = remember(this.countKey);
+        if (count !== null) this.setCount(count);
+      }
     });
   }
 
@@ -192,12 +198,16 @@ export class NotificationBell {
       body: JSON.stringify(body),
     });
     this.setCount(answer.count);
+    keep(this.countKey, answer.count); // every open tab, at once
   }
 
   // A click on a notification: read, and there.
   async open(n) {
     this.closeBubble();
-    this.markRead({ id: n.id }).catch(() => {});
+    // Before going: the tab it goes to asks for the count as it comes up. Not
+    // for long, though: a click only opens a tab for a moment.
+    const read = this.markRead({ id: n.id }).catch(() => {});
+    await Promise.race([read, new Promise((resolve) => setTimeout(resolve, READ_WAIT_MS))]);
     const comments = window.hiveComments; // in the editor of this project: no need to leave
     const issue = comments?.projectName === n.project ? comments.issue(n.issue) : null;
     if (issue) {
