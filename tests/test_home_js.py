@@ -191,7 +191,9 @@ def test_parse_hash(browser_and_url):  # noqa: F811
     result = page.evaluate("""async () => {
           const m = await import('/account/home.js');
           return ['', '#new', '#project/uplustype/Mutator%20Sans', '#orgs', '#org/uplustype',
-                  '#profile', '#nonsense', '#project/uplustype/Mutator/comments'].map(m.parseHash);
+                  '#profile', '#nonsense', '#project/uplustype/Mutator/comments',
+                  '#project/uplustype/Mutator/comments/12',
+                  '#project/uplustype/Mutator/comments/x'].map(m.parseHash);
         }""")
     assert result == [
         {"section": "projects"},
@@ -202,6 +204,13 @@ def test_parse_hash(browser_and_url):  # noqa: F811
         {"section": "profile"},
         {"section": "projects"},
         {"section": "projects", "view": "comments", "project": "uplustype/Mutator"},
+        {
+            "section": "projects",
+            "view": "comments",
+            "project": "uplustype/Mutator",
+            "issue": 12,
+        },
+        {"section": "projects"},
     ]
     page.close()
 
@@ -783,6 +792,227 @@ def test_a_long_comment_wraps_and_open_glyph_stays_in_the_frame(browser_and_url)
     page.close()
 
 
+def font_comment(number, text="Is the name final?", title=None, state="open"):
+    return {
+        **comment(number, None, text=text, state=state),
+        "source": None,
+        "point": None,
+        "title": title,
+    }
+
+
+def font_topics_page(browser_and_url, hash="", can=None, issues=None):  # noqa: F811
+    hive = "/api/hive/projects/uplustype%2FMutator"
+    issues = (
+        issues
+        if issues is not None
+        else [
+            comment(1, "A", text="Stem too thin"),
+            font_comment(2, title="Family name"),
+        ]
+    )
+    created = font_comment(3, text="New one", title="Fresh")
+    data = {
+        "head": "h",
+        "you": {"username": "ana", "name": "Ana López"},
+        "can": can if can is not None else {"comment": True, "resolveAny": True},
+        "members": [],
+        "issues": issues,
+    }
+    replied = {**issues[-1]} if issues else {}
+    if issues:
+        replied["messages"] = [
+            *replied["messages"],
+            {**replied["messages"][0], "id": 2, "text": "Yes, final"},
+        ]
+    extra = {
+        f"GET {hive}/comments": [200, data],
+        f"POST {hive}/comments": [200, {"head": "h2", "issue": created}],
+        f"POST {hive}/comments/2/messages": [200, {"head": "h3", "issue": replied}],
+    }
+    page = open_home(
+        browser_and_url, "#project/uplustype/Mutator/comments" + hash, extra
+    )
+    page.wait_for_selector("main h2")
+    return page
+
+
+CARD = (
+    "document.querySelector('.hive-comments-overlay')"
+    "?.shadowRoot.querySelector('.card')"
+)
+
+
+def test_a_font_topic_is_opened_from_the_comments_page(browser_and_url):  # noqa: F811
+    page = font_topics_page(browser_and_url)
+    page.click("button.new-topic")
+    page.wait_for_function(f"{CARD}?.classList.contains('docked')")
+    page.evaluate(
+        f"""
+        const card = {CARD};
+        const title = card.querySelector('.title-input');
+        title.value = 'Fresh';
+        title.dispatchEvent(new Event('input'));
+        const text = card.querySelector('textarea');
+        text.value = 'New one';
+        text.dispatchEvent(new Event('input'));
+        card.querySelector('button.primary').click();
+        """
+    )
+    page.wait_for_selector("tr[data-number='3'].font-topic")
+    sent = page.evaluate("window.calls.filter(c => c.method === 'POST').at(-1)")
+    assert sent["body"] == {"title": "Fresh", "text": "New one"}
+    assert sent["path"].endswith("/comments")
+    # It is then open, ready for a reply.
+    page.wait_for_function(f"{CARD}?.dataset.number === '3'")
+    assert page.errors == []
+    page.close()
+
+
+def test_a_font_topic_on_the_comments_page(browser_and_url):  # noqa: F811
+    page = font_topics_page(browser_and_url)
+    page.wait_for_selector("tr[data-number='2']")
+    cell = page.text_content("tr[data-number='2'] td.glyph").strip()
+    assert cell == "Font"
+    assert page.query_selector("tr[data-number='2'] td.glyph .icon-typography")
+    assert "Family name" in page.text_content("tr[data-number='2'] td.text")
+    # No glyph to open: the thread opens here, and takes a reply.
+    assert page.query_selector("tr[data-number='2'] a") is None
+    page.click("tr[data-number='2'] button.open-topic")
+    page.wait_for_function(f"{CARD}?.dataset.number === '2'")
+    page.evaluate(
+        f"""
+        const card = {CARD};
+        const text = card.querySelector('textarea');
+        text.value = 'Yes, final';
+        text.dispatchEvent(new Event('input'));
+        card.querySelector('.compose button.primary').click();
+        """
+    )
+    page.wait_for_function(f"{CARD}?.textContent.includes('Yes, final')")
+    assert "1 reply" in page.text_content("tr[data-number='2'] td.text")
+    # The page around the card still answers clicks: nothing covers its
+    # buttons, and the card stays whole when the window narrows.
+    page.click("tr[data-number='1'] td.text")
+    page.click("button.new-topic")
+    page.wait_for_function(f"{CARD}?.classList.contains('draft')")
+    for width in (1000, 390):
+        page.set_viewport_size({"width": width, "height": 700})
+        box = page.evaluate(
+            f"(() => {{ const b = {CARD}.getBoundingClientRect();"
+            " return [b.left, b.right]; })()"
+        )
+        assert box[0] >= 0 and box[1] <= width
+    assert page.errors == []
+    page.close()
+
+
+def test_the_font_icon_keeps_its_size_on_a_phone(browser_and_url):  # noqa: F811
+    page = font_topics_page(browser_and_url)
+    page.set_viewport_size({"width": 390, "height": 760})
+    page.wait_for_selector("tr[data-number='2'] .icon-typography")
+    size = page.evaluate(
+        "document.querySelector('tr[data-number=\"2\"] .icon-typography')"
+        ".getBoundingClientRect().width"
+    )
+    assert size < 30
+    page.close()
+
+
+def test_the_comments_page_filters_glyphs_and_font(browser_and_url):  # noqa: F811
+    page = font_topics_page(browser_and_url)
+    page.wait_for_selector("tr[data-number='2']")
+    rows = (
+        "[...document.querySelectorAll('table.comments tr')]"
+        ".map(r => +r.dataset.number)"
+    )
+    assert page.evaluate(rows) == [2, 1]
+    page.select_option("select[data-filter='scope']", "font")
+    assert page.evaluate(rows) == [2]
+    page.select_option("select[data-filter='scope']", "glyphs")
+    assert page.evaluate(rows) == [1]
+    page.select_option("select[data-filter='scope']", "")
+    # The glyph filter has no empty entry for font topics, and picks glyphs.
+    options = page.evaluate(
+        "[...document.querySelector('select[data-filter=glyph]').options]"
+        ".map(o => o.value)"
+    )
+    assert options == ["", "A"]
+    assert page.errors == []
+    page.close()
+
+
+def test_a_link_opens_a_font_topic_on_the_comments_page(browser_and_url):  # noqa: F811
+    page = font_topics_page(browser_and_url, "/2")
+    page.wait_for_function(f"{CARD}?.dataset.number === '2'")
+    assert "Family name" in page.evaluate(f"{CARD}.textContent")
+    page.close()
+    # A topic that is gone says so; a glyph's topic opens nothing here.
+    page = font_topics_page(browser_and_url, "/9")
+    page.wait_for_function(
+        "document.querySelector('.hive-comments-overlay').shadowRoot"
+        ".querySelector('.toast')?.textContent.includes('#9')"
+    )
+    page.close()
+    page = font_topics_page(browser_and_url, "/1")
+    page.wait_for_selector("tr[data-number='1']")
+    assert page.evaluate(f"!{CARD}")
+    assert page.errors == []
+    page.close()
+
+
+def test_leaving_the_comments_page_while_it_loads(browser_and_url):  # noqa: F811
+    """The answer arrives on another page: it must not put back a page whose
+    card is gone, with buttons that do nothing."""
+    page = open_home(browser_and_url, "#orgs")
+    page.wait_for_selector("main h2")
+    page.evaluate(
+        """
+        const original = window.fetch;
+        window.fetch = async (url, options) => {
+          if (String(url).endsWith('%2FMutator/comments')) {
+            await new Promise((resolve) => (window.letItAnswer = resolve));
+            return new Response(JSON.stringify({ issues: [], can: { comment: true } }));
+          }
+          return original(url, options);
+        };
+        location.hash = '#project/uplustype/Mutator/comments';
+        """
+    )
+    page.wait_for_function("typeof window.letItAnswer === 'function'")
+    page.evaluate("location.hash = '#profile'")
+    page.wait_for_function("!document.querySelector('.hive-comments-overlay')")
+    page.wait_for_selector("nav a.current[data-section='profile']")
+    page.evaluate("window.letItAnswer()")
+    page.wait_for_timeout(100)
+    assert "— comments" not in page.text_content("main")
+    assert page.errors == []
+    page.close()
+
+
+def test_leaving_the_comments_page_takes_the_card_away(browser_and_url):  # noqa: F811
+    page = font_topics_page(browser_and_url, "/2")
+    page.wait_for_function(f"{CARD}?.dataset.number === '2'")
+    page.evaluate("location.hash = '#profile'")
+    page.wait_for_function("!document.querySelector('.hive-comments-overlay')")
+    assert page.errors == []
+    page.close()
+
+
+def test_who_sees_new_topic_on_the_comments_page(browser_and_url):  # noqa: F811
+    page = font_topics_page(browser_and_url, can={"comment": False})
+    page.wait_for_selector("tr[data-number='2']")
+    assert page.query_selector("button.new-topic") is None
+    page.close()
+
+
+def test_a_project_without_comments_leads_to_font_topics(browser_and_url):  # noqa: F811
+    page = font_topics_page(browser_and_url, issues=[])
+    assert page.query_selector("button.new-topic")
+    assert page.text_content("main p.note") == "0 of 0 comments"
+    page.close()
+
+
 def test_a_former_editor_tab_is_not_reused_for_the_editor(browser_and_url):  # noqa: F811
     """An editor tab that went to the home page (My projects) keeps its name
     across the visit: the page drops it, so that Open glyph opens a tab."""
@@ -800,6 +1030,33 @@ def test_project_cards_count_open_comments(browser_and_url):  # noqa: F811
     assert page.text_content("[data-comments='jeremie/Sketches']") == "3 open comments"
     page.click("[data-comments='jeremie/Sketches']")
     page.wait_for_function("location.hash === '#project/jeremie/Sketches/comments'")
+    page.close()
+
+
+@pytest.mark.parametrize(
+    "counts, shown",
+    [
+        (
+            {"open": 3, "resolved": 1, "font": {"open": 1, "resolved": 0}},
+            "2 open comments · 1 font topic",
+        ),
+        (
+            {"open": 2, "resolved": 0, "font": {"open": 2, "resolved": 0}},
+            "2 font topics",
+        ),
+        (
+            {"open": 1, "resolved": 0, "font": {"open": 0, "resolved": 0}},
+            "1 open comment",
+        ),
+    ],
+)
+def test_project_cards_count_font_topics_apart(
+    browser_and_url, counts, shown  # noqa: F811
+):
+    summary = "GET /api/hive/projects/jeremie%2FSketches/comments/summary"
+    page = open_home(browser_and_url, "", {summary: [200, counts]})
+    page.wait_for_selector("[data-comments='jeremie/Sketches']:not(:empty)")
+    assert page.text_content("[data-comments='jeremie/Sketches']") == shown
     page.close()
 
 

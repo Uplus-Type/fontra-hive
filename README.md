@@ -25,8 +25,8 @@ the open-source, browser-based font editor. It is the open part of
 - `fontra hive-dev <folder>` — a development project manager (no
   authentication) serving every `<name>.git` repository of a folder, one
   project per branch (`Name`, `Name@branch`).
-- Comments on glyphs: numbered topics pinned to a point of a glyph's source,
-  kept on `refs/hive/comments` (see below).
+- Comments: numbered topics pinned to a point of a glyph's source, or about
+  the font as a whole, kept on `refs/hive/comments` (see below).
 - `fontra-hive` — a small CLI: `init`, `import`, `export`, `log`, `branches`,
   `branch`, `tag`, `diff`, `snapshot`, `pull`, `push`, `remote-status`.
 - `fontra_hive.remote` — remote git repositories (GitHub, GitLab…): pull a
@@ -424,7 +424,8 @@ in production for a 10× margin.
 
 Reviewers leave notes where they belong: on a point of a glyph, on one of
 its sources. Each comment is a numbered topic (#12) of the project with a
-thread of replies, open or resolved.
+thread of replies, open or resolved. What concerns no glyph in particular
+(font info, naming, a decision) is a font topic, in the same numbering.
 
 - **The Comment tool** (a speech bubble with a “+” in the toolbar): click in the glyph
   being edited to pin a comment there, on the source being edited (at an
@@ -459,8 +460,18 @@ thread of replies, open or resolved.
   discussion goes forward even when the drawing goes back.
 - **The project's comments** on Hive's home page (project → "See all
   comments", `#project/<owner>/<name>/comments`): every topic, filtered by
-  state, glyph, person (wrote in it or assigned), label, branch and text,
-  each with a link to open it in the editor.
+  state, glyphs or font, glyph, person (wrote in it or assigned), label,
+  branch and text, each with a link to open it in the editor.
+- **Font topics.** "New topic", on the project's comments page and at the
+  top of the Comments panel, opens a topic without a glyph: an optional
+  title and a first message. It has everything a topic has (replies, state,
+  assignee, labels, title, history, rights), no pin and no red pen. Its
+  thread opens in a docked card, on the page as in the editor; in the panel
+  the font topics are in the whole project's list, and folded under "Font"
+  when a glyph is selected. Their address is
+  `#project/<owner>/<name>/comments/<n>`; `hive-issue=<n>` opens them in the
+  editor too. `anchor`, an optional text kept with a topic, is not read yet:
+  it is there for "fontinfo", "kerning:A/V" and the like.
 - **The red pen.** "Draw" under a message being written (a new comment, a
   reply, an edit) turns the canvas into a sheet: freehand strokes over the
   glyph, in glyph units (they follow the zoom), simplified to stay light,
@@ -474,7 +485,7 @@ thread of replies, open or resolved.
   before; managers see the deleted topics at the bottom of the Comments
   panel and restore them. Both are read from the commits of
   `refs/hive/comments`. Project cards on Hive's home page say how many
-  comments are open.
+  comments and font topics are open.
 - **Who may do what.** Reviewers and up (`comment`): open topics, reply,
   edit their own messages, resolve, reopen and move their own topics.
   Designers and up (`edit`): resolve, reopen and move any topic. Managers and
@@ -490,9 +501,10 @@ thread of replies, open or resolved.
   commit it was resolved on.
 
 ```
-GET    /api/hive/projects/<name>/comments[?glyph=H]      topics, who you are, what you may do, members
+GET    /api/hive/projects/<name>/comments[?glyph=H|?scope=font]   topics, who you are, what you may do, members
 GET    /api/hive/projects/<name>/comments/head           changes with every comment (polled every 3 s)
 POST   /api/hive/projects/<name>/comments                {glyph, source: {layer, name, location}, point: {x, y}, text[, branch]}
+                                                         or, about the font, {text[, title, anchor, branch]}
 POST   /api/hive/projects/<name>/comments/<n>/messages   {text}
 PATCH  /api/hive/projects/<name>/comments/<n>            {state: "open"|"resolved"} or {point: {x, y}}
                                                          or {title: text|null}
@@ -502,7 +514,7 @@ DELETE /api/hive/projects/<name>/comments/<n>[/messages/<id>]
 GET    /api/hive/projects/<name>/comments/<n>/history    every change of a topic, newest first
 GET    /api/hive/projects/<name>/comments/deleted        deleted topics (managers and up)
 POST   /api/hive/projects/<name>/comments/<n>/restore    bring one back (managers and up)
-GET    /api/hive/projects/<name>/comments/summary        {open, resolved}; never creates the repository
+GET    /api/hive/projects/<name>/comments/summary        {open, resolved, font: {open, resolved}}; never creates the repository
 ```
 
 ## "Try Fontra" without a server

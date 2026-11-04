@@ -18,6 +18,12 @@
 //   - a "Comments" sidebar panel: the selected glyph's topics (all the
 //     project's when no glyph is selected); a click shows one on the canvas.
 //
+// A font topic (font info, naming, a decision…) is a topic without a glyph:
+// same numbers, same thread, no pin and no sketch. Its card has no place on
+// the canvas, so it stays docked at the top right, and "New topic" in the
+// panel opens one. The project's comments page shows the same card, without
+// an editor (mountTopics).
+//
 // Who may do what is decided by the server; the "can" part of its answer
 // only hides what would be refused.
 //
@@ -35,6 +41,7 @@ const SKETCH_WIDTH = 2.5; // screen pixels
 const SKETCH_ALPHA_PALE = 0.3; // sketches of closed post-its, on their own source
 const SKETCH_MIN_STEP = 1.5; // screen pixels between two recorded points
 const SKETCH_TOLERANCE = 0.75; // screen pixels: simplification of a stroke
+const FONT_TOPIC_LABELS = ["font info", "naming", "production"]; // suggestions
 
 const COLORS = {
   light: { open: "#e9b02a", resolved: "#8a8a8a", text: "#1c1c1c", ring: "#1c1c1c", pen: "#e5484d" },
@@ -98,6 +105,21 @@ const CARD_STYLES = `
   }
   .card.resolved {
     border-top-color: #8a8a8a;
+  }
+  .card.docked {
+    /* Held by its edges, not by a computed position: it stays in view when
+       the window changes size. --dock-* : where a page wants it. */
+    top: var(--dock-top, 16px);
+    bottom: var(--dock-bottom, auto);
+    right: 16px;
+    width: 360px;
+    max-width: calc(100% - 32px);
+    max-height: calc(100% - 32px);
+  }
+  .card-header .where .svg-icon {
+    width: 14px;
+    height: 14px;
+    margin-right: 3px;
   }
   .card-header {
     display: flex;
@@ -231,6 +253,11 @@ const CARD_STYLES = `
     border: 1px solid var(--card-line);
     border-radius: 4px;
     padding: 2px 5px;
+  }
+  .title-row.new-title {
+    padding-bottom: 0;
+    font-weight: normal;
+    font-size: 13px;
   }
   .title-row .svg-icon, .add-title .svg-icon {
     width: 13px;
@@ -474,6 +501,27 @@ const PANEL_STYLES = `
     font-size: 0.85em;
     opacity: 0.6;
   }
+  .new-topic {
+    align-self: flex-start;
+    font: inherit;
+    font-size: 0.9em;
+    padding: 0.15em 0.6em;
+    cursor: pointer;
+  }
+  .new-topic[hidden] {
+    display: none;
+  }
+  .svg-icon {
+    display: inline-flex;
+    width: 1em;
+    height: 1em;
+    margin-right: 0.25em;
+    vertical-align: -0.12em;
+  }
+  .svg-icon svg {
+    width: 100%;
+    height: 100%;
+  }
   .list {
     flex: 1;
     overflow-y: auto;
@@ -528,8 +576,13 @@ const PANEL_STYLES = `
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  details.deleted summary {
+  details.deleted summary, details.font-topics summary {
     cursor: pointer;
+  }
+  details.font-topics[open] {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35em;
   }
   .deleted-issue {
     cursor: default;
@@ -624,7 +677,8 @@ function drawArguments(args) {
 }
 
 // Icons from Tabler Icons (outline, MIT; see TABLER-ICONS-LICENSE.txt), the
-// icon set Fontra uses for its own panels: "trash", "link", "pencil", "eye".
+// icon set Fontra uses for its own panels: "trash", "link", "pencil", "eye",
+// "typography".
 const ICON_PATHS = {
   trash: [
     "M4 7l16 0",
@@ -643,9 +697,10 @@ const ICON_PATHS = {
     "M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0",
     "M21 12c-2.4 4 -5.4 6 -9 6c-3.6 0 -6.6 -2 -9 -6c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6",
   ],
+  typography: ["M4 20l3 0", "M14 20l7 0", "M6.9 15l6.9 0", "M10.2 6.3l5.8 13.7", "M5 20l6 -16l2 0l7 16"],
 };
 
-function icon(name) {
+export function icon(name) {
   const span = document.createElement("span");
   span.className = `svg-icon icon-${name}`;
   span.innerHTML =
@@ -657,18 +712,33 @@ function icon(name) {
   return span;
 }
 
+// A topic about the font rather than a glyph.
+export function isFontTopic(issue) {
+  return issue?.glyph === null || issue?.glyph === undefined;
+}
+
 // The editor's address for a topic: the glyph alone on the canvas, being
 // edited; the Hive page script keeps "hive-issue" for the plug-in, which then
 // goes to the source and opens the post-it. (Fontra reads the other
 // parameters itself, its older URL format: JSON values.)
+// A font topic needs no editor: its address is the project's comments page.
+// Without accounts there is no such page ("owner/name" projects only), and
+// the editor opens it too: there, "hive-issue" opens the docked card.
 export function issueLink(projectName, issue, origin = window.location.origin) {
+  const font = isFontTopic(issue);
+  if (font && projectName.includes("/")) {
+    const path = projectName.split("/").map(encodeURIComponent).join("/");
+    return new URL(`/#project/${path}/comments/${issue.number}`, origin).toString();
+  }
   const url = new URL("/editor.html", origin);
   url.searchParams.set("project", projectName);
-  url.searchParams.set("text", JSON.stringify(`/${issue.glyph}`));
-  url.searchParams.set(
-    "selectedGlyph",
-    JSON.stringify({ lineIndex: 0, glyphIndex: 0, isEditing: true })
-  );
+  if (!font) {
+    url.searchParams.set("text", JSON.stringify(`/${issue.glyph}`));
+    url.searchParams.set(
+      "selectedGlyph",
+      JSON.stringify({ lineIndex: 0, glyphIndex: 0, isEditing: true })
+    );
+  }
   url.searchParams.set("hive-issue", String(issue.number));
   return url.toString();
 }
@@ -821,7 +891,7 @@ export class HiveComments {
     const settings = this.editor.sceneController?.sceneSettingsController;
     settings?.addKeyListener?.(["viewBox", "positionedLines"], () => this.scheduleOverlay());
     settings?.addKeyListener?.(["selectedGlyphName"], () => {
-      if (this.draft && this.draft.glyph !== this.selectedGlyphName) this.cancelDraft();
+      if (this.draft?.glyph && this.draft.glyph !== this.selectedGlyphName) this.cancelDraft();
       this.changed();
     });
     this.refresh();
@@ -872,19 +942,24 @@ export class HiveComments {
       }
       const data = await response.json();
       if (generation !== this.generation) return;
-      this.head = data.head;
-      this.issues = data.issues || [];
-      this.you = data.you || null;
-      this.can = { ...this.can, ...(data.can || {}) };
-      this.members = data.members || this.members;
-      this.dataVersion++;
-      this.loaded = true;
-      if (this.openNumber !== null && !this.issue(this.openNumber)) this.openNumber = null;
-      this.changed();
-      this.openPendingIssue();
+      this.take(data);
     } catch (error) {
       // keep what we have
     }
+  }
+
+  // An answer of GET …/comments.
+  take(data) {
+    this.head = data.head;
+    this.issues = data.issues || [];
+    this.you = data.you || null;
+    this.can = { ...this.can, ...(data.can || {}) };
+    this.members = data.members || this.members;
+    this.dataVersion++;
+    this.loaded = true;
+    if (this.openNumber !== null && !this.issue(this.openNumber)) this.openNumber = null;
+    this.changed();
+    this.openPendingIssue();
   }
 
   issue(number) {
@@ -893,6 +968,10 @@ export class HiveComments {
 
   issuesOf(glyphName) {
     return this.issues.filter((issue) => issue.glyph === glyphName);
+  }
+
+  fontIssues() {
+    return this.issues.filter(isFontTopic);
   }
 
   isShown(issue) {
@@ -948,10 +1027,12 @@ export class HiveComments {
     const sketch = this.sketchFor("draft");
     if (!draft || (!text.trim() && !sketch)) return false;
     draft.text = text;
+    const where =
+      draft.glyph === null
+        ? { title: draft.title?.trim() || null }
+        : { glyph: draft.glyph, source: draft.source, point: draft.point };
     const data = await this.send("POST", "", {
-      glyph: draft.glyph,
-      source: draft.source,
-      point: draft.point,
+      ...where,
       text,
       branch: this.branch,
       ...(sketch ? { sketch } : {}),
@@ -1037,6 +1118,15 @@ export class HiveComments {
     if (!issue) {
       this.pendingIssue = null;
       this.toast(`Comment #${number} does not exist any more.`);
+      return;
+    }
+    if (isFontTopic(issue)) {
+      this.pendingIssue = null;
+      this.show(issue);
+      return;
+    }
+    if (this.withoutEditor) {
+      this.pendingIssue = null; // a glyph's topic opens in the editor
       return;
     }
     if (!this.positionedGlyphFor(issue.glyph)) {
@@ -1238,10 +1328,14 @@ export class HiveComments {
 
   // --- opening, the draft ---------------------------------------------------------
 
+  // Whether leaving the draft would lose something typed; asks if so.
+  mayDropDraft() {
+    const typed = this.draft?.text?.trim() || this.draft?.title?.trim();
+    return !typed || window.confirm("Discard the comment you are writing?");
+  }
+
   open(number) {
-    if (this.draft?.text?.trim() && !window.confirm("Discard the comment you are writing?")) {
-      return;
-    }
+    if (!this.mayDropDraft()) return;
     this.draft = null;
     this.editing = null;
     this.renaming = null;
@@ -1266,6 +1360,24 @@ export class HiveComments {
     this.editing = null;
     this.error = null;
     this.draft = { glyph, source, point, text };
+    this.changed();
+    this.focusCompose();
+  }
+
+  // A new topic about the font, written in the docked card.
+  startFontTopic() {
+    if (!this.can.comment) return;
+    if (this.draft?.glyph === null) {
+      this.focusCompose();
+      return;
+    }
+    if (!this.mayDropDraft()) return;
+    this.openNumber = null;
+    this.editing = null;
+    this.renaming = null;
+    this.error = null;
+    this.dropSketch();
+    this.draft = { glyph: null, title: "", text: "" };
     this.changed();
     this.focusCompose();
   }
@@ -1445,8 +1557,7 @@ export class HiveComments {
 
   // --- the post-it (HTML over the canvas) ------------------------------------------------
 
-  installOverlay() {
-    const container = this.editor.canvasController?.canvas?.parentElement;
+  installOverlay(container = this.editor.canvasController?.canvas?.parentElement) {
     if (!container) return;
     this.overlayHost = el("div", { class: "hive-comments-overlay" });
     this.overlayRoot = this.overlayHost.attachShadow({ mode: "open" });
@@ -1479,6 +1590,7 @@ export class HiveComments {
     const key = JSON.stringify([
       target.kind,
       target.issue ?? null,
+      this.draft?.glyph,
       this.editing,
       this.renaming,
       this.earlierShown,
@@ -1492,7 +1604,8 @@ export class HiveComments {
     if (key !== this.cardKey || !this.cardElement) {
       const previous = this.cardElement;
       // What was typed survives the rebuild (same card), unless it was sent.
-      const identity = `${target.kind}:${target.issue?.number ?? ""}`;
+      const fontDraft = target.kind === "draft" && this.draft.glyph === null;
+      const identity = `${target.kind}:${target.issue?.number ?? ""}:${fontDraft}`;
       const typed = new Map();
       if (previous && identity === this.cardIdentity) {
         for (const textarea of previous.querySelectorAll("textarea[data-role]")) {
@@ -1566,6 +1679,7 @@ export class HiveComments {
     } else {
       return null;
     }
+    if (glyphName === null || glyphName === undefined) return { kind, issue, screen: null };
     const positionedGlyph = this.positionedGlyphFor(glyphName);
     if (!positionedGlyph) return null;
     const screen = this.screenPoint(positionedGlyph, point);
@@ -1573,7 +1687,10 @@ export class HiveComments {
     return { kind, issue, screen };
   }
 
+  // ``tip``: the point the card speaks about; none for a font topic: docked,
+  // which its style does.
   placeCard(tip) {
+    if (!tip) return;
     const card = this.cardElement;
     const host = this.overlayHost;
     const width = host.clientWidth || 800;
@@ -1700,6 +1817,7 @@ export class HiveComments {
 
   draftCard() {
     const draft = this.draft;
+    if (draft.glyph === null) return this.fontDraftCard();
     return el("div", { class: "card draft" }, [
       el("div", { class: "card-header" }, [
         el("span", { class: "number" }, ["New comment"]),
@@ -1722,17 +1840,61 @@ export class HiveComments {
     ]);
   }
 
+  // A new font topic: an optional title, then the first message.
+  fontDraftCard() {
+    const draft = this.draft;
+    const title = el("input", {
+      class: "title-input",
+      placeholder: "Title (optional)",
+      "aria-label": "Title",
+      maxlength: 200,
+    });
+    title.value = draft.title || "";
+    stopKeys(title);
+    title.addEventListener("input", () => (draft.title = title.value));
+    title.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        this.focusCompose();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        this.cancelDraft();
+      }
+    });
+    return el("div", { class: "card draft docked" }, [
+      el("div", { class: "card-header" }, [
+        el("span", { class: "number" }, ["New topic"]),
+        el("span", { class: "where" }, [icon("typography"), "Font"]),
+        el("button", { class: "icon", title: "Cancel", onclick: () => this.cancelDraft() }, ["×"]),
+      ]),
+      el("div", { class: "title-row new-title" }, [title]),
+      this.error ? el("div", { class: "error" }, [this.error]) : null,
+      this.composeBox({
+        role: "draft",
+        placeholder: "About the font: font info, naming, a decision…",
+        submitLabel: this.busy ? "Sending…" : "Open topic",
+        onSubmit: (text) => this.submitDraft(text),
+        onCancel: () => this.cancelDraft(),
+        first: true,
+        initial: draft.text || "",
+      }),
+    ]);
+  }
+
   issueCard(issue) {
     const resolved = issue.state === "resolved";
+    const font = isFontTopic(issue);
     const header = el("div", { class: "card-header" }, [
       el("span", { class: "number" }, [`#${issue.number}`]),
       el(
         "span",
         {
           class: "where",
-          title: `${issue.glyph} · ${issue.source?.name || ""} · on ${issue.branch}`,
+          title: font
+            ? `About the font · on ${issue.branch}`
+            : `${issue.glyph} · ${issue.source?.name || ""} · on ${issue.branch}`,
         },
-        [`${issue.glyph} · ${issue.source?.name || ""}`]
+        font ? [icon("typography"), "Font"] : [`${issue.glyph} · ${issue.source?.name || ""}`]
       ),
       resolved ? el("span", { class: "state" }, ["Resolved"]) : null,
       this.mayChangeState(issue)
@@ -1779,7 +1941,8 @@ export class HiveComments {
         ])
       : null;
     if (note) messages.append(note);
-    return el("div", { class: `card${resolved ? " resolved" : ""}`, dataset: { number: issue.number } }, [
+    const classes = `card${resolved ? " resolved" : ""}${font ? " docked" : ""}`;
+    return el("div", { class: classes, dataset: { number: issue.number } }, [
       header,
       this.titleRow(issue),
       this.organizeRow(issue),
@@ -1935,7 +2098,7 @@ export class HiveComments {
       });
       input.addEventListener("change", () => {
         // A suggestion picked with the mouse.
-        if (input.value.trim() && this.allLabels().includes(input.value.trim())) {
+        if (input.value.trim() && this.suggestedLabels(issue).includes(input.value.trim())) {
           this.organize(issue.number, { labels: [...labels, input.value.trim()] });
         }
       });
@@ -1944,7 +2107,7 @@ export class HiveComments {
         el(
           "datalist",
           { id: listId },
-          this.allLabels()
+          this.suggestedLabels(issue)
             .filter((l) => !labels.some((mine) => mine.toLowerCase() === l.toLowerCase()))
             .map((l) => el("option", { value: l }))
         )
@@ -1964,8 +2127,17 @@ export class HiveComments {
     return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([l]) => l);
   }
 
+  // What the "+ label" field proposes for a topic: font topics also get the
+  // labels that sort them, until the project has its own.
+  suggestedLabels(issue) {
+    const labels = this.allLabels();
+    if (!isFontTopic(issue)) return labels;
+    const known = new Set(labels.map((label) => label.toLowerCase()));
+    return [...labels, ...FONT_TOPIC_LABELS.filter((label) => !known.has(label))];
+  }
+
   versionRow(issue) {
-    if (!issue.commit) return null;
+    if (!issue.commit || isFontTopic(issue)) return null;
     const canShow = !!this.history?.showExternalVersion;
     return el("div", { class: "version" }, [
       el("span", { class: "when" }, [
@@ -2216,7 +2388,7 @@ export class HiveComments {
           if (this.layerVisible() && this.pinAt(local(event))) return;
         }
         if (this.draft) {
-          if (!this.draft.text?.trim()) this.cancelDraft();
+          if (!this.draft.text?.trim() && !this.draft.title?.trim()) this.cancelDraft();
           return;
         }
         this.close();
@@ -2311,6 +2483,7 @@ export class HiveComments {
         return false;
       }
     }
+    if (this.draft?.glyph === null) return true; // a font topic is being written
     if (this.openNumber !== null) {
       this.close();
       return true;
@@ -2358,6 +2531,10 @@ export class HiveComments {
   // --- going to a topic from the list ---------------------------------------------------
 
   async show(issue) {
+    if (isFontTopic(issue)) {
+      this.open(issue.number); // no place to go to
+      return;
+    }
     const sceneSettings = this.editor.sceneController?.sceneSettings;
     const model = this.sceneModel;
     if (!sceneSettings || !model) {
@@ -2437,6 +2614,15 @@ export class HiveComments {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     return !!this.findOnCanvas(glyphName);
+  }
+
+  // Off a page without an editor.
+  dispose() {
+    this.stopPolling();
+    this.listeners.clear();
+    this.overlayHost?.remove();
+    this.overlayRoot = null;
+    this.cardElement = null;
   }
 
   centerOn(issue) {
@@ -2571,6 +2757,16 @@ export class HiveCommentsPanel extends HTMLElement {
         comments.changed();
       },
     });
+    this.newTopicButton = el(
+      "button",
+      {
+        class: "new-topic",
+        title: "Open a topic about the font: font info, naming, a decision…",
+        hidden: true,
+        onclick: () => comments.startFontTopic(),
+      },
+      ["New topic"]
+    );
     this.hintElement = el("div", { class: "hint" });
     this.listElement = el("div", { class: "list" });
     shadow.append(
@@ -2584,6 +2780,7 @@ export class HiveCommentsPanel extends HTMLElement {
             " Resolved",
           ]),
         ]),
+        this.newTopicButton,
         this.hintElement,
         this.listElement,
       ])
@@ -2605,6 +2802,7 @@ export class HiveCommentsPanel extends HTMLElement {
     const comments = this.comments;
     const glyphName = comments.selectedGlyphName;
     this.resolvedToggle.checked = comments.showResolved;
+    this.newTopicButton.hidden = !comments.can.comment;
     const issues = glyphName ? comments.issuesOf(glyphName) : comments.issues;
     this.subtitleElement.textContent = glyphName ? glyphName : "whole project";
     const open = issues.filter((i) => i.state === "open");
@@ -2614,7 +2812,9 @@ export class HiveCommentsPanel extends HTMLElement {
       : !comments.can.comment
         ? issues.length
           ? ""
-          : "No comments yet."
+          : glyphName
+            ? "No comments on this glyph."
+            : "No comments yet."
         : issues.length
           ? ""
           : glyphName
@@ -2628,6 +2828,19 @@ export class HiveCommentsPanel extends HTMLElement {
     if (resolved.length) {
       rows.push(el("div", { class: "group-title" }, [`Resolved (${resolved.length})`]));
       rows.push(...resolved.map((issue) => this.row(issue, !glyphName)));
+    }
+    const fontTopics = glyphName ? comments.fontIssues() : [];
+    if (fontTopics.length) {
+      const inOrder = [
+        ...fontTopics.filter((i) => i.state === "open"),
+        ...fontTopics.filter((i) => i.state !== "open"),
+      ];
+      rows.push(
+        el("details", { class: "font-topics" }, [
+          el("summary", { class: "group-title" }, [`Font (${fontTopics.length})`]),
+          ...inOrder.map((issue) => this.row(issue, false)),
+        ])
+      );
     }
     if (comments.can.moderate && comments.deletedVersion !== comments.dataVersion) {
       comments.deletedVersion = comments.dataVersion; // one request per change
@@ -2646,7 +2859,7 @@ export class HiveCommentsPanel extends HTMLElement {
               el("span", { class: "text" }, [issueTitle(d.issue || {})]),
               el("span", { class: "meta" }, [
                 [
-                  glyphName ? null : d.issue?.glyph,
+                  glyphName ? null : (d.issue?.glyph ?? "Font"),
                   `deleted by ${d.deletedBy} ${relativeTime(new Date(d.deletedAt * 1000).toISOString())}`,
                 ]
                   .filter(Boolean)
@@ -2669,19 +2882,25 @@ export class HiveCommentsPanel extends HTMLElement {
         ])
       );
     }
-    const openDetails = this.listElement.querySelector("details.deleted")?.open;
+    const openBefore = ["details.deleted", "details.font-topics"].filter(
+      (selector) => this.listElement.querySelector(selector)?.open
+    );
     this.listElement.replaceChildren(...rows);
-    if (openDetails) {
-      const details = this.listElement.querySelector("details.deleted");
+    for (const selector of openBefore) {
+      const details = this.listElement.querySelector(selector);
       if (details) details.open = true;
     }
+    // The topic being read stays in view.
+    const current = this.listElement.querySelector("details.font-topics .issue.current");
+    if (current) current.closest("details").open = true;
   }
 
   row(issue, withGlyph) {
     const first = issue.messages[0] || {};
     const replies = issue.messages.length - 1;
+    const font = isFontTopic(issue);
     const meta = [
-      withGlyph ? issue.glyph : null,
+      withGlyph ? (font ? "Font" : issue.glyph) : null,
       issue.source?.name,
       first.author?.name || first.author?.username,
       relativeTime(issue.created),
@@ -2701,7 +2920,7 @@ export class HiveCommentsPanel extends HTMLElement {
       },
       [
         el("span", { class: "badge" }, [String(issue.number)]),
-        el("span", { class: "text" }, [issueTitle(issue)]),
+        el("span", { class: "text" }, [font ? icon("typography") : null, issueTitle(issue)]),
         el("span", { class: "meta" }, [meta]),
       ]
     );
@@ -2710,6 +2929,22 @@ export class HiveCommentsPanel extends HTMLElement {
 
 if (!customElements.get("hive-comments-panel")) {
   customElements.define("hive-comments-panel", HiveCommentsPanel);
+}
+
+// The card of the font topics on a page without an editor (the project's
+// comments page): it stays docked at the top right of the window. ``take()``
+// gives it what GET …/comments answered; it then keeps up by itself.
+export function mountTopics(projectName, { issue = null } = {}) {
+  const comments = new HiveComments({ projectIdentifier: projectName });
+  comments.withoutEditor = true;
+  comments.pendingIssue = issue;
+  comments.installOverlay(document.body);
+  // Below the page's header, at the bottom right, away from the page's own
+  // buttons; ":host" still lets clicks through around the card.
+  comments.overlayHost.style.cssText =
+    "position:fixed;inset:60px 0 0 0;z-index:20;--dock-top:auto;--dock-bottom:16px";
+  comments.startPolling();
+  return comments;
 }
 
 export function initComments(editor, pluginPath) {

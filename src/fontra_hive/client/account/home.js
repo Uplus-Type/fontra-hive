@@ -7,6 +7,7 @@
 //   #                        projects          #new             new project
 //   #project/<owner>/<name>  project settings  #orgs            organizations
 //   #project/<owner>/<name>/comments           the project's comments
+//   #project/<owner>/<name>/comments/<n>       the same, with font topic n open
 //   #org/<login>             one organization  #profile         profile
 //
 // Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
@@ -27,13 +28,24 @@ import {
   LIMITED_TITLE,
   timeAgo,
 } from "../views/hive-views.js";
-import { EDITOR_TAB_PREFIX, editorTabName, issueLink, issueTitle, relativeTime } from "../plugin/comments.js";
+import {
+  EDITOR_TAB_PREFIX,
+  editorTabName,
+  icon,
+  isFontTopic,
+  issueLink,
+  issueTitle,
+  mountTopics,
+  relativeTime,
+} from "../plugin/comments.js";
 
 const ROLES = ["observer", "reviewer", "designer", "manager", "admin"];
 const main = () => document.getElementById("main");
 let me = null;
 // A message for the next section shown (after a redirect within the page).
 let notice = null;
+// The docked card of the font topics, while the comments page is shown.
+let topicCard = null;
 
 // --- helpers -------------------------------------------------------------------------
 
@@ -291,16 +303,21 @@ async function projectsSection() {
   showCommentCounts(projects);
 }
 
-// "3 open comments" on each card, filled in once the cards are shown (one
+// "3 open comments · 1 font topic" on each card, filled in once the cards are shown (one
 // small request per project; a project without a font yet has none).
 async function showCommentCounts(projects) {
   await Promise.all(
     projects.map(async (p) => {
       try {
-        const { open } = await hiveCall(`/api/hive/projects/${encodeURIComponent(p.id)}/comments/summary`);
+        const { open, font } = await hiveCall(`/api/hive/projects/${encodeURIComponent(p.id)}/comments/summary`);
         const slot = document.querySelector(`[data-comments="${CSS.escape(p.id)}"]`);
         if (slot && open) {
-          slot.textContent = `${open} open comment${open === 1 ? "" : "s"}`;
+          const topics = font?.open || 0;
+          const onGlyphs = open - topics;
+          slot.textContent = [
+            onGlyphs ? `${onGlyphs} open comment${onGlyphs === 1 ? "" : "s"}` : null,
+            topics ? `${topics} font topic${topics === 1 ? "" : "s"}` : null,
+          ].filter(Boolean).join(" · ");
           slot.title = "See them";
           slot.onclick = (event) => {
             event.preventDefault();
@@ -1212,7 +1229,7 @@ async function remotePanel(project, defaultBranch, withFont = true) {
   return panel;
 }
 
-// --- comments on glyphs -------------------------------------------------------------
+// --- comments ---------------------------------------------------------------------
 
 async function loadComments(projectId) {
   try {
@@ -1233,11 +1250,11 @@ function commentsPanel(project, data) {
       data.issues.length
         ? `${open.length} open · ${data.issues.length - open.length} resolved` +
           (mine ? ` · ${mine} assigned to you` : "")
-        : "No comments yet. In the editor, the Comment tool pins a note to a point of a glyph.",
+        : "No comments yet. In the editor, the Comment tool pins a note to a point of a glyph; a font topic is for everything else.",
     ]),
-    data.issues.length
+    data.issues.length || data.can?.comment
       ? el("a", { href: projectHash(project.id) + "/comments" }, [
-          el("button", { class: "secondary" }, ["See all comments"]),
+          el("button", { class: "secondary" }, [data.issues.length ? "See all comments" : "Open a font topic"]),
         ])
       : null,
   ]);
@@ -1249,6 +1266,8 @@ export function filterComments(issues, f, you) {
   return issues.filter((issue) => {
     if (f.state === "open" && issue.state !== "open") return false;
     if (f.state === "resolved" && issue.state !== "resolved") return false;
+    if (f.scope === "font" && !isFontTopic(issue)) return false;
+    if (f.scope === "glyphs" && isFontTopic(issue)) return false;
     if (f.glyph && issue.glyph !== f.glyph) return false;
     if (f.branch && issue.branch !== f.branch) return false;
     if (f.label && !(issue.labels || []).includes(f.label)) return false;
@@ -1269,10 +1288,13 @@ export function filterComments(issues, f, you) {
   });
 }
 
-async function commentsSection(projectId) {
+async function commentsSection(projectId, issueNumber = null) {
+  const card = (topicCard = mountTopics(projectId, { issue: issueNumber }));
   const data = await hiveCall(`/api/hive/projects/${encodeURIComponent(projectId)}/comments`);
-  const issues = [...data.issues].sort((a, b) => b.number - a.number);
-  const f = { state: "open", glyph: "", person: "", role: "involved", label: "", branch: "", q: "" };
+  if (card !== topicCard) return; // gone to another page meanwhile
+  const newestFirst = (list) => [...list].sort((a, b) => b.number - a.number);
+  let issues = newestFirst(data.issues);
+  const f = { state: "open", scope: "", glyph: "", person: "", role: "involved", label: "", branch: "", q: "" };
   const unique = (values) => [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const select = (key, label, options) => {
     const element = el("select", { "aria-label": label, "data-filter": key }, options.map(([value, text]) =>
@@ -1299,6 +1321,7 @@ async function commentsSection(projectId) {
   });
   const filters = el("div", { class: "row comment-filters" }, [
     select("state", "State", [["open", "Open"], ["resolved", "Resolved"], ["all", "All"]]),
+    select("scope", "Glyphs or font", [["", "All topics"], ["glyphs", "Glyphs"], ["font", "Font"]]),
     select("glyph", "Glyph", [["", "Any glyph"], ...unique(issues.map((i) => i.glyph)).map((g) => [g, g])]),
     select("person", "Person", [
       ["", "Anyone"],
@@ -1321,12 +1344,15 @@ async function commentsSection(projectId) {
       ...shown.map((issue) => {
         const first = issue.messages[0] || {};
         const replies = issue.messages.length - 1;
-        return el("tr", { "data-number": issue.number, class: issue.state }, [
+        const font = isFontTopic(issue);
+        return el("tr", { "data-number": issue.number, class: issue.state + (font ? " font-topic" : "") }, [
           el("td", { class: "number" }, [`#${issue.number}`]),
-          el("td", { class: "glyph", title: [issue.glyph, issue.source?.name].filter(Boolean).join(" · ") }, [
-            el("b", {}, [issue.glyph]),
-            el("small", {}, [issue.source?.name || ""]),
-          ]),
+          font
+            ? el("td", { class: "glyph font", title: "About the font" }, [icon("typography"), el("small", {}, ["Font"])])
+            : el("td", { class: "glyph", title: [issue.glyph, issue.source?.name].filter(Boolean).join(" · ") }, [
+                el("b", {}, [issue.glyph]),
+                el("small", {}, [issue.source?.name || ""]),
+              ]),
           el("td", { class: "text" }, [
             el("span", { title: issue.title ? first.text || "" : "" }, [issueTitle(issue)]),
             el("small", {}, [
@@ -1342,13 +1368,15 @@ async function commentsSection(projectId) {
           ]),
           el("td", { class: "labels" }, (issue.labels || []).map((l) => el("span", { class: "label-chip" }, [l]))),
           el("td", { class: "open" }, [
-            el("a", {
-              href: issueLink(projectId, issue),
-              target: editorTabName(projectId), // one editor tab per project, reused
-              title: `Open ${issue.glyph} in the editor, with this comment`,
-            }, [
-              el("button", { class: "secondary" }, ["Open glyph"]),
-            ]),
+            font
+              ? el("button", { class: "secondary open-topic", onclick: () => card.open(issue.number) }, ["Open topic"])
+              : el("a", {
+                  href: issueLink(projectId, issue),
+                  target: editorTabName(projectId), // one editor tab per project, reused
+                  title: `Open ${issue.glyph} in the editor, with this comment`,
+                }, [
+                  el("button", { class: "secondary" }, ["Open glyph"]),
+                ]),
           ]),
         ]);
       })
@@ -1357,11 +1385,27 @@ async function commentsSection(projectId) {
   main().replaceChildren(
     el("h2", {}, [
       el("span", { class: "grow" }, [`${projectId} — comments`]),
+      data.can?.comment
+        ? el("button", {
+            class: "new-topic",
+            title: "Open a topic about the font: font info, naming, a decision…",
+            onclick: () => card.startFontTopic(),
+          }, ["New topic"])
+        : null,
       el("a", { href: projectHash(projectId) }, [el("button", { class: "secondary" }, ["Back to the project"])]),
     ]),
     el("div", { class: "panel" }, [filters, count, table]),
   );
   render();
+  // The list follows the card (a topic opened here, a reply from elsewhere).
+  let seen = card.dataVersion + 1;
+  card.listeners.add(() => {
+    if (card.dataVersion === seen) return;
+    seen = card.dataVersion;
+    issues = newestFirst(card.issues);
+    render();
+  });
+  card.take(data);
 }
 
 // Whether the project has its font yet (a repository on the Fontra server).
@@ -1799,6 +1843,9 @@ export function parseHash(hash) {
       if (parts.length === 4 && parts[3] === "comments") {
         return { section: "projects", view: "comments", project: `${parts[1]}/${parts[2]}` };
       }
+      if (parts.length === 5 && parts[3] === "comments" && /^[1-9]\d*$/.test(parts[4])) {
+        return { section: "projects", view: "comments", project: `${parts[1]}/${parts[2]}`, issue: Number(parts[4]) };
+      }
       return parts.length === 3 ? { section: "projects", view: "project", project: `${parts[1]}/${parts[2]}` } : { section: "projects" };
     case "orgs":
       return { section: "orgs" };
@@ -1861,6 +1908,8 @@ function termsSection() {
 
 async function route() {
   const where = parseHash(location.hash);
+  topicCard?.dispose();
+  topicCard = null;
   if (me?.termsToAccept) {
     termsSection();
     return;
@@ -1871,7 +1920,7 @@ async function route() {
   try {
     if (where.view === "new") await newProjectSection();
     else if (where.view === "project") await projectSection(where.project);
-    else if (where.view === "comments") await commentsSection(where.project);
+    else if (where.view === "comments") await commentsSection(where.project, where.issue);
     else if (where.view === "org") await orgSection(where.login);
     else if (where.section === "orgs") await orgsSection();
     else if (where.section === "profile") await profileSection();

@@ -82,9 +82,9 @@ async ({ you, can, issues }) => {
     const person = { username: server.you.username, name: server.you.name };
     const now = "2026-09-30T10:00:00Z";
     if (method === "POST" && path === "") {
-      const issue = { number: server.issues.length + 1, glyph: body.glyph,
-        source: body.source, point: body.point, branch: body.branch, commit: "c",
-        state: "open", author: person, created: now, resolved: null,
+      const issue = { number: server.issues.length + 1, glyph: body.glyph ?? null,
+        source: body.source ?? null, point: body.point ?? null, title: body.title ?? null,
+        branch: body.branch, commit: "c", state: "open", author: person, created: now, resolved: null,
         assignee: null, labels: [],
         messages: [{ id: 1, author: person, created: now, edited: null, text: body.text,
                      ...(body.sketch ? { sketch: body.sketch } : {}) }] };
@@ -1078,3 +1078,243 @@ def test_editing_a_message_keeps_its_strokes_unless_redrawn(page):
         "server.requests.filter(r => r.method === 'PATCH').length === 2"
     )
     assert requests(p, "PATCH")[-1]["body"]["sketch"] is None
+
+
+# --- step D: topics about the font ---------------------------------------------------
+
+
+def font_topic(number, author=BOB, state="open", title=None):
+    return {
+        **topic(number, author=author, state=state),
+        "glyph": None,
+        "source": None,
+        "point": None,
+        "title": title,
+    }
+
+
+def test_a_new_font_topic_from_the_panel(page):
+    p = page(issues=[topic(1)])
+    assert not p.evaluate("panel.newTopicButton.hidden")
+    p.evaluate("panel.newTopicButton.click()")
+    p.evaluate("frame()")
+    assert p.evaluate("card().classList.contains('docked')")
+    assert "New topic" in p.evaluate("cardText()")
+    assert p.evaluate("card().querySelector('.pen')") is None
+    # Docked at the top right of the canvas, whatever its size.
+    box = """(() => {
+        const c = card().getBoundingClientRect();
+        const h = card().parentNode.host.getBoundingClientRect();
+        return [c.top - h.top, h.right - c.right];
+    })()"""
+    assert p.evaluate(box) == [16, 16]
+    p.evaluate("document.body.firstChild.style.width = '700px'")
+    assert p.evaluate(box) == [16, 16]
+    p.evaluate("document.body.firstChild.style.width = '300px'")
+    assert p.evaluate("card().getBoundingClientRect().left") >= 0
+    p.evaluate("document.body.firstChild.style.width = '900px'")
+    p.evaluate(
+        """
+        const title = card().querySelector('.title-input');
+        title.value = ' Family name ';
+        title.dispatchEvent(new Event('input'));
+        textarea('draft').value = 'Is it final?';
+        textarea('draft').dispatchEvent(new Event('input'));
+        """
+    )
+    # Changing glyph does not cancel it: it is about no glyph.
+    p.evaluate(
+        "editor.sceneController.sceneSettings.selectedGlyphName = 'O';"
+        "fireKey('selectedGlyphName')"
+    )
+    assert p.evaluate("comments.draft.text") == "Is it final?"
+    p.evaluate("card().querySelector('button.primary').click()")
+    p.wait_for_function("comments.openNumber === 2")
+    sent = requests(p, "POST")[-1]
+    assert sent["body"] == {"title": "Family name", "text": "Is it final?"}
+    assert p.evaluate("comments.issue(2).glyph") is None
+    p.evaluate("frame()")
+    assert p.evaluate("card().classList.contains('docked')")
+    assert "Family name" in p.evaluate("cardText()")
+    assert p.evaluate("window.errors") == []
+
+
+def test_a_reviewer_may_open_one_an_observer_may_not(page):
+    p = page(can=REVIEWER)
+    assert not p.evaluate("panel.newTopicButton.hidden")
+    p = page(can={"comment": False})
+    assert p.evaluate("panel.newTopicButton.hidden")
+    p.evaluate("comments.startFontTopic()")
+    assert p.evaluate("comments.draft") is None
+
+
+def test_the_card_of_a_font_topic(page):
+    p = page(issues=[font_topic(1, author=ANA, title="Name")])
+    p.evaluate("comments.show(comments.issue(1))")
+    p.evaluate("frame()")
+    text = p.evaluate("cardText()")
+    assert "#1" in text and "Font" in text and "Name" in text
+    assert "undefined" not in text and "null" not in text
+    assert "Resolve" in text and "Assigned to" in text
+    # No place: no version of a glyph to show, no pen, no pin to draw.
+    assert "Written on version" not in text
+    assert p.evaluate("card().querySelector('.pen')") is None
+    assert p.evaluate("window.drawn().glyphs") == []
+    assert p.evaluate("window.wentToSource === undefined")
+    # Same thread as a post-it: a reply, a resolution.
+    p.evaluate(
+        "textarea('reply').value = 'Yes';"
+        "textarea('reply').dispatchEvent(new Event('input'))"
+    )
+    p.evaluate("card().querySelector('.compose button.primary').click()")
+    p.wait_for_function("comments.issue(1).messages.length === 2")
+    p.evaluate(
+        "[...card().querySelectorAll('button')]"
+        ".find(b => b.textContent === 'Resolve').click()"
+    )
+    p.wait_for_function("comments.issue(1).state === 'resolved'")
+    p.evaluate("frame()")
+    assert p.evaluate("card().classList.contains('resolved')")
+    assert p.evaluate("window.errors") == []
+
+
+def test_font_labels_are_suggested_on_font_topics(page):
+    p = page(issues=[font_topic(1), {**topic(2), "labels": ["curve", "Naming"]}])
+    labels = "comments.suggestedLabels(comments.issue(%d))"
+    assert p.evaluate(labels % 2) == ["curve", "Naming"]
+    # "naming" is known already, with its own spelling.
+    assert p.evaluate(labels % 1) == ["curve", "Naming", "font info", "production"]
+
+
+def test_font_topics_in_the_panel(page):
+    p = page(issues=[topic(1), font_topic(2), font_topic(3, state="resolved")])
+    list_ = (
+        "[...panel.listElement.querySelectorAll('.issue')].map(r => +r.dataset.number)"
+    )
+    # A glyph selected: its topics, and the font's folded away.
+    p.evaluate("frame()")
+    assert p.evaluate(list_) == [1, 2, 3]
+    assert p.evaluate("panel.listElement.querySelector('details.font-topics').open") is False
+    assert "Font (2)" in p.evaluate("panel.listElement.textContent")
+    # It stays as it was left, through a refresh.
+    p.evaluate("panel.listElement.querySelector('details.font-topics').open = true")
+    p.evaluate("panel.render()")
+    assert p.evaluate("panel.listElement.querySelector('details.font-topics').open") is True
+    p.evaluate("panel.listElement.querySelector('details.font-topics').open = false")
+    # A click opens the docked card, and the topic stays in view.
+    p.evaluate("panel.listElement.querySelector('.issue[data-number=\"2\"]').click()")
+    p.wait_for_function("comments.openNumber === 2")
+    p.evaluate("panel.render()")
+    assert p.evaluate("panel.listElement.querySelector('details.font-topics').open") is True
+    p.evaluate("comments.close()")
+    # No glyph selected: all together, marked.
+    p.evaluate("editor.sceneController.sceneSettings.selectedGlyphName = null; panel.render()")
+    assert p.evaluate("panel.listElement.querySelector('details.font-topics')") is None
+    assert sorted(p.evaluate(list_)) == [1, 2, 3]
+    assert "Font" in p.evaluate(
+        "panel.listElement.querySelector('.issue[data-number=\"2\"] .meta').textContent"
+    )
+    assert p.evaluate(
+        "panel.listElement.querySelector('.issue[data-number=\"2\"] .icon-typography')"
+    )
+    assert p.evaluate("window.errors") == []
+
+
+def test_a_font_topic_has_no_pin_and_leaves_the_canvas_alone(page):
+    p = page(issues=[font_topic(1)])
+    assert p.evaluate("window.drawn().glyphs") == []
+    assert p.evaluate("comments.pinAt({x: 300, y: 184})") is None
+    # While one is written, the Comment tool does not start another comment.
+    p.evaluate("comments.startFontTopic(); comments.draft.title = 'Kept'")
+    p.evaluate("useTool(120, 450)")
+    assert p.evaluate("comments.draft.glyph") is None
+    assert p.evaluate("comments.draft.title") == "Kept"
+    # A click elsewhere keeps what was typed, even a title alone.
+    outside = "document.body.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}))"
+    p.evaluate(outside)
+    assert p.evaluate("comments.draft.title") == "Kept"
+    p.evaluate("comments.cancelDraft(); comments.startFontTopic()")
+    p.evaluate(outside)
+    assert p.evaluate("comments.draft") is None
+
+
+def test_a_discarded_comment_does_not_follow_into_a_font_topic(page):
+    p = page()
+    p.evaluate("useTool(120, 450)")
+    p.evaluate("frame()")
+    p.evaluate(
+        """
+        textarea('draft').value = 'About the stem of H';
+        textarea('draft').dispatchEvent(new Event('input'));
+        window.confirm = () => true;
+        comments.startFontTopic();
+        """
+    )
+    p.evaluate("frame()")
+    assert p.evaluate("textarea('draft').value") == ""
+    assert p.evaluate("comments.draft.text") == ""
+    assert p.evaluate("comments.draft.glyph") is None
+
+
+def test_a_title_being_written_is_not_lost_without_asking(page):
+    p = page(issues=[font_topic(1)])
+    p.evaluate("comments.startFontTopic(); comments.draft.title = 'Kept'")
+    p.evaluate("window.asked = 0; window.confirm = () => (window.asked++, false); 0")
+    p.evaluate("comments.open(1)")
+    assert p.evaluate("window.asked") == 1
+    assert p.evaluate("comments.draft.title") == "Kept"
+    assert p.evaluate("comments.openNumber") is None
+
+
+def test_the_hint_of_an_observer_on_a_glyph_without_comments(page):
+    p = page(can={"comment": False}, issues=[font_topic(1)])
+    p.evaluate("frame()")
+    assert p.evaluate("panel.hintElement.textContent") == "No comments on this glyph."
+    assert "Font (1)" in p.evaluate("panel.listElement.textContent")
+
+
+def test_links_to_a_font_topic(page):
+    p = page(issues=[font_topic(7)])
+    link = "module.issueLink(%r, comments.issue(7), 'https://fontrahive.com')"
+    assert (
+        p.evaluate(link % "uplustype/My font")
+        == "https://fontrahive.com/#project/uplustype/My%20font/comments/7"
+    )
+    # Without accounts there is no such page: the editor opens it too.
+    assert p.evaluate(link % "Mutator") == (
+        "https://fontrahive.com/editor.html?project=Mutator&hive-issue=7"
+    )
+
+
+def test_a_link_opens_a_font_topic_without_a_glyph(page):
+    p = page(issues=[font_topic(7)])
+    p.evaluate(
+        """
+        sessionStorage.setItem('hive.openIssue',
+          JSON.stringify({project: 'Mutator', number: '7'}));
+        comments.pendingIssue = comments.takePendingIssue();
+        editor.sceneController.sceneSettings.positionedLines = [{glyphs: []}];
+        comments.openPendingIssue();
+        """
+    )
+    p.wait_for_function("comments.openNumber === 7")
+    p.evaluate("frame()")
+    assert p.evaluate("card().classList.contains('docked')")
+    assert p.evaluate("comments.pendingIssue") is None
+
+
+def test_a_deleted_font_topic_is_named_in_the_panel(page):
+    p = page()
+    p.evaluate(
+        """
+        server.deleted = [{number: 1, deletedBy: 'Bob', deletedAt: 1790000000,
+          issue: {glyph: null, source: null, point: null, messages: [{text: 'Gone'}]}}];
+        editor.sceneController.sceneSettings.selectedGlyphName = null;
+        comments.dataVersion++;
+        panel.render();
+        """
+    )
+    p.wait_for_function("panel.listElement.querySelector('.deleted-issue')")
+    assert "Font" in p.evaluate(
+        "panel.listElement.querySelector('.deleted-issue .meta').textContent"
+    )

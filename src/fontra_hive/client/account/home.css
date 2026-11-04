@@ -150,6 +150,8 @@ table.comments td.labels { width: 1%; }
 table.comments td.open { width: 1%; white-space: nowrap; }
 table.comments td.open button { flex: none; white-space: nowrap; }
 table.comments tr.resolved td { opacity: 0.65; }
+table.comments td.glyph.font .svg-icon { display: inline-flex; width: 1.1em; height: 1.1em; vertical-align: -0.15em; }
+table.comments td.glyph.font .svg-icon svg { width: 100%; height: 100%; }
 .label-chip { display: inline-block; padding: 0 0.6em; margin: 0.1em; border-radius: 0.8em; background: #e9b02a33; font-size: 0.85em; }
 .comment-count { font-size: 0.85em; opacity: 0.75; cursor: pointer; }
 .comment-count:empty { display: none; }
