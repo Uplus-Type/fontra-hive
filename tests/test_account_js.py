@@ -718,10 +718,10 @@ def test_project_settings_in_the_user_menu(browser_and_url):
     ) == "/#project/u%2Btype/My%20Font"
     assert page.errors == []
     page.close()
-    # Without administer (a manager): no settings in the menu.
-    access = {"role": "manager", "capabilities": ["edit", "invite", "read"]}
+    # Any role: everyone has the project's page, with what their role allows.
+    access = {"role": "reviewer", "capabilities": ["comment", "read"]}
     page = open_user_menu(browser_and_url, access)
-    assert "Project settings" not in page.inner_text(".hive-menu")
+    assert "Project settings" in page.inner_text(".hive-menu")
     page.close()
 
 

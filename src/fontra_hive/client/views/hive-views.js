@@ -910,14 +910,10 @@ export class HiveViews {
     this.showMenu(this.chip, rect);
   }
 
-  // The project's settings are a section of Hive's home page (hive-api only),
-  // for those who may administer the project.
+  // The project's page on Hive's home page (hive-api only). Everyone has it
+  // there, and sees what their role allows: one click from any view.
   mayOpenSettings() {
-    return (
-      !!this.project &&
-      this.source === "hive-api" &&
-      !!this.access?.capabilities?.includes("administer")
-    );
+    return !!this.project && this.source === "hive-api";
   }
 
   showMenu(owner, rect) {
