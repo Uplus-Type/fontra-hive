@@ -716,13 +716,18 @@ class DevHiveProjectManager(CommentRoutesMixin):
                     )
                 except asyncio.TimeoutError:
                     process.kill()
-                    raise web.HTTPGatewayTimeout(text="The export took too long.")
+                    raise web.HTTPGatewayTimeout(text=export.EXPORT_TOO_LONG)
             if process.returncode != 0:
-                logger.error(
-                    "export of %s as %s failed: %s", name, format, err.decode()[-2000:]
+                log = err.decode(errors="replace")
+                for path, label in ((work, "<work>"), (repoPath.parent, "<repos>")):
+                    log = log.replace(str(path), label)
+                logger.warning(
+                    "export of %s as %s failed: %s", name, format, log[-2000:]
                 )
-                lastLine = (err.decode().strip().splitlines() or ["unknown error"])[-1]
-                raise web.HTTPInternalServerError(text=f"The export failed: {lastLine}")
+                message = export.failure_message(process.returncode)
+                if message == export.FEATURES_REFUSED:
+                    raise web.HTTPUnprocessableEntity(text=message)
+                raise web.HTTPInternalServerError(text=message)
             result = pathlib.Path(out.decode().strip().splitlines()[-1])
             response = web.StreamResponse(
                 headers={
