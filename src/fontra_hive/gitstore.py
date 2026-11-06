@@ -505,6 +505,16 @@ class GitRepoStore:
             result[_s(entry.path)] = _s(entry.sha)
         return result
 
+    def list_tree_modes(self, commit_sha: str) -> dict[str, tuple[int, str]]:
+        """Like :meth:`list_tree`, with each entry's mode: ``path -> (mode,
+        sha)``, for callers that must tell links from files."""
+        store = self.repo.object_store
+        tree = self.repo[self.repo[_b(commit_sha)].tree]
+        return {
+            _s(entry.path): (entry.mode, _s(entry.sha))
+            for entry in iter_tree_contents(store, tree.id)
+        }
+
     def read_blob(self, blob_sha: str) -> bytes:
         return self.repo[_b(blob_sha)].data
 

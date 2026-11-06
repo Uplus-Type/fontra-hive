@@ -321,6 +321,31 @@ class HiveApi:
             raise HiveApiUnavailable(f"/api/internal/import: HTTP {status}")
         return None
 
+    # --- recipe runs ----------------------------------------------------------
+
+    async def recipeRunOpen(self, opening: dict) -> tuple[int, dict | str]:
+        """May this run take place? (status, answer): 201 with the run's id
+        and any lower limits, or why not."""
+        return await self._call("POST", "/api/internal/recipe-runs", json=opening)
+
+    async def recipeRunClose(self, run: str, record: dict) -> None:
+        status, _ = await self._call(
+            "POST", f"/api/internal/recipe-runs/{run}/close", json=record
+        )
+        if status != 200:
+            raise HiveApiUnavailable(f"/api/internal/recipe-runs: HTTP {status}")
+
+    async def recipeRunArtifact(
+        self, token: str | None, run: str, name: str
+    ) -> dict | None:
+        """An artifact of a run, if the token's user may read the recipe."""
+        uid = uid_from_token(token)
+        if uid is None:
+            return None
+        return await self._get(
+            f"/api/internal/recipe-runs/{run}/artifact", user=uid, name=name
+        )
+
     async def remote(self, project: str) -> dict | None:
         """A project's remote repository with credentials to use now (None:
         no remote). Raises :class:`RemoteNotUsable` when hive-api knows it

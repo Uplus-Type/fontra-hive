@@ -43,6 +43,7 @@ from fontra.core.fonthandler import FontHandler
 from fontra.core.protocols import ProjectManager
 
 from . import merge as merging
+from . import runner
 from .access import ROLES, Access, DevDirectory, token_for, username_from_token
 from .backend_git import GitFontraBackend
 from .commentroutes import CommentRoutesMixin
@@ -61,6 +62,7 @@ from .gitstore import (
 )
 
 from .fontracompat import guard_feature_reading
+from .recipe import projectResolverFor
 
 # Fontra reading OpenType features with an outside program (sr-aef): best
 # effort, in Try (no program in the browser) and on the server.
@@ -647,6 +649,10 @@ class DevHiveProjectManager(CommentRoutesMixin):
             ),
             web.get("/api/hive/projects/{name}/export", self.exportHandler),
             web.get("/api/hive/export-formats", self.exportFormatsHandler),
+            web.get(
+                "/api/hive/recipe-runs/{run}/artifacts/{artifact}",
+                self.recipeArtifactHandler,
+            ),
             *self.commentRoutes(),
         ]
 
@@ -744,6 +750,31 @@ class DevHiveProjectManager(CommentRoutesMixin):
             return response
         finally:
             shutil.rmtree(work, ignore_errors=True)
+
+    async def recipeArtifactHandler(self, request: web.Request) -> web.StreamResponse:
+        """A file of a recipe run, for whoever may read the recipe."""
+        token = await self.authorize(request)
+        run = request.match_info["run"]
+        artifact = await self.recipeRuns.artifact(
+            run,
+            request.match_info["artifact"],
+            token,
+            projectResolverFor(self, token),
+        )
+        if artifact is None:
+            raise web.HTTPNotFound()
+        path = self.runsRoot / run / pathlib.PurePath(artifact["name"]).name
+        if not path.is_file():
+            raise web.HTTPGone(text="This file is no longer kept.")
+        return await _sendFile(request, path)
+
+    @property
+    def runsRoot(self) -> pathlib.Path:
+        return self.rootPath / runner.RUNS_FOLDER
+
+    @property
+    def recipeRuns(self) -> runner.RunRegistry:
+        return runner.LocalRunRegistry(self.runsRoot)
 
     async def faviconHandler(self, request: web.Request) -> web.Response:
         """/favicon.ico, which browsers ask for on every site."""
@@ -1687,6 +1718,27 @@ _exportSlot = asyncio.Semaphore(1)  # one build at a time on the server
 def _safeStem(name: str) -> str:
     stem = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip(".-")
     return stem or "font"
+
+
+async def _sendFile(request: web.Request, path: pathlib.Path) -> web.StreamResponse:
+    response = web.StreamResponse(
+        headers={
+            "Content-Type": (
+                "application/zip"
+                if path.suffix == ".zip"
+                else "application/octet-stream"
+            ),
+            "Content-Disposition": f'attachment; filename="{path.name}"',
+            "Content-Length": str(path.stat().st_size),
+            "Cache-Control": "no-store",
+        }
+    )
+    await response.prepare(request)
+    with path.open("rb") as file:
+        while chunk := file.read(1 << 20):
+            await response.write(chunk)
+    await response.write_eof()
+    return response
 
 
 class HiveExportManager:

@@ -46,6 +46,7 @@ from .hiveapi import (
     ProjectAccess,
     token_for_uid,
 )
+from .runner import HiveApiRunRegistry
 from .remotesync import NoRemote, RemoteNotUsable, RemoteSync
 from .projectmanager import DevHiveProjectManager, _htmlResponse, _sameOrigin
 
@@ -226,6 +227,10 @@ class HiveProjectManager(DevHiveProjectManager):
         await self.api.aclose()
         if self._proxySession is not None:
             await self._proxySession.close()
+
+    @property
+    def recipeRuns(self) -> HiveApiRunRegistry:
+        return HiveApiRunRegistry(self.api)
 
     # --- identity and roles ---------------------------------------------------
 
