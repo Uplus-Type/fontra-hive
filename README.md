@@ -100,7 +100,7 @@ pip install -e ".[dev]"
 fontra-hive init repos/MyFont.git path/to/MyFont.fontra
 
 # serve it
-fontra hive-dev repos --launch
+fontra --launch hive-dev repos
 # then open  http://localhost:8000/  → project "MyFont"
 
 # meanwhile, in another terminal
