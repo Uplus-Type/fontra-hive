@@ -57,19 +57,26 @@ class GitFontraBackend(FontraBackend):
         commit_delay: float = 2.0,
         poll_interval: float = 2.0,
         read_only: bool = False,
+        commit: str | None = None,
     ):
+        """``commit``: read that commit instead of the branch head; the
+        backend is then read-only and never follows the branch."""
         self.store = store
         self.branch = branch
         self.default_author = author
         self.commit_delay = commit_delay
         self.poll_interval = poll_interval
-        self.read_only = read_only
+        self.fixed_commit = commit
+        self.read_only = read_only or commit is not None
 
-        head = store.head(branch)
+        if commit is not None:
+            head, label = commit, f"{store.path.name}@{commit[:10]}"
+        else:
+            head, label = store.head(branch), f"{store.path.name}@{branch}"
         if head is None:
             raise FileNotFoundError(f"branch {branch!r} does not exist in {store.path}")
-        self.tree = GitTree(store, head, label=f"{store.path.name}@{branch}")
-        self.tree.read_only = read_only
+        self.tree = GitTree(store, head, label=label)
+        self.tree.read_only = self.read_only
         self._commit_handle: asyncio.TimerHandle | None = None
         self._pending_authors: dict[str, Signature] = {}
         self._poll_task: asyncio.Task | None = None
@@ -275,6 +282,8 @@ class GitFontraBackend(FontraBackend):
         """Compare the branch head with what we hold; reload what changed and
         notify the FontHandler. Returns the reload pattern (None = reload all)
         or an empty dict when nothing changed."""
+        if self.fixed_commit is not None:
+            return {}  # a fixed commit never changes
         head = self.store.head(self.branch)
         if head == self.tree.commit_sha or head is None:
             return {}

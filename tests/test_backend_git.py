@@ -270,3 +270,28 @@ def test_glyphs_using_a_glyph_follow_external_changes(tmp_path, fixture_fontra):
         await backend.aclose()
 
     run(go())
+
+
+def test_fixed_commit_is_read_only_and_does_not_follow_the_branch(
+    tmp_path, fixture_fontra
+):
+    async def go():
+        store, first, backend = make(tmp_path, fixture_fontra)
+        glyph = await edited_glyph(backend)
+        await backend.putGlyph("A", glyph, [0x41, 0x61])
+        backend.flush()
+        await backend.aclose()
+        assert store.head("main") != first
+
+        fixed = GitFontraBackend(store, "main", commit=first)
+        assert fixed.read_only
+        original = await fixed.getGlyph("A")
+        assert original != glyph
+        assert await fixed.check_external_changes() == {}
+        assert fixed.head == first
+        with pytest.raises(PermissionError):
+            await fixed.putGlyph("A", glyph, [0x41])
+            fixed.flush()
+        await fixed.aclose()
+
+    run(go())
