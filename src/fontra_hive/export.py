@@ -6,20 +6,20 @@ Sources are always available: the ``.fontra`` package as stored in git, or a
 builds them (the ``compile-fontmake`` workflow of fontra-compile), only when
 fontra-compile and fontmake are installed on the server.
 
-A build runs in its own process (``python -m fontra_hive.export``): a large
-font can take minutes and a lot of memory, and must not stall the server.
+A build runs in its own process, the recipe runner's: a large font can take
+minutes and a lot of memory, and must not stall the server. The Download
+panel is the built-in recipe "download" (:func:`fontra_hive.runner.downloadRequest`),
+and the ``hive-artifact`` action builds with :func:`build`.
 
 Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
 """
 
 from __future__ import annotations
 
-import asyncio
 import importlib.util
 import pathlib
 import re
 import shutil
-import sys
 import zipfile
 from contextlib import aclosing
 
@@ -136,14 +136,3 @@ async def build(
     else:
         raise ValueError(f"unknown format {format!r}")
     return result
-
-
-def main(argv: list[str]) -> int:
-    source, work, stem, format = argv
-    result = asyncio.run(build(pathlib.Path(source), pathlib.Path(work), stem, format))
-    print(result)
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))

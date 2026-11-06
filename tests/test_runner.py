@@ -850,3 +850,90 @@ def test_a_registry_that_fails_at_the_end_loses_nothing(hive):
         )
     )
     assert result.succeeded and (result.directory / "Latin.fontra.zip").exists()
+
+
+# --- the route -------------------------------------------------------------------
+
+
+def callExport(hive, monkeypatch, project="Latin", **query):
+    from fontra_hive import projectmanager
+
+    sent = {}
+
+    async def sendFile(request, path):
+        sent.update(name=path.name, data=path.read_bytes())
+        return "sent"
+
+    async def authorize(request):
+        return token_for("jeremie")
+
+    monkeypatch.setattr(projectmanager, "_sendFile", sendFile)
+    monkeypatch.setattr(hive.manager, "authorize", authorize)
+    request = types.SimpleNamespace(match_info={"name": project}, query=query)
+    return run(hive.manager.exportHandler(request)), sent
+
+
+def test_the_route_sends_the_file_and_keeps_nothing(hive, monkeypatch):
+    response, sent = callExport(hive, monkeypatch, format="fontra")
+    assert response == "sent"
+    assert sent["name"] == "Latin.fontra.zip"
+    assert sent["data"][:2] == b"PK"
+    leftovers = [p for p in hive.runs.iterdir() if p.is_dir()]
+    assert leftovers == []  # no working folder, no artifact
+    records = [p for p in hive.runs.iterdir() if p.suffix == ".json"]
+    assert len(records) == 1
+    record = json.loads(records[0].read_text())
+    assert record["builtin"] == "download" and record["state"] == "succeeded"
+    assert record["inputs"][0]["project"] == "Latin"
+    assert record["artifacts"][0]["name"] == "Latin.fontra.zip"
+
+
+def test_the_route_names_a_branch_as_before(hive, monkeypatch):
+    store = GitRepoStore.open(hive.root / "Latin.git")
+    store.create_branch("light/one")
+    store.close()
+    _, sent = callExport(hive, monkeypatch, format="fontra", branch="light/one")
+    assert sent["name"] == "Latin-light-one.fontra.zip"
+
+
+def test_the_route_refuses_as_before(hive, monkeypatch):
+    from aiohttp import web
+
+    with pytest.raises(web.HTTPBadRequest):
+        callExport(hive, monkeypatch, format="exe")
+    with pytest.raises(web.HTTPNotFound):
+        callExport(hive, monkeypatch, format="fontra", branch="nope")
+
+
+def test_the_route_says_when_it_takes_too_long(hive, monkeypatch):
+    from aiohttp import web
+
+    from fontra_hive import projectmanager
+
+    monkeypatch.setattr(
+        projectmanager.runner, "runRecipe", _withLimits(runner.runRecipe, 0.01)
+    )
+    with pytest.raises(web.HTTPGatewayTimeout):
+        callExport(hive, monkeypatch, format="designspace")
+
+
+def _withLimits(runRecipe, seconds):
+    async def limited(*args, **kwargs):
+        return await runRecipe(
+            *args, limits=runner.RunLimits(timeSeconds=seconds), **kwargs
+        )
+
+    return limited
+
+
+def test_the_route_passes_a_refusal_on(hive, monkeypatch):
+    class Registry(runner.LocalRunRegistry):
+        async def open(self, request):
+            raise runner.RunRefused(429, "Too many downloads.")
+
+    monkeypatch.setattr(
+        type(hive.manager), "recipeRuns", property(lambda self: Registry(self.runsRoot))
+    )
+    response, sent = callExport(hive, monkeypatch, format="fontra")
+    assert (response.status, response.text) == (429, "Too many downloads.")
+    assert sent == {}

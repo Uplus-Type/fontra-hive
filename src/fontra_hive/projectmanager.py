@@ -674,12 +674,12 @@ class DevHiveProjectManager(CommentRoutesMixin):
         """Download a branch of a project: its sources (.fontra or
         .designspace + UFOs, zipped) or, when the server can build them,
         fonts. Needs the "export" capability (managers and admins). Edits not
-        yet committed are committed first; the build runs in its own process
-        (see export.py), one at a time."""
+        yet committed are committed first; the build is the built-in recipe
+        "download", run by the recipe runner, one at a time."""
         from . import export
 
         name = request.match_info["name"]
-        repoPath, _ = await self._project(request, name, "export")
+        repoPath, access = await self._project(request, name, "export")
         format = request.query.get("format", "fontra")
         if format not in export.supported_formats():
             raise web.HTTPBadRequest(text=f"Cannot export as {format!r} here.")
@@ -690,66 +690,44 @@ class DevHiveProjectManager(CommentRoutesMixin):
         store = GitRepoStore.open(repoPath)
         try:
             head = store.head(branch)
-            if head is None:
-                raise web.HTTPNotFound(text=f"No branch {branch!r}.")
-            projectName = name.split("/")[-1]
-            stem = _safeStem(
-                projectName + ("" if branch == DEFAULT_BRANCH else f"-{branch}")
-            )
-            work = pathlib.Path(
-                tempfile.mkdtemp(dir=repoPath.parent, prefix=".export-")
-            )
-            source = work / "source" / f"{stem}.fontra"
-            store.export(head, source)
         finally:
             store.close()
+        if head is None:
+            raise web.HTTPNotFound(text=f"No branch {branch!r}.")
+        stem = export.safe_stem(
+            name.split("/")[-1] + ("" if branch == DEFAULT_BRANCH else f"-{branch}")
+        )
+        token = await self.authorize(request)
         try:
-            async with _exportSlot:
-                process = await asyncio.create_subprocess_exec(
-                    sys.executable,
-                    "-m",
-                    "fontra_hive.export",
-                    str(source),
-                    str(work),
+            result = await runner.runRecipe(
+                runner.downloadRequest(
+                    name,
+                    head,
                     stem,
                     format,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                try:
-                    out, err = await asyncio.wait_for(
-                        process.communicate(), timeout=EXPORT_TIMEOUT
-                    )
-                except asyncio.TimeoutError:
-                    process.kill()
-                    raise web.HTTPGatewayTimeout(text="The export took too long.")
-            if process.returncode != 0:
-                logger.error(
-                    "export of %s as %s failed: %s", name, format, err.decode()[-2000:]
-                )
-                lastLine = (err.decode().strip().splitlines() or ["unknown error"])[-1]
-                raise web.HTTPInternalServerError(text=f"The export failed: {lastLine}")
-            result = pathlib.Path(out.decode().strip().splitlines()[-1])
-            response = web.StreamResponse(
-                headers={
-                    "Content-Type": (
-                        "application/zip"
-                        if result.suffix == ".zip"
-                        else "application/octet-stream"
-                    ),
-                    "Content-Disposition": f'attachment; filename="{result.name}"',
-                    "Content-Length": str(result.stat().st_size),
-                    "Cache-Control": "no-store",
-                }
+                    user=access.user.uid if access is not None else "",
+                ),
+                resolver=projectResolverFor(self, token),
+                registry=self.recipeRuns,
+                runsRoot=self.runsRoot,
             )
-            await response.prepare(request)
-            with result.open("rb") as file:
-                while chunk := file.read(1 << 20):
-                    await response.write(chunk)
-            await response.write_eof()
-            return response
+        except runner.RunRefused as error:
+            return web.Response(status=error.status, text=error.text)
+        try:
+            if result.state == runner.TIMEOUT:
+                raise web.HTTPGatewayTimeout(text="The export took too long.")
+            if not result.succeeded:
+                logger.error(
+                    "export of %s as %s failed: %s", name, format, result.log[-2000:]
+                )
+                raise web.HTTPInternalServerError(
+                    text=f"The export failed: {result.message}"
+                )
+            return await _sendFile(
+                request, result.directory / result.artifacts[0]["name"]
+            )
         finally:
-            shutil.rmtree(work, ignore_errors=True)
+            result.discard()
 
     async def recipeArtifactHandler(self, request: web.Request) -> web.StreamResponse:
         """A file of a recipe run, for whoever may read the recipe."""
@@ -1709,15 +1687,6 @@ def _devLoginPage(directory: DevDirectory, ref: str = "/") -> str:
     <input type="hidden" name="ref" value="{escape(_safeRef(ref))}">{buttons}</form>
 </body></html>
 """
-
-
-EXPORT_TIMEOUT = 30 * 60  # seconds: a large CJK font can take long to build
-_exportSlot = asyncio.Semaphore(1)  # one build at a time on the server
-
-
-def _safeStem(name: str) -> str:
-    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip(".-")
-    return stem or "font"
 
 
 async def _sendFile(request: web.Request, path: pathlib.Path) -> web.StreamResponse:
