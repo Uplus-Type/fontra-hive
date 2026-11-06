@@ -24,7 +24,7 @@ classifiers = [
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio"]
-# Recipe validation (fontra_hive.workflow.validateHiveRecipe); the actions
+# Recipe validation (fontra_hive.recipe.validateHiveRecipe); the actions
 # themselves need only Fontra.
 workflow = ["fontra-workflow-ui"]
 
@@ -39,7 +39,7 @@ hive = "fontra_hive.hivemanager:HiveProjectManagerFactory"
 hive = "fontra_hive.client"
 
 [project.entry-points."fontra.workflow.actions"]
-hive = "fontra_hive.workflow"
+hive = "fontra_hive.recipe"
 
 [tool.hatch.version]
 path = "src/fontra_hive/__init__.py"

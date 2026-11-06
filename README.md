@@ -756,16 +756,16 @@ empty font makes the repository's font its own, nothing to merge.
 Not yet: push from the editor's branch menu, pull requests, a first push to an
 empty UFO repository, `.glyphs` sources.
 
-## Workflow actions: hive-read and hive-write
+## Recipe actions: hive-read and hive-write
 
-`fontra_hive.workflow` adds two [fontra-workflow](https://github.com/fontra/fontra)
+`fontra_hive.recipe` adds two [fontra-workflow](https://github.com/fontra/fontra)
 actions (entry point `fontra.workflow.actions`), for recipes run by a Hive
 server on behalf of a person:
 
 ```yaml
 steps:
 - input: hive-read          # read-only, at a branch, tag or commit
-  project: owner/latin      # "name" on `fontra hive-dev`
+  project: owner/latin      # or the repository uid; "name" on `fontra hive-dev`
   ref: v1.2                 # default: the project's default branch
 - input: hive-read
   project: owner/cjk@main   # short for project + ref
@@ -775,16 +775,23 @@ steps:
   message: Merge Latin and CJK
 ```
 
-Rights are those of the Hive routes: reading needs `read`, writing needs
-`edit` (and `branch` for a new branch), checked before the recipe runs
-(`checkRecipeAccess`) and again by each action. The commit carries a
-`Hive-Workflow: <recipe>` trailer; files of the repository that are not the
-font's (recipes in `workflows/`, say) are kept. `hiveWorkflowContext()`
-gives the actions who runs the recipe and records what was read and written
-(project, ref, commit). With the `workflow` extra (`fontra-workflow-ui`),
-`validateHiveRecipe()` refuses what a server must not run: `fontra-read` and
-`fontra-write`, absolute paths and `..`, undeclared placeholders, and literal
-projects in a recipe marked shareable. The runner itself is not written yet.
+`project` is a `HiveProjectRef` (`owner/name`, `owner/name@ref`, or a
+repository uid), whose JSON schema says `"format": "hive-project"`, so tools
+tell it from any string. Rights are those of the Hive routes: reading needs
+`read`, writing needs `edit` (and `branch` for a new branch). A runner calls
+`requireRecipeAccess()` first: every cited project is checked on its own and
+every ref resolved, before anything is read; the actions refuse to run
+without that check, and check again when they run. `hive-read` exposes the
+repository uid and the commit it read; the context keeps them for every
+read and write (provenance by uid and SHA, not by name). The commit carries
+a `Hive-Recipe: <recipe>` trailer; files of the repository that are not the
+font's (recipes in `workflows/`, say) are kept. `hive-write` knows nothing of
+remote repositories: its branch is a local branch like any other, taken up
+by the existing synchronisation once merged. With the `workflow` extra
+(`fontra-workflow-ui`), `validateHiveRecipe()` refuses what a server must not
+run: `fontra-read` and `fontra-write`, absolute paths and `..`, undeclared
+placeholders, and literal projects in a recipe marked shareable. The runner
+itself is not written yet.
 
 ## Tests
 
@@ -800,13 +807,14 @@ the HTTP routes (history, glyph at a ref, restore, snapshots, including
 restore and snapshot with the project open in a running backend), and that
 the repository is readable by `git` itself.
 
-`tests/test_workflow_actions.py` runs recipes with `hive-read` and
-`hive-write` on three local repositories and a directory of users: two
-projects read and merged into a branch of a third, a second run on the same
-branch, reads at a tag and a commit, refusals (no read access, no `edit`,
-the default branch, bad refs and branch names), the checks before running,
-roles from a stand-in for hive-api, and, with `fontra-workflow-ui`
-installed, what the Hive policy refuses.
+`tests/test_recipe_actions.py` runs recipes with `hive-read` and
+`hive-write` on local repositories and a directory of users: two projects
+read and merged into a branch of a third, three reads checked one by one
+with one refused before anything is read, a second run on the same branch,
+reads at a tag and a commit, project references (uid included), refusals (no
+read access, no `edit`, the default branch, bad refs and branch names), roles
+from a stand-in for hive-api, and, with `fontra-workflow-ui` installed, what
+the Hive policy refuses.
 
 `tests/test_hive_integration.py` runs `fontra hive`'s project manager
 against a real hive-api (a Django development server started by the test,
