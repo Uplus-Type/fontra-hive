@@ -2,6 +2,7 @@
 Download panel as a recipe."""
 
 import asyncio
+import datetime
 import json
 import os
 import pathlib
@@ -90,7 +91,7 @@ def hive(tmp_path, fixture_fontra):
     usersPath = tmp_path / "users.json"
     usersPath.write_text(json.dumps(USERS))
     manager = DevHiveProjectManager(root, directory=DevDirectory(usersPath))
-    return types.SimpleNamespace(root=root, manager=manager, runs=root / ".recipe-runs")
+    return types.SimpleNamespace(root=root, manager=manager, runs=manager.runsRoot)
 
 
 def start(hive, username="jeremie", ref=None, substitutions=None, limits=None, **kw):
@@ -937,3 +938,331 @@ def test_the_route_passes_a_refusal_on(hive, monkeypatch):
     response, sent = callExport(hive, monkeypatch, format="fontra")
     assert (response.status, response.text) == (429, "Too many downloads.")
     assert sent == {}
+
+
+# --- where files live, and for how long -----------------------------------------------
+
+
+def latinHead(hive):
+    store = GitRepoStore.open(hive.root / "Latin.git")
+    try:
+        return store.head("main")
+    finally:
+        store.close()
+
+
+ARTIFACT_RECIPE = (
+    "steps:\n- input: hive-read\n  project: Latin\n"
+    "- output: hive-artifact\n  format: fontra\n"
+)
+
+
+def test_the_runs_folder_is_out_of_the_repositories(hive, tmp_path, monkeypatch):
+    assert hive.runs.parent == hive.root.parent
+    monkeypatch.setenv("HIVE_RUNS_DIR", str(tmp_path / "elsewhere"))
+    manager = DevHiveProjectManager(hive.root)
+    assert manager.runsRoot == tmp_path / "elsewhere"
+
+
+def test_nothing_of_a_run_lands_among_the_repositories(hive):
+    before = sorted(p.name for p in hive.root.iterdir())
+    download(hive, "Latin", "Latin", "fontra").discard()
+    assert sorted(p.name for p in hive.root.iterdir()) == before
+
+
+def test_a_download_is_kept_nowhere_once_sent(hive, monkeypatch):
+    response, sent = callExport(hive, monkeypatch, format="fontra")
+    assert sent["data"][:2] == b"PK"
+    assert [p for p in hive.runs.iterdir() if p.is_dir()] == []
+    records = list(hive.runs.glob("*.json"))
+    assert json.loads(records[0].read_text())["state"] == "succeeded"
+
+
+def test_a_download_not_sent_leaves_nothing_after_a_restart(hive):
+    """The server dies between the build and the sending."""
+    result = download(hive, "Latin", "Latin", "fontra")
+    assert result.directory.name == f"send-{result.id}"
+    assert runner.removeWorkFolders(hive.runs) == [result.directory.name]
+    assert not result.directory.exists()
+
+
+def test_the_paths_of_the_repositories_are_scrubbed(hive):
+    class Resolver:
+        async def resolve(self, ref):
+            raise RuntimeError(f"cannot read {hive.root}/Latin.git")
+
+    result = run(
+        runner.runRecipe(
+            runner.downloadRequest("Latin", latinHead(hive), "Latin", "fontra"),
+            resolver=Resolver(),
+            registry=hive.manager.recipeRuns,
+            runsRoot=hive.runs,
+            serverPaths=[hive.root],
+        )
+    )
+    assert "Latin.git" in result.message
+    assert str(hive.root) not in result.message + result.log
+
+
+class SweptRegistry(runner.LocalRunRegistry):
+    """A registry that lists runs, as hive-api does."""
+
+    def __init__(self, runsRoot, expired=(), interrupted=()):
+        super().__init__(runsRoot)
+        self.toExpire = list(expired)
+        self.toInterrupt = list(interrupted)
+        self.marked = []
+        self.before = None
+
+    async def expired(self):
+        return list(self.toExpire)
+
+    async def markExpired(self, runs):
+        self.marked += runs
+
+    async def interrupted(self, before):
+        self.before = before
+        return list(self.toInterrupt)
+
+
+def kept(hive, recipe=ARTIFACT_RECIPE):
+    addRecipe(hive, recipe)
+    result = start(hive)
+    assert result.succeeded, result.message
+    return result
+
+
+@needsValidation
+def test_expired_runs_lose_their_files_and_stay_recorded(hive):
+    old, recent = kept(hive), kept(hive)
+    registry = SweptRegistry(hive.runs, expired=[old.id])
+    assert run(runner.sweepExpiredRuns(registry, hive.runs)) == [old.id]
+    assert not old.directory.exists()
+    assert recent.directory.exists()
+    assert registry.marked == [old.id]
+    assert recorded(hive, old)["state"] == "succeeded"  # the local registry
+
+
+def test_a_sweep_refuses_what_is_not_a_run(hive):
+    hive.runs.mkdir()
+    precious = hive.runs / "precious"
+    precious.mkdir()
+    registry = SweptRegistry(hive.runs, expired=["../repos", "precious", 3, ""])
+    assert run(runner.sweepExpiredRuns(registry, hive.runs)) == []
+    assert precious.exists() and hive.root.exists()
+    assert registry.marked == []
+
+
+def test_a_sweep_with_nothing_to_do_says_nothing(hive):
+    registry = SweptRegistry(hive.runs)
+    assert run(runner.sweepExpiredRuns(registry, hive.runs)) == []
+    assert registry.marked == []
+
+
+def test_a_run_already_without_files_is_marked_all_the_same(hive):
+    registry = SweptRegistry(hive.runs, expired=[RUN_ID])
+    assert run(runner.sweepExpiredRuns(registry, hive.runs)) == [RUN_ID]
+    assert registry.marked == [RUN_ID]
+
+
+def test_files_that_cannot_be_erased_stay_listed(hive, monkeypatch):
+    (hive.runs / RUN_ID).mkdir(parents=True)
+    monkeypatch.setattr(runner.shutil, "rmtree", lambda *a, **k: None)
+    registry = SweptRegistry(hive.runs, expired=[RUN_ID])
+    assert run(runner.sweepExpiredRuns(registry, hive.runs)) == []
+    assert registry.marked == []
+
+
+@needsValidation
+def test_every_run_sweeps_when_it_ends(hive):
+    old = kept(hive)
+    swept = SweptRegistry(hive.runs, expired=[old.id])
+
+    async def go():
+        resolver = projectResolverFor(hive.manager, token_for("jeremie"))
+        return await runner.runRecipe(
+            runner.downloadRequest("Latin", latinHead(hive), "Latin", "fontra"),
+            resolver=resolver,
+            registry=swept,
+            runsRoot=hive.runs,
+        )
+
+    result = run(go())
+    assert result.succeeded
+    assert not old.directory.exists()
+    assert swept.marked == [old.id]
+
+
+def test_a_sweep_that_fails_after_a_run_changes_nothing(hive):
+    class Registry(runner.LocalRunRegistry):
+        async def expired(self):
+            raise HiveApiUnavailable("down")
+
+    result = run(
+        runner.runRecipe(
+            runner.downloadRequest("Latin", latinHead(hive), "Latin", "fontra"),
+            resolver=projectResolverFor(hive.manager, token_for("jeremie")),
+            registry=Registry(hive.runs),
+            runsRoot=hive.runs,
+        )
+    )
+    assert result.succeeded and (result.directory / "Latin.fontra.zip").exists()
+
+
+@needsValidation
+def test_a_failed_run_keeps_its_log_and_no_file(hive):
+    addRecipe(
+        hive,
+        "steps:\n- input: hive-read\n  project: Latin\n"
+        "- output: hive-artifact\n  format: fontra\n  name: one\n"
+        "- output: hive-artifact\n  format: fontra\n  name: two\n",
+    )
+    both = start(hive)
+    limit = both.artifacts[0]["size"] * 3 // 2
+    result = start(hive, limits=runner.RunLimits(outputBytes=limit))
+    assert result.state == "too-large"
+    assert result.directory is None and result.artifacts == []
+    assert not (hive.runs / result.id).exists()
+    assert recorded(hive, result)["message"] == result.message
+
+
+def test_a_stopped_server_leaves_no_working_folder(hive):
+    hive.runs.mkdir()
+    (hive.runs / "work-abc" / "tmp").mkdir(parents=True)
+    (hive.runs / "send-abc").mkdir()
+    (hive.runs / RUN_ID).mkdir()
+    assert runner.removeWorkFolders(hive.runs) == ["send-abc", "work-abc"]
+    assert not (hive.runs / "work-abc").exists()
+    assert (hive.runs / RUN_ID).exists()  # a run's files are the registry's
+
+
+def test_no_runs_folder_yet(tmp_path):
+    assert runner.removeWorkFolders(tmp_path / "none") == []
+
+
+def test_interrupted_runs_lose_what_they_set_aside(hive):
+    (hive.runs / RUN_ID).mkdir(parents=True)
+    registry = SweptRegistry(hive.runs, interrupted=[RUN_ID])
+    before = "2026-11-06T08:00:00+00:00"
+    assert run(runner.sweepInterruptedRuns(registry, hive.runs, before)) == [RUN_ID]
+    assert registry.before == before
+    assert not (hive.runs / RUN_ID).exists()
+
+
+def test_the_local_registry_closes_what_a_stopped_server_left(hive):
+    registry = hive.manager.recipeRuns
+    request = runner.downloadRequest("Latin", "a" * 40, "Latin", "fontra")
+    left = run(registry.open(request)).id
+    after = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)
+    earlier = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
+    assert run(registry.interrupted(earlier.isoformat())) == []
+    assert registry.get(left)["state"] == "running"
+    assert run(registry.interrupted(after.isoformat())) == [left]
+    assert registry.get(left)["state"] == "interrupted"
+    assert registry.get(left)["message"] == runner.INTERRUPTED_MESSAGE
+    assert run(registry.interrupted(after.isoformat())) == []
+
+
+def test_hive_api_says_which_runs_expire():
+    class Api:
+        async def recipeRunsExpired(self):
+            return [RUN_ID]
+
+        async def recipeRunsErased(self, runs):
+            self.erased = runs
+
+        async def recipeRunsInterrupted(self, before):
+            self.before = before
+            return [RUN_ID]
+
+    api = Api()
+    registry = runner.HiveApiRunRegistry(api)
+    assert run(registry.expired()) == [RUN_ID]
+    run(registry.markExpired([RUN_ID]))
+    assert api.erased == [RUN_ID]
+    assert run(registry.interrupted("now")) == [RUN_ID]
+    assert api.before == "now"
+
+
+def test_a_sweep_retries_the_interrupted_runs_while_the_api_is_down(hive, monkeypatch):
+    calls = []
+
+    class Registry(runner.LocalRunRegistry):
+        async def interrupted(self, before):
+            calls.append(before)
+            if len(calls) == 1:
+                raise HiveApiUnavailable("down")
+            return []
+
+    monkeypatch.setattr(
+        type(hive.manager), "recipeRuns", property(lambda self: Registry(self.runsRoot))
+    )
+    assert run(hive.manager.sweepRuns("t")) == "t"
+    assert run(hive.manager.sweepRuns("t")) is None
+    assert run(hive.manager.sweepRuns(None)) is None
+    assert calls == ["t", "t"]
+
+
+def test_the_server_starts_by_clearing_and_sweeps_every_quarter_of_an_hour(
+    hive, monkeypatch
+):
+    assert runner.SWEEP_SECONDS == 15 * 60
+    (hive.runs / "work-old").mkdir(parents=True)
+    naps = []
+
+    async def sleep(seconds):
+        naps.append(seconds)
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
+    async def go():
+        hive.manager.startRunSweeps()
+        assert not (hive.runs / "work-old").exists()
+        with pytest.raises(asyncio.CancelledError):
+            await hive.manager._runSweepTask
+
+    run(go())
+    assert naps == [15 * 60]
+
+
+def test_the_sweep_is_cancelled_with_the_server(hive):
+    async def go():
+        hive.manager.startRunSweeps()
+        task = hive.manager._runSweepTask
+        await asyncio.sleep(0)
+        await hive.manager.aclose()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    run(go())
+
+
+def test_the_client_of_the_routes_of_the_registry():
+    from fontra_hive.hiveapi import HiveApi
+
+    api = HiveApi("http://hive-api.invalid", "key")
+    calls = []
+    answer = (200, {"runs": [RUN_ID]})
+
+    async def call(method, path, *, params=None, json=None):
+        calls.append((method, path, json))
+        return answer
+
+    api._call = call
+    assert run(api.recipeRunsExpired()) == [RUN_ID]
+    run(api.recipeRunsErased([RUN_ID]))
+    assert run(api.recipeRunsInterrupted("t")) == [RUN_ID]
+    assert calls == [
+        ("GET", "/api/internal/recipe-runs/expired", None),
+        ("POST", "/api/internal/recipe-runs/expired", {"runs": [RUN_ID]}),
+        ("POST", "/api/internal/recipe-runs/interrupted", {"before": "t"}),
+    ]
+    answer = (404, "<html>")
+    for method, args in [
+        (api.recipeRunsExpired, ()),
+        (api.recipeRunsErased, ([RUN_ID],)),
+        (api.recipeRunsInterrupted, ("t",)),
+    ]:
+        with pytest.raises(HiveApiUnavailable):
+            run(method(*args))

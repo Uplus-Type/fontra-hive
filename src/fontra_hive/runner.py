@@ -5,7 +5,14 @@ may take place (hive-api answers, and may lower the limits), starts
 ``python -m fontra_hive.runner`` without a shell and in a folder of its own,
 follows what the process says, and closes the run with what was measured,
 whatever happened. The folder is gone afterwards; the artifacts of a run that
-succeeded are set aside in ``<runsRoot>/<run id>/``.
+succeeded are set aside in ``<runsRoot>/<run id>/``, those of a built-in recipe
+in a folder of their own, gone once they are sent.
+
+``<runsRoot>`` is out of the repositories (``HIVE_RUNS_DIR``) and out of the
+backups: an artifact can be built again. The registry decides which runs lose
+their files, here they are erased (:func:`sweepExpiredRuns`); nothing here says
+how long files stay. When the server starts it clears what a stopped server
+left (:func:`removeWorkFolders`, :func:`sweepInterruptedRuns`).
 
 The process runs the recipe:
 
@@ -39,6 +46,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import datetime
 import errno
 import json
 import logging
@@ -52,7 +60,7 @@ import sys
 import tempfile
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -74,7 +82,10 @@ logger = logging.getLogger(__name__)
 
 RECIPE_FILE = "recipe.yaml"
 ASSETS_FOLDER = "assets"
-RUNS_FOLDER = ".recipe-runs"  # under the repositories' root
+RUNS_DIR_VARIABLE = "HIVE_RUNS_DIR"
+WORK_PREFIX = "work-"
+SEND_PREFIX = "send-"  # a built-in recipe's files, on their way to a person
+SWEEP_SECONDS = 15 * 60
 DOWNLOAD_RECIPE = "download"
 
 RUNS_AT_ONCE = 1  # builds running at the same time on the server
@@ -91,12 +102,25 @@ FAILED = "failed"  # an action or a compiler stopped
 TIMEOUT = "timeout"
 TOO_LARGE = "too-large"
 OUT_OF_MEMORY = "out-of-memory"
+INTERRUPTED = "interrupted"  # the server stopped during the run
+INTERRUPTED_MESSAGE = "The server stopped during the run."
 
 # All the process sees of the server's environment.
 _ENVIRONMENT = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "PYTHONPATH", "VIRTUAL_ENV")
 
 _runSlot = asyncio.Semaphore(RUNS_AT_ONCE)
 _RUN_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def runsFolder(rootPath: pathlib.Path) -> pathlib.Path:
+    """Where runs put their files: ``HIVE_RUNS_DIR``, or beside the
+    repositories, never among them."""
+    configured = os.environ.get(RUNS_DIR_VARIABLE, "").strip()
+    return (
+        pathlib.Path(configured)
+        if configured
+        else rootPath.with_name(rootPath.name + ".runs")
+    )
 
 
 @dataclass(frozen=True)
@@ -260,9 +284,20 @@ class RunRegistry(Protocol):
     ) -> dict | None:
         """The artifact, for a person who may read the recipe; else None."""
 
+    async def expired(self) -> list[str]:
+        """The runs whose files must go."""
+
+    async def markExpired(self, runs: list[str]) -> None:
+        """Their files are gone."""
+
+    async def interrupted(self, before: str) -> list[str]:
+        """Runs open since before this moment (ISO 8601) stopped with their
+        server: closes them, and returns their ids."""
+
 
 class LocalRunRegistry:
-    """``fontra hive-dev``: runs written next to their artifacts."""
+    """``fontra hive-dev``: runs written next to their artifacts. Nothing
+    expires on a development server."""
 
     def __init__(self, runsRoot: pathlib.Path):
         self.runsRoot = runsRoot
@@ -294,6 +329,25 @@ class LocalRunRegistry:
         if await resolver.resolve(HiveProjectRef(record["repository"])) is None:
             return None
         return next((a for a in record.get("artifacts", []) if a["name"] == name), None)
+
+    async def expired(self) -> list[str]:
+        return []
+
+    async def markExpired(self, runs: list[str]) -> None:
+        pass
+
+    async def interrupted(self, before: str) -> list[str]:
+        moment = datetime.datetime.fromisoformat(before).timestamp()
+        stopped = []
+        for path in self.runsRoot.glob("*.json"):
+            record = json.loads(path.read_text(encoding="utf-8"))
+            if record.get("state") == "running" and path.stat().st_mtime < moment:
+                self._write(
+                    record["id"],
+                    {**record, "state": INTERRUPTED, "message": INTERRUPTED_MESSAGE},
+                )
+                stopped.append(record["id"])
+        return stopped
 
 
 class HiveApiRunRegistry:
@@ -330,6 +384,15 @@ class HiveApiRunRegistry:
             return None
         return await self.api.recipeRunArtifact(token, runId, name)
 
+    async def expired(self) -> list[str]:
+        return await self.api.recipeRunsExpired()
+
+    async def markExpired(self, runs: list[str]) -> None:
+        await self.api.recipeRunsErased(runs)
+
+    async def interrupted(self, before: str) -> list[str]:
+        return await self.api.recipeRunsInterrupted(before)
+
 
 def _openingOf(request: RunRequest) -> dict:
     source = request.source
@@ -356,20 +419,32 @@ async def runRecipe(
     limits: RunLimits = RunLimits(),
     onProgress: Callable[[dict], Awaitable[None] | None] | None = None,
     slot: asyncio.Semaphore | None = None,
+    serverPaths: Sequence[pathlib.Path] = (),
 ) -> RunResult:
     """Run a recipe to its end. Whatever happens to the recipe is in the
-    result, which the registry has too: this raises only :class:`RunRefused`."""
+    result, which the registry has too: this raises only :class:`RunRefused`.
+    ``serverPaths``: more paths people must not read in messages and logs."""
     ticket = await registry.open(request)
     limits = limits.lowered(ticket.limits)
     result = RunResult(ticket.id, FAILED, "The run stopped unexpectedly.")
     try:
         async with slot or _runSlot:
-            await _run(request, ticket, resolver, limits, runsRoot, result, onProgress)
+            await _run(
+                request,
+                ticket,
+                resolver,
+                limits,
+                runsRoot,
+                result,
+                onProgress,
+                serverPaths,
+            )
     except BaseException:
         result.message = "The run was interrupted."
         raise
     finally:
         await asyncio.shield(_close(registry, ticket, result))
+    await _sweepAfterRun(registry, runsRoot)
     return result
 
 
@@ -380,9 +455,18 @@ async def _close(registry: RunRegistry, ticket: RunTicket, result: RunResult) ->
         logger.error("recipe run %s not recorded: %s", ticket.id, error)
 
 
-async def _run(request, ticket, resolver, limits, runsRoot, result, onProgress) -> None:
+async def _sweepAfterRun(registry: RunRegistry, runsRoot: pathlib.Path) -> None:
+    try:
+        await sweepExpiredRuns(registry, runsRoot)
+    except Exception as error:  # the run is done: the next sweep will do
+        logger.warning("expired recipe runs not swept: %s", error)
+
+
+async def _run(
+    request, ticket, resolver, limits, runsRoot, result, onProgress, serverPaths
+) -> None:
     runsRoot.mkdir(parents=True, exist_ok=True)
-    workDir = pathlib.Path(tempfile.mkdtemp(dir=runsRoot, prefix="work-"))
+    workDir = pathlib.Path(tempfile.mkdtemp(dir=runsRoot, prefix=WORK_PREFIX))
     started = time.monotonic()
     process = None
     log = _Log()
@@ -426,18 +510,74 @@ async def _run(request, ticket, resolver, limits, runsRoot, result, onProgress) 
         if process is not None:
             _stop(process)
         result.durationSeconds = round(time.monotonic() - started, 3)
-        paths = (str(workDir), str(runsRoot.parent))
+        paths = [str(p) for p in (workDir, runsRoot, *serverPaths)]
         result.log = _scrub(log.text(), paths)
         if result.state == FAILED and (not result.message or PANIC in result.log):
             result.message = dressMessage(result.log)
         result.message = _scrub(result.message, paths)
         try:
             if result.succeeded:
-                _keep(result, workDir / "artifacts", runsRoot / ticket.id)
+                # A built-in recipe keeps nothing: should the server die before
+                # the file is sent, its folder is cleared with the working ones.
+                folder = (SEND_PREFIX if request.builtin else "") + ticket.id
+                _keep(result, workDir / "artifacts", runsRoot / folder)
             else:
                 result.artifacts = []
         finally:
             shutil.rmtree(workDir, ignore_errors=True)
+
+
+# --- files of past runs ------------------------------------------------------------
+
+
+async def _erase(runsRoot: pathlib.Path, runs) -> list[str]:
+    """Remove the files of these runs; returns those that have none left."""
+    erased = []
+    for run in runs:
+        if not isinstance(run, str) or not _RUN_ID.match(run):
+            logger.warning("not erasing unexpected recipe run %r", run)
+            continue
+        folder = runsRoot / run
+        await asyncio.to_thread(shutil.rmtree, folder, ignore_errors=True)
+        if folder.exists():
+            logger.warning("recipe run %s: files not erased", run)
+            continue
+        erased.append(run)
+    return erased
+
+
+async def sweepExpiredRuns(registry: RunRegistry, runsRoot: pathlib.Path) -> list[str]:
+    """Erase the files the registry lists, then tell it. A run that goes
+    wrong half way is listed again."""
+    erased = await _erase(runsRoot, await registry.expired())
+    if erased:
+        await registry.markExpired(erased)
+    return erased
+
+
+async def sweepInterruptedRuns(
+    registry: RunRegistry, runsRoot: pathlib.Path, before: str
+) -> list[str]:
+    """Runs a stopped server left open become interrupted, without files: one
+    that finished may have set some aside before the registry heard of it."""
+    runs = await registry.interrupted(before)
+    await _erase(runsRoot, runs)
+    return runs
+
+
+def removeWorkFolders(runsRoot: pathlib.Path) -> list[str]:
+    """The folders of runs of a stopped server, which belong to no record.
+    Only when the server starts: no run is going on then."""
+    if not runsRoot.is_dir():
+        return []
+    folders = [
+        path
+        for path in runsRoot.iterdir()
+        if path.is_dir() and path.name.startswith((WORK_PREFIX, SEND_PREFIX))
+    ]
+    for folder in folders:
+        shutil.rmtree(folder, ignore_errors=True)
+    return sorted(path.name for path in folders)
 
 
 def _job(request: RunRequest, limits: RunLimits, workDir: pathlib.Path) -> dict:

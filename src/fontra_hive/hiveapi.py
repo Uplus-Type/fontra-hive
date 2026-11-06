@@ -346,6 +346,31 @@ class HiveApi:
             f"/api/internal/recipe-runs/{run}/artifact", user=uid, name=name
         )
 
+    async def recipeRunsExpired(self) -> list[str]:
+        """The runs whose files should be erased."""
+        status, data = await self._call("GET", "/api/internal/recipe-runs/expired")
+        if status != 200 or not isinstance(data, dict):
+            raise HiveApiUnavailable(f"/api/internal/recipe-runs/expired: HTTP {status}")
+        return data["runs"]
+
+    async def recipeRunsErased(self, runs: list[str]) -> None:
+        status, _ = await self._call(
+            "POST", "/api/internal/recipe-runs/expired", json={"runs": runs}
+        )
+        if status != 200:
+            raise HiveApiUnavailable(f"/api/internal/recipe-runs/expired: HTTP {status}")
+
+    async def recipeRunsInterrupted(self, before: str) -> list[str]:
+        """Close the runs open since before ``before``; returns their ids."""
+        status, data = await self._call(
+            "POST", "/api/internal/recipe-runs/interrupted", json={"before": before}
+        )
+        if status != 200 or not isinstance(data, dict):
+            raise HiveApiUnavailable(
+                f"/api/internal/recipe-runs/interrupted: HTTP {status}"
+            )
+        return data["runs"]
+
     async def remote(self, project: str) -> dict | None:
         """A project's remote repository with credentials to use now (None:
         no remote). Raises :class:`RemoteNotUsable` when hive-api knows it

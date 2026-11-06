@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import dataclasses
+import datetime
 import functools
 import hashlib
 import json
@@ -48,6 +49,7 @@ from .access import ROLES, Access, DevDirectory, token_for, username_from_token
 from .backend_git import GitFontraBackend
 from .commentroutes import CommentRoutesMixin
 from .environment import markEnvironment
+from .hiveapi import HiveApiUnavailable
 from .fonthandler import HiveFontHandler
 from .glyphdiff import changed_sources, font_source_names
 from .gitstore import (
@@ -170,8 +172,12 @@ class DevHiveProjectManager(CommentRoutesMixin):
         self.fontHandlers: dict[str, FontHandler] = {}
         # project name -> client id -> presence entry (see presenceHandler)
         self.presence: dict[str, dict[str, dict]] = {}
+        self.runsRoot = runner.runsFolder(rootPath)
+        self._runSweepTask: asyncio.Task | None = None
 
     async def aclose(self) -> None:
+        if self._runSweepTask is not None:
+            self._runSweepTask.cancel()
         for fontHandler in list(self.fontHandlers.values()):
             await fontHandler.aclose()
 
@@ -602,6 +608,11 @@ class DevHiveProjectManager(CommentRoutesMixin):
     def setupWebRoutes(self, server) -> None:
         server.httpApp.add_routes(self.webRoutes())
 
+        async def startRunSweeps(app):
+            self.startRunSweeps()
+
+        server.httpApp.on_startup.append(startRunSweeps)
+
     def webRoutes(self) -> list:
         return [
             web.post("/hive/dev-login", self.devLoginHandler),
@@ -710,6 +721,7 @@ class DevHiveProjectManager(CommentRoutesMixin):
                 resolver=projectResolverFor(self, token),
                 registry=self.recipeRuns,
                 runsRoot=self.runsRoot,
+                serverPaths=[self.rootPath],
             )
         except runner.RunRefused as error:
             return web.Response(status=error.status, text=error.text)
@@ -747,12 +759,38 @@ class DevHiveProjectManager(CommentRoutesMixin):
         return await _sendFile(request, path)
 
     @property
-    def runsRoot(self) -> pathlib.Path:
-        return self.rootPath / runner.RUNS_FOLDER
-
-    @property
     def recipeRuns(self) -> runner.RunRegistry:
         return runner.LocalRunRegistry(self.runsRoot)
+
+    async def sweepRuns(self, startedAt: str | None = None) -> str | None:
+        """One sweep of recipe runs. ``startedAt``, while the runs of the
+        previous server are not closed yet; returns it until they are."""
+        registry = self.recipeRuns
+        try:
+            if startedAt is not None:
+                await runner.sweepInterruptedRuns(registry, self.runsRoot, startedAt)
+                startedAt = None
+            await runner.sweepExpiredRuns(registry, self.runsRoot)
+        except HiveApiUnavailable as error:
+            logger.warning("recipe runs not swept: %s", error)
+        except Exception:  # never stop sweeping
+            logger.exception("sweeping recipe runs")
+        return startedAt
+
+    async def _sweepRunsPeriodically(self, startedAt: str) -> None:
+        pending: str | None = startedAt
+        while True:
+            pending = await self.sweepRuns(pending)
+            await asyncio.sleep(runner.SWEEP_SECONDS)
+
+    def startRunSweeps(self) -> None:
+        """When the server starts, before it serves anyone: no run is going
+        on, so what is left of working folders is a stopped server's."""
+        startedAt = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        runner.removeWorkFolders(self.runsRoot)
+        self._runSweepTask = asyncio.create_task(
+            self._sweepRunsPeriodically(startedAt)
+        )
 
     async def faviconHandler(self, request: web.Request) -> web.Response:
         """/favicon.ico, which browsers ask for on every site."""
