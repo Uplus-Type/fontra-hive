@@ -185,6 +185,68 @@ def test_projects_and_invitations(browser_and_url):  # noqa: F811
     page.close()
 
 
+SITE_LINKS = [
+    ["What's new", "/changelog"],
+    ["Blog", "/blog"],
+    ["Features", "/features"],
+    ["Pricing", "/pricing"],
+    ["Your fonts stay yours", "/charter"],
+]
+
+
+def test_the_site_stays_within_reach(browser_and_url):  # noqa: F811
+    """Once signed in: the site's whole footer on the sections of the home page,
+    and a "Fontra Hive" section in the avatar's menu (same tab, not an editor)."""
+    page = open_home(browser_and_url)
+    page.wait_for_selector(".project-card")
+    page.wait_for_selector(".home-bar .hive-chip")
+    for hash in ("", "#orgs", "#profile"):
+        page.evaluate(f"location.hash = '{hash}'")
+        page.wait_for_selector(".site-foot .foot-grid")
+        columns = page.evaluate(
+            "[...document.querySelectorAll('.site-foot nav')].map(n => n.getAttribute('aria-label'))"
+        )
+        assert columns == ["Product", "Legal", "Open source"], hash
+        product = page.evaluate(
+            "[...document.querySelectorAll('.site-foot nav[aria-label=Product] a')].map(a => a.getAttribute('href'))"
+        )
+        assert "/blog" in product and "/changelog" in product, hash
+        assert page.query_selector("footer.site-footer") is None
+    page.click(".home-bar .hive-chip")
+    page.wait_for_selector(".hive-menu .who")
+    assert page.inner_text(".hive-menu .note") == "Fontra Hive"
+    links = page.evaluate(
+        "[...document.querySelectorAll('.hive-menu a')]"
+        ".map(a => [a.textContent, a.getAttribute('href'), a.target])"
+    )
+    assert links == (
+        [["My projects", "/", ""]]
+        + [[label, href, ""] for label, href in SITE_LINKS]
+        + [["Sign out", "/hive/logout", ""]]
+    )
+    assert page.errors == []
+    page.close()
+
+
+def test_the_footer_on_a_phone_and_in_the_dark(browser_and_url):  # noqa: F811
+    page = open_home(browser_and_url)
+    page.set_viewport_size({"width": 390, "height": 800})
+    page.wait_for_selector(".site-foot .foot-grid")
+    result = page.evaluate("""() => {
+      const grid = getComputedStyle(document.querySelector('.foot-grid'));
+      const foot = getComputedStyle(document.querySelector('.site-foot'));
+      return {
+        columns: grid.gridTemplateColumns.split(' ').length,
+        background: foot.backgroundColor,
+        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      };
+    }""")
+    assert result["columns"] == 1  # under 420 px: one column
+    assert result["background"] == "rgb(27, 27, 27)"  # the site's dark footer
+    assert result["overflow"] <= 0  # no sideways scroll
+    page.close()
+
+
 def test_parse_hash(browser_and_url):  # noqa: F811
     page = open_home(browser_and_url)
     page.wait_for_selector(".project-card")

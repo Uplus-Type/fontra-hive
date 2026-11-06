@@ -711,8 +711,17 @@ def test_project_settings_in_the_user_menu(browser_and_url):
         ["My projects", "/"],
         ["Share…", None],
         ["Project settings", "/#project/uplustype/Mutator"],
+        ["What's new", "/changelog"],
+        ["Blog", "/blog"],
+        ["Features", "/features"],
+        ["Pricing", "/pricing"],
+        ["Your fonts stay yours", "/charter"],
         ["Sign out", "/hive/logout"],
     ]
+    # In an editor tab the site opens in another tab: the font stays where it is.
+    assert page.evaluate(
+        "[...document.querySelectorAll('.hive-menu a')].filter(a => a.target == '_blank').length"
+    ) == 5
     assert page.evaluate(
         "hiveModule.projectSettingsURL('u+type/My Font')"
     ) == "/#project/u%2Btype/My%20Font"

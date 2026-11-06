@@ -43,6 +43,15 @@ export function initials(name) {
   return letters.toUpperCase();
 }
 
+// The "Fontra Hive" section of the person's menu: the site's pages.
+export const SITE_LINKS = [
+  ["What's new", "/changelog"],
+  ["Blog", "/blog"],
+  ["Features", "/features"],
+  ["Pricing", "/pricing"],
+  ["Your fonts stay yours", "/charter"],
+];
+
 export function avatarColor(username) {
   let hash = 0;
   for (const ch of username || "") hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
@@ -918,10 +927,24 @@ export class HiveViews {
       this.me.billingUrl ? el("a", { href: this.me.billingUrl }, ["Plan and billing"]) : null,
       this.project ? el("a", { onclick: () => { this.closeMenu(); this.openShare(); } }, ["Share…"]) : null,
       this.mayOpenSettings() ? el("a", { href: projectSettingsURL(this.project.name) }, ["Project settings"]) : null,
+      ...this.siteLinks(),
       el("hr"),
       el("a", { href: "/hive/logout" }, ["Sign out"]), // a page that signs out, then goes home
     ]);
     this.showMenu(this.chip, rect);
+  }
+
+  // The site stays within reach once signed in (hive-api's pages, served by the
+  // same deployment: no such pages on the development server or in Try Fontra).
+  // In an editor tab they open in another tab: the font stays where it is.
+  siteLinks() {
+    if (this.source !== "hive-api") return [];
+    const target = this.project ? { target: "_blank", rel: "noopener" } : {};
+    return [
+      el("hr"),
+      el("div", { class: "note" }, ["Fontra Hive"]),
+      ...SITE_LINKS.map(([label, href]) => el("a", { href, ...target }, [label])),
+    ];
   }
 
   // The bell's menu: the latest ones, unread first.
