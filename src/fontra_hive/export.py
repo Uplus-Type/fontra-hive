@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import pathlib
+import re
 import shutil
 import sys
 import zipfile
@@ -51,6 +52,12 @@ def supported_formats() -> list[str]:
 def download_name(stem: str, format: str) -> str:
     label, extension, zipped = {**SOURCE_FORMATS, **FONT_FORMATS}[format]
     return stem + extension + (".zip" if zipped else "")
+
+
+def safe_stem(name: str) -> str:
+    """A file name without extension, whatever ``name`` is."""
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip(".-")
+    return stem or "font"
 
 
 async def _copy(source: pathlib.Path, destination: pathlib.Path) -> None:

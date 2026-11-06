@@ -1,5 +1,5 @@
-"""Recipe actions that read and write Hive projects: ``hive-read`` and
-``hive-write``.
+"""Recipe actions that read and write Hive projects, ``hive-read`` and
+``hive-write``, and deliver files, ``hive-artifact``.
 
 They are ``fontra-workflow`` actions like any other (registered through the
 ``fontra.workflow.actions`` entry point), but they need to know who runs the
@@ -35,6 +35,12 @@ recipe and where the projects are. A runner provides that with
   a local branch like any other, which the existing synchronisation takes
   up once merged. The person needs ``edit``, and ``branch`` when the branch
   does not exist yet.
+* ``hive-artifact`` (output): ``format`` (``ttf``, ``woff2``, ``otf``,
+  ``fontra``, ``designspace``) and ``name``, which is not a path: it is made
+  safe, and the runner chooses the place (``output.process(artifactsDir)``).
+  Fonts are built by :mod:`fontra_hive.export`, the Download panel's code.
+  The artifact belongs to the run: name, format, size and SHA-256 are in
+  ``context.artifacts``.
 
 Who may do what is decided where the Hive routes decide it: the project
 manager's directory in development, hive-api in production
@@ -45,8 +51,9 @@ the actions refuse to run in a context that was not checked, and ask again
 when they run.
 
 :func:`hivePolicy` is what a recipe run on a Hive server may not do: no
-``fontra-read`` nor ``fontra-write`` (no files of the server), no absolute
-path nor ``..``, every placeholder declared, and no literal project in a
+``fontra-read`` nor ``fontra-write`` (no files of the server), no
+``compile-*`` output (they write where they are told: fonts are built with
+``hive-artifact``), no absolute path nor ``..``, every placeholder declared, and no literal project in a
 recipe marked shareable. :func:`validateHiveRecipe` applies it (it needs the
 ``fontra-workflow-ui`` package).
 """
@@ -54,15 +61,17 @@ recipe marked shareable. :func:`validateHiveRecipe` applies it (it needs the
 from __future__ import annotations
 
 import contextvars
+import hashlib
 import logging
 import pathlib
 import re
+import shutil
 import tempfile
 import time
 from collections.abc import Mapping
 from contextlib import aclosing, asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
-from typing import Any, AsyncGenerator, Iterator, Protocol
+from typing import Any, AsyncGenerator, Iterator, Literal, Protocol
 
 from fontra.backends.copy import copyFont
 from fontra.backends.fontra import FontraBackend
@@ -87,7 +96,15 @@ RECIPE_BRANCH_PREFIX = "workflow/"
 # history then finds the glyphs by comparing trees).
 MAX_GLYPHS_IN_TRAILER = 200
 
-HIVE_DENIED_ACTIONS = frozenset({"fontra-read", "fontra-write"})
+HIVE_DENIED_ACTIONS = frozenset(
+    {
+        "fontra-read",
+        "fontra-write",
+        "compile-fontc",
+        "compile-fontmake",
+        "compile-varc",
+    }
+)
 HIVE_PROJECT_FORMAT = "hive-project"
 
 
@@ -97,6 +114,7 @@ _UID = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 _NAME_PART = re.compile(r"^[^/@\s]+$")
+_DEV_NAME = re.compile(r"^[^/@]+$")  # a folder on a development server
 
 
 class HiveProjectRef(str):
@@ -125,7 +143,11 @@ class HiveProjectRef(str):
         if at and not ref:
             raise ActionError(f"no ref after '@' in {value!r}")
         parts = base.split("/")
-        if not all(_NAME_PART.match(part) for part in parts) or len(parts) > 2:
+        if len(parts) == 1:
+            valid = _DEV_NAME.match(base) is not None
+        else:
+            valid = len(parts) == 2 and all(_NAME_PART.match(part) for part in parts)
+        if not valid:
             raise ActionError(
                 f"not a project: {value!r} (owner/name, a repository uid, "
                 "or name on a development server)"
@@ -269,6 +291,19 @@ class WriteRecord:
     commit: str | None  # None: nothing changed, no commit
     created: bool  # the branch was created
     project: str
+    size: int = 0  # bytes committed
+
+
+@dataclass(frozen=True)
+class ArtifactRecord:
+    name: str  # the file's name, what identifies it in the run
+    format: str
+    size: int
+    sha256: str
+
+
+class OutputLimitExceeded(ActionError):
+    """The run's outputs together are larger than the run may produce."""
 
 
 @dataclass
@@ -281,6 +316,19 @@ class HiveRecipeContext:
     # Provenance: what this run read and wrote, in order.
     reads: list[ReadRecord] = field(default_factory=list)
     writes: list[WriteRecord] = field(default_factory=list)
+    artifacts: list[ArtifactRecord] = field(default_factory=list)
+    # Measured for every run; bounded when the runner gives a limit.
+    outputBytes: int = 0
+    outputLimit: int | None = None
+
+    def addOutput(self, size: int) -> None:
+        """Count ``size`` bytes of outputs, before they are kept."""
+        self.outputBytes += size
+        if self.outputLimit is not None and self.outputBytes > self.outputLimit:
+            raise OutputLimitExceeded(
+                f"the outputs are larger than the {self.outputLimit} bytes "
+                "this run may produce"
+            )
 
 
 _context: contextvars.ContextVar[HiveRecipeContext | None] = contextvars.ContextVar(
@@ -467,6 +515,8 @@ class HiveWrite:
                 base = head
 
             changes = _changes(store.list_tree(base), files)
+            size = sum(len(data) for data in changes.values() if data is not None)
+            context.addOutput(size)
             author = hiveProject.author(context.fallbackAuthor)
             if created:
                 store.create_branch(branch, base)
@@ -495,7 +545,7 @@ class HiveWrite:
             self.repository, self.commit = hiveProject.repository, sha
             context.writes.append(
                 WriteRecord(
-                    hiveProject.repository, branch, sha, created, hiveProject.path
+                    hiveProject.repository, branch, sha, created, hiveProject.path, size
                 )
             )
         finally:
@@ -528,6 +578,122 @@ class HiveWrite:
         if glyphs and len(glyphs) <= MAX_GLYPHS_IN_TRAILER:
             trailers.insert(0, f"Hive-Glyphs: {' '.join(glyphs)}")
         return title + "\n\n" + "\n".join(trailers) + "\n"
+
+
+# --- hive-artifact ---------------------------------------------------------------
+
+
+@registerOutputAction("hive-artifact")
+@dataclass(kw_only=True)
+class HiveArtifact:
+    """Deliver the font as a file of the run: a font, or its sources zipped.
+
+    Arguments:
+        format: ttf, woff2 or otf (when the server can build fonts); fontra
+          (the package, zipped) or designspace (designspace and UFOs, zipped).
+        name: The file's name, without extension; the recipe's name when not
+          given. It is not a path: anything else than letters, digits, ".",
+          "_" and "-" is replaced.
+    """
+
+    format: Literal["ttf", "woff2", "otf", "fontra", "designspace"]
+    name: str | None = None
+    input: ReadableFontBackend = field(init=False, default=NullBackend())
+    # Once built: the file's name in the run.
+    fileName: str | None = field(init=False, default=None)
+
+    def __post_init__(self):
+        from . import export
+
+        if self.format not in {**export.SOURCE_FORMATS, **export.FONT_FORMATS}:
+            raise ActionError(f"hive-artifact: no format {self.format!r}")
+
+    def fileNameFor(self, recipe: str) -> str:
+        from . import export
+
+        return export.download_name(export.safe_stem(self.name or recipe), self.format)
+
+    def checkBuildable(self) -> None:
+        from . import export
+
+        if self.format not in export.supported_formats():
+            raise ActionError(
+                f"hive-artifact: this server cannot build {self.format} fonts"
+            )
+
+    @asynccontextmanager
+    async def connect(
+        self, input: ReadableFontBackend
+    ) -> AsyncGenerator[OutputProcessorProtocol, None]:
+        self.input = input
+        try:
+            yield self
+        finally:
+            self.input = NullBackend()
+            await input.aclose()
+
+    async def process(
+        self, outputDir: Any = None, *, continueOnError: bool = False
+    ) -> None:
+        from . import export
+
+        context = currentContext("hive-artifact")
+        if outputDir is None:
+            raise ActionError("hive-artifact: only a runner chooses where files go")
+        self.checkBuildable()
+        fileName = self.fileNameFor(context.recipe)
+        if any(artifact.name == fileName for artifact in context.artifacts):
+            raise ActionError(f"hive-artifact: two artifacts called {fileName!r}")
+
+        stem = export.safe_stem(self.name or context.recipe)
+        target = pathlib.Path(outputDir) / fileName
+        with tempfile.TemporaryDirectory(prefix="hive-artifact-") as tmp:
+            work = pathlib.Path(tmp)
+            source = work / "source" / f"{stem}.fontra"
+            await self._writeSource(source, continueOnError)
+            result = await export.build(source, work, stem, self.format)
+            size = result.stat().st_size
+            context.addOutput(size)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(result, target)
+        self.fileName = fileName
+        context.artifacts.append(
+            ArtifactRecord(fileName, self.format, size, _sha256(target))
+        )
+
+    async def _writeSource(self, path: pathlib.Path, continueOnError: bool) -> None:
+        """The font as a ``.fontra`` folder. A project read and not changed
+        is the package as stored in git, every file of it."""
+        stored = _storedBackend(self.input)
+        if stored is not None:
+            stored.store.export(stored.fixed_commit, path)
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        output = FontraBackend.createFromPath(path)
+        async with aclosing(output):
+            await copyFont(self.input, output, continueOnError=continueOnError)
+
+
+def _storedBackend(backend: ReadableFontBackend) -> GitFontraBackend | None:
+    """The ``hive-read`` behind ``backend`` when nothing else is: no other
+    input, no filter."""
+    from fontra.workflow.merger import FontBackendMerger
+
+    while isinstance(backend, FontBackendMerger) and isinstance(
+        backend.inputA, NullBackend
+    ):
+        backend = backend.inputB
+    if isinstance(backend, GitFontraBackend) and backend.fixed_commit:
+        return backend
+    return None
+
+
+def _sha256(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        while chunk := file.read(1 << 20):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _isFontFile(path: str) -> bool:
@@ -566,7 +732,7 @@ def _changes(
 
 
 def _hiveSteps(steps, path="steps"):
-    """(path, action, step) of every hive-read / hive-write step."""
+    """(path, action, step) of every Hive step."""
     if not isinstance(steps, list):
         return
     for index, step in enumerate(steps):
@@ -575,8 +741,8 @@ def _hiveSteps(steps, path="steps"):
         stepPath = f"{path}[{index}]"
         if step.get("input") == "hive-read":
             yield stepPath, "hive-read", step
-        elif step.get("output") == "hive-write":
-            yield stepPath, "hive-write", step
+        elif step.get("output") in ("hive-write", "hive-artifact"):
+            yield stepPath, step["output"], step
         yield from _hiveSteps(step.get("steps"), f"{stepPath}.steps")
 
 
@@ -591,15 +757,25 @@ async def checkRecipeAccess(config: Mapping, context: HiveRecipeContext) -> list
     found before anything is read: every ``hive-read`` project must be
     readable and its ref must exist; every ``hive-write`` project needs
     ``edit`` (and ``branch`` for a new branch) and must not be written on its
-    default branch. ``config`` is what ``Workflow`` gets (substitutions
+    default branch; every ``hive-artifact`` must be something this server
+    can build, under a name of its own. ``config`` is what ``Workflow`` gets (substitutions
     applied). Each project is checked on its own. When there is no problem,
     the context is marked checked and the actions may run."""
     problems = []
     context.checked = False
+    fileNames: set[str] = set()
     for path, action, step in _hiveSteps(config.get("steps")):
         try:
             if action == "hive-read":
                 await HiveRead(**_arguments(step, action)).resolveCommit(context)
+                continue
+            if action == "hive-artifact":
+                artifact = HiveArtifact(**_arguments(step, action))
+                artifact.checkBuildable()
+                fileName = artifact.fileNameFor(context.recipe)
+                if fileName in fileNames:
+                    raise ActionError(f"two artifacts called {fileName!r}")
+                fileNames.add(fileName)
                 continue
             write = HiveWrite(**_arguments(step, action))
             hiveProject = await _resolve(context, action, write.project, "edit")

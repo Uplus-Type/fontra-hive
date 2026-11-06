@@ -454,6 +454,7 @@ UID = "0f8fad5b-d9cb-469f-a165-70867728950e"
         (UID.upper() + "@main", "uid", UID, "main"),
         ("Latin", "name", "Latin", None),
         ("Latin@feature/x", "name", "Latin", "feature/x"),
+        ("My Font", "name", "My Font", None),
     ],
 )
 def test_project_refs(text, kind, project, ref):
@@ -463,7 +464,7 @@ def test_project_refs(text, kind, project, ref):
     assert HiveProjectRef(parsed) is parsed
 
 
-@pytest.mark.parametrize("text", ["", "a/b/c", "owner/", "x@", "a b", 3])
+@pytest.mark.parametrize("text", ["", "a/b/c", "owner/", "a b/c", "x@", 3])
 def test_bad_project_refs(text):
     with pytest.raises(ActionError):
         HiveProjectRef(text)
@@ -629,6 +630,10 @@ def test_hive_actions_are_in_the_catalog():
     read = catalog.get("input", "hive-read")
     write = catalog.get("output", "hive-write")
     assert read.package == "fontra-hive" and write.package == "fontra-hive"
+    artifact = catalog.get("output", "hive-artifact").arguments["properties"]
+    assert set(artifact) == {"format", "name"}
+    assert artifact["format"]["enum"] == ["ttf", "woff2", "otf", "fontra", "designspace"]
+    assert "format" not in artifact["name"]  # no path
     assert read.required == ["project"]
     assert write.required == ["project"]
     # "project" is a Hive project, not any string
