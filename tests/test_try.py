@@ -203,6 +203,11 @@ def test_pure_python_openstep_plist():
     """The browser's openstep_plist (the real one is compiled)."""
     import sys
 
+    loaded = {
+        name: sys.modules.pop(name)
+        for name in list(sys.modules)
+        if name == "openstep_plist" or name.startswith("openstep_plist.")
+    }
     sys.path.insert(0, str(TRY_DIR / "py"))
     try:
         import openstep_plist
@@ -221,6 +226,7 @@ def test_pure_python_openstep_plist():
         sys.modules.pop("openstep_plist", None)
         for name in [m for m in sys.modules if m.startswith("openstep_plist.")]:
             sys.modules.pop(name)
+        sys.modules.update(loaded)
 
 
 def test_pyodide_is_served_here(manager, tmp_path, monkeypatch):  # noqa: F811

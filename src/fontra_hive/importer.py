@@ -5,19 +5,34 @@ A font that is a folder (``.ufo``, ``.fontra``, a ``.designspace`` with its
 UFOs, ``.glyphspackage``…) comes as a ``.zip``; a single-file font (``.ttf``,
 ``.otf``, ``.woff2``, ``.glyphs``…) comes as is. Zips are unpacked with
 limits (size, file count, no path outside the folder, no links).
+
+The feature code of the UFOs is checked before Fontra reads it
+(:func:`check_features`): an ``include`` can only name a file of the upload,
+of bounded size.
 """
 
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
+import os
 import pathlib
+import re
 import shutil
 import stat
+import string
 import zipfile
 from contextlib import aclosing
 from importlib.metadata import entry_points
 
+from .export import (
+    FEATURES_REFUSED,
+    FeaturesRefused,
+    _included_paths,
+    _stays_in_folder,
+    check_feature_includes,
+)
 from .fontracompat import guard_feature_reading
 
 # Fontra reading OpenType features with an outside program (sr-aef): best
@@ -31,6 +46,12 @@ MAX_UNZIPPED = 1024 * 1024 * 1024  # bytes, once unpacked
 MAX_FILES = 100_000
 # Folder formats, most complete first: a designspace brings its UFOs along.
 FOLDER_PREFERENCE = ["fontra", "designspace", "glyphspackage", "ufo"]
+# Feature files that a UFO's feature code includes: bytes read, all files
+# together, per UFO; and how deep includes may nest (feaLib stops at 5).
+MAX_INCLUDED = 5 * 1024 * 1024
+MAX_INCLUDE_DEPTH = 5
+MIN_INCLUDED_COST = 256  # bytes taken off for each file read, even empty
+DESIGNSPACE_REFUSED = "A .designspace can only use the UFOs that come with it."
 
 
 class ImportError_(ValueError):
@@ -103,6 +124,158 @@ def findFont(folder: pathlib.Path, extensions: set[str]) -> pathlib.Path:
     return candidates[0][3]
 
 
+# How Fontra lists included feature files: each line that matches, parsed
+# on its own.
+_LINE_INCLUDE = re.compile(r"include\s*\(([^)]+)\)")
+
+
+def _fontra_include_names(features: str) -> set[str]:
+    from fontTools.feaLib.ast import IncludeStatement
+    from fontTools.feaLib.parser import Parser
+
+    names = set()
+    for match in _LINE_INCLUDE.finditer(features):
+        start = features.rfind("\n", 0, match.start()) + 1
+        end = features.find("\n", match.end())
+        line = features[start : end if end != -1 else len(features)]
+        try:
+            statements = Parser(io.StringIO(line), followIncludes=False).parse()
+        except Exception:
+            names.add(match[1])  # not parsed: taken as a file name
+            continue
+        names.update(
+            st.filename
+            for st in statements.statements
+            if isinstance(st, IncludeStatement)
+        )
+    return names
+
+
+def _include_names(features: str) -> set[str]:
+    """Every file name that an ``include`` of ``features`` may open, read as
+    feaLib reads it and as Fontra lists included files. Raises
+    :class:`FeaturesRefused` for a name that leaves the folder."""
+    check_feature_includes(features)
+    names = set(_included_paths(features)) | _fontra_include_names(features)
+    if not all(_stays_in_folder(name) for name in names):
+        raise FeaturesRefused(FEATURES_REFUSED)
+    return names
+
+
+def _inside(path: pathlib.Path, root: pathlib.Path) -> pathlib.Path:
+    """The real path of ``path`` (links followed), if it is in ``root``."""
+    try:
+        real = pathlib.Path(os.path.realpath(path))
+    except (OSError, ValueError):
+        raise FeaturesRefused(FEATURES_REFUSED)
+    if real != root and root not in real.parents:
+        raise FeaturesRefused(FEATURES_REFUSED)
+    return real
+
+
+def _read_feature_file(
+    path: pathlib.Path, root: pathlib.Path, budget: list[int] | None
+) -> str:
+    """The text of a feature file of the upload, at most ``budget[0]`` bytes
+    (taken off the budget), or the whole file if ``budget`` is None."""
+    real = _inside(path, root)
+    try:
+        info = os.stat(real)
+        if not stat.S_ISREG(info.st_mode):
+            raise FeaturesRefused(FEATURES_REFUSED)
+        if budget is None:
+            data = real.read_bytes()
+        else:
+            if info.st_size > budget[0]:
+                raise FeaturesRefused(FEATURES_REFUSED)
+            with open(real, "rb") as f:
+                data = f.read(budget[0] + 1)
+            if len(data) > budget[0]:
+                raise FeaturesRefused(FEATURES_REFUSED)
+            budget[0] -= max(len(data), MIN_INCLUDED_COST)
+    except OSError:
+        raise FeaturesRefused(FEATURES_REFUSED)
+    return data.decode("utf-8", "replace")
+
+
+def _check_included(
+    features: str,
+    folders: list[pathlib.Path],
+    parent: pathlib.Path | None,
+    root: pathlib.Path,
+    budget: list[int],
+    depth: int,
+) -> None:
+    """Check the files that ``features`` includes, and theirs in turn. A name
+    is looked for in ``folders`` (where feaLib and Fontra start from) and in
+    ``parent``, the folder of the including file (where Fontra also looks)."""
+    names = _include_names(features)
+    if not names:
+        return
+    if depth >= MAX_INCLUDE_DEPTH:
+        raise FeaturesRefused(FEATURES_REFUSED)
+    lookIn = [*folders, parent] if parent is not None else folders
+    for name in sorted(names):
+        for spelling in {name, name.strip(string.whitespace + "\"'")}:
+            for folder in lookIn:
+                path = folder / spelling
+                if not os.path.lexists(path):
+                    continue  # not found: Fontra reads nothing either
+                text = _read_feature_file(path, root, budget)
+                included = _inside(path, root)
+                _check_included(
+                    text, folders, included.parent, root, budget, depth + 1
+                )
+
+
+def _designspace_ufos(
+    designspace: pathlib.Path, root: pathlib.Path
+) -> list[pathlib.Path]:
+    from fontTools.designspaceLib import DesignSpaceDocument
+
+    try:
+        document = DesignSpaceDocument.fromfile(designspace)
+    except Exception:
+        raise ImportError_(f"Could not read {designspace.name}.")
+    ufos = []
+    for source in document.sources:
+        if source.path is None:
+            continue
+        try:
+            ufos.append(_inside(pathlib.Path(source.path), root))
+        except FeaturesRefused:
+            raise ImportError_(DESIGNSPACE_REFUSED)
+    return ufos
+
+
+def check_features(unpacked: pathlib.Path, source: pathlib.Path) -> None:
+    """Raise :class:`ImportError_` unless the feature code of every UFO of the
+    upload (and of the designspace being imported) only includes files of
+    the upload, of bounded size. Nothing is converted before this."""
+    root = pathlib.Path(os.path.realpath(unpacked))
+    ufos = {
+        pathlib.Path(os.path.realpath(path))
+        for path in root.rglob("*")
+        if path.suffix.lower() == ".ufo" and path.is_dir()
+    }
+    folders = []
+    if source.suffix.lower() == ".designspace":
+        ufos.update(_designspace_ufos(source, root))
+        folders.append(pathlib.Path(os.path.realpath(source)).parent)
+    for ufo in sorted(ufos):
+        features = ufo / "features.fea"
+        if not os.path.lexists(features):
+            continue
+        try:
+            text = _read_feature_file(features, root, None)
+            _check_included(
+                text, [ufo.parent, ufo, *folders], None, root, [MAX_INCLUDED], 0
+            )
+        except FeaturesRefused:
+            logger.warning("import refused: feature code of %s", ufo.name)
+            raise ImportError_(FEATURES_REFUSED)
+
+
 async def _convert(source: pathlib.Path, destination: pathlib.Path) -> None:
     from fontra.backends import getFileSystemBackend, newFileSystemBackend
     from fontra.backends.copy import copyFont
@@ -135,6 +308,7 @@ def convertToFontra(
     source = findFont(unpacked, extensions)
     if source.suffix.lower() == ".fontra":
         return source  # already the right format
+    check_features(unpacked, source)
     destination = work / "converted.fontra"
     try:
         asyncio.run(_convert(source, destination))

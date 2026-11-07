@@ -11,15 +11,21 @@ minutes and a lot of memory, and must not stall the server. The Download
 panel is the built-in recipe "download" (:func:`fontra_hive.runner.downloadRequest`),
 and the ``hive-artifact`` action builds with :func:`build`.
 
+What a failed build tells the browser is :func:`failure_message`; its log stays
+on the server.
+
 Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
 """
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import os
 import pathlib
 import re
 import shutil
+import string
 import zipfile
 from contextlib import aclosing
 
@@ -33,6 +39,63 @@ FONT_FORMATS = {
     "ttf": ("TrueType (.ttf)", ".ttf", False),
     "woff2": ("Webfont (.woff2)", ".woff2", False),
 }
+
+
+EXPORT_FAILED = "The export failed."
+EXPORT_TOO_LONG = "The export took too long."
+COMPILER_STOPPED = "The font compiler was stopped."
+FEATURES_REFUSED = "Feature code can only include files from the project."
+
+_INCLUDE = r"include(?:\s|#[^\r\n]*)*\(([^)]*)"
+_ANY_INCLUDE = re.compile(_INCLUDE, re.IGNORECASE)
+# Comments and strings, read as feaLib reads them, or an include.
+_FEATURE_TOKEN = re.compile(r'#[^\r\n]*|"[^"]*"?|' + _INCLUDE, re.IGNORECASE)
+_DRIVE = re.compile(r"[A-Za-z]:")
+
+
+class FeaturesRefused(Exception):
+    """Feature code that this server does not compile."""
+
+
+def _included_paths(features: str) -> list[str]:
+    outside = _FEATURE_TOKEN.sub("", features)
+    if "anon" in outside.lower():
+        # An anonymous block is free text, so "#" and quotes around it mean
+        # nothing certain: every include of the text counts.
+        return _ANY_INCLUDE.findall(features)
+    return [
+        match[1]
+        for match in _FEATURE_TOKEN.finditer(features)
+        if match[1] is not None
+    ]
+
+
+def _stays_in_folder(path: str) -> bool:
+    path = path.strip(string.whitespace + "\"'")
+    return not (
+        path.startswith(("/", "\\", "~")) or ".." in path or _DRIVE.match(path)
+    )
+
+
+def check_feature_includes(features: str) -> None:
+    """Raise :class:`FeaturesRefused` unless every ``include`` of this feature
+    code stays in the folder it is compiled in."""
+    if not all(_stays_in_folder(path) for path in _included_paths(features)):
+        raise FeaturesRefused(FEATURES_REFUSED)
+
+
+def failure_message(result) -> str:
+    """What the browser is told about a build that did not succeed, from its
+    :class:`fontra_hive.runner.RunResult`: one of our sentences, never its log."""
+    from . import runner
+
+    if result.reason == runner.REFUSED_FEATURES:
+        return FEATURES_REFUSED
+    if result.state == runner.TIMEOUT:
+        return EXPORT_TOO_LONG
+    if result.reason == runner.STOPPED:
+        return COMPILER_STOPPED
+    return EXPORT_FAILED
 
 
 def can_build_fonts() -> bool:
@@ -72,12 +135,19 @@ async def _copy(source: pathlib.Path, destination: pathlib.Path) -> None:
 
 async def _compile(source: pathlib.Path, destination: pathlib.Path) -> None:
     """As Fontra Pak does: discrete axes dropped (the default is built),
-    variable composites decomposed, anchors propagated, then fontmake."""
+    variable composites decomposed, anchors propagated, then fontmake. The
+    feature code is checked first; fontmake works in a folder of its own, where
+    its includes are looked for."""
     from fontra.backends import getFileSystemBackend
     from fontra.core.classes import DiscreteFontAxis
     from fontra.workflow.workflow import Workflow
 
+    source = source.resolve()
+    destination = destination.resolve()
     sourceBackend = getFileSystemBackend(source)
+    check_feature_includes((await sourceBackend.getFeatures()).text)
+    folder = destination.parent / "compile"
+    folder.mkdir(exist_ok=True)
     axes = await sourceBackend.getAxes()
     discrete = [a.name for a in axes.axes if isinstance(a, DiscreteFontAxis)]
     steps = [dict(filter="subset-axes", dropAxisNames=discrete)] if discrete else []
@@ -88,13 +158,15 @@ async def _compile(source: pathlib.Path, destination: pathlib.Path) -> None:
         dict(
             output="compile-fontmake",
             destination=destination.name,
+            ufoTempDir=os.fspath(folder),
             options={"overlaps-backend": "pathops"},
         ),
     ]
     workflow = Workflow(config=dict(steps=steps), parentDir=source.parent)
-    async with workflow.endPoints(sourceBackend) as endPoints:
-        for output in endPoints.outputs:
-            await output.process(destination.parent, continueOnError=False)
+    with contextlib.chdir(folder):
+        async with workflow.endPoints(sourceBackend) as endPoints:
+            for output in endPoints.outputs:
+                await output.process(destination.parent, continueOnError=False)
 
 
 def _zip(folder: pathlib.Path, destination: pathlib.Path, *extra: pathlib.Path) -> None:

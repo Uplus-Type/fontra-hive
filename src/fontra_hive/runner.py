@@ -105,6 +105,11 @@ OUT_OF_MEMORY = "out-of-memory"
 INTERRUPTED = "interrupted"  # the server stopped during the run
 INTERRUPTED_MESSAGE = "The server stopped during the run."
 
+# Why a run ended so, when its state does not say: the server reads only these.
+REFUSED_FEATURES = "refused-features"  # feature code that includes other files
+STOPPED = "stopped"  # the process ended without a result: killed, or crashed
+REASONS = frozenset({REFUSED_FEATURES, STOPPED})
+
 # All the process sees of the server's environment.
 _ENVIRONMENT = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "PYTHONPATH", "VIRTUAL_ENV")
 
@@ -227,6 +232,7 @@ class RunResult:
     peakMemoryBytes: int | None = None
     log: str = ""
     directory: pathlib.Path | None = None
+    reason: str = ""  # one of REASONS, or nothing
 
     @property
     def succeeded(self) -> bool:
@@ -470,6 +476,7 @@ async def _run(
     started = time.monotonic()
     process = None
     log = _Log()
+    said = False  # the process gave its result
     try:
         for name in ("artifacts", "tmp", "home"):
             (workDir / name).mkdir()
@@ -493,7 +500,7 @@ async def _run(
         await _send(process, _job(request, limits, workDir))
         try:
             async with asyncio.timeout(limits.timeSeconds):
-                await _follow(process, resolver, result, onProgress)
+                said = await _follow(process, resolver, result, onProgress)
                 await process.wait()
         except TimeoutError:
             result.state = TIMEOUT
@@ -510,6 +517,8 @@ async def _run(
         if process is not None:
             _stop(process)
         result.durationSeconds = round(time.monotonic() - started, 3)
+        if result.state == FAILED and process is not None and not said:
+            result.reason = STOPPED
         paths = [str(p) for p in (workDir, runsRoot, *serverPaths)]
         result.log = _scrub(log.text(), paths)
         if result.state == FAILED and (not result.message or PANIC in result.log):
@@ -602,16 +611,18 @@ async def _send(process, message: dict) -> None:
         await process.stdin.drain()
 
 
-async def _follow(process, resolver, result: RunResult, onProgress) -> None:
+async def _follow(process, resolver, result: RunResult, onProgress) -> bool:
+    """Until the process stops talking; True once it gave its result."""
+    said = False
     lists = {"read": result.reads, "write": result.writes}
     while True:
         try:
             line = await process.stdout.readline()
         except ValueError:  # a line longer than the stream's limit
             result.message = "The run said something it should not."
-            return
+            return said
         if not line:
-            return
+            return said
         try:
             message = json.loads(line)
             kind = message["type"]
@@ -628,6 +639,9 @@ async def _follow(process, resolver, result: RunResult, onProgress) -> None:
             result.message = str(message.get("message", ""))
             result.outputBytes = int(message.get("outputBytes") or 0)
             result.peakMemoryBytes = message.get("peakMemoryBytes")
+            reason = message.get("reason")
+            result.reason = reason if reason in REASONS else ""
+            said = True
         elif kind == "progress" and onProgress is not None:
             outcome = onProgress(message)
             if asyncio.iscoroutine(outcome):
@@ -921,9 +935,24 @@ class _Provenance:
             self.sent[kind] = len(records)
 
 
+def _refusedFeatures(error: BaseException, depth: int = 0) -> bool:
+    """Whether ``error`` is, or comes from, refused feature code."""
+    from .export import FeaturesRefused
+
+    if isinstance(error, FeaturesRefused):
+        return True
+    if depth > 10:
+        return False
+    if isinstance(error, BaseExceptionGroup):
+        return any(_refusedFeatures(e, depth + 1) for e in error.exceptions)
+    cause = error.__cause__ or error.__context__
+    return cause is not None and _refusedFeatures(cause, depth + 1)
+
+
 async def _execute(
     job: dict, channel: _Channel, context: HiveRecipeContext
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
+    """(state, message, reason)."""
     from fontra.workflow.workflow import Workflow
 
     workDir = pathlib.Path(job["workDir"])
@@ -953,23 +982,27 @@ async def _execute(
                     provenance.flush()
                     channel.send(**current, state="done")
                     current = None
-        return SUCCEEDED, ""
+        return SUCCEEDED, "", ""
     except _Invalid as error:
-        return INVALID, str(error)[:MESSAGE_CHARACTERS]
+        return INVALID, str(error)[:MESSAGE_CHARACTERS], ""
     except RecipeAccessDenied as error:
-        return DENIED, str(error)[:MESSAGE_CHARACTERS]
+        return DENIED, str(error)[:MESSAGE_CHARACTERS], ""
     except OutputLimitExceeded as error:
-        return TOO_LARGE, str(error)
+        return TOO_LARGE, str(error), ""
     except MemoryError:
-        return OUT_OF_MEMORY, "The run needed more memory than it may use."
+        return OUT_OF_MEMORY, "The run needed more memory than it may use.", ""
     except SystemExit as error:  # how fontmake ends
         said = "" if isinstance(error.code, (int, type(None))) else error.code
-        return FAILED, dressMessage(said) if said else ""
+        return FAILED, dressMessage(said) if said else "", ""
     except Exception as error:
         if isinstance(error, OSError) and error.errno == errno.EFBIG:
-            return TOO_LARGE, "A file was larger than this run may produce."
+            return TOO_LARGE, "A file was larger than this run may produce.", ""
+        if _refusedFeatures(error):
+            from .export import FEATURES_REFUSED
+
+            return INVALID, FEATURES_REFUSED, REFUSED_FEATURES
         logger.exception("the run failed")
-        return FAILED, dressMessage(error)
+        return FAILED, dressMessage(error), ""
     finally:
         provenance.flush()
         if current is not None:
@@ -992,11 +1025,12 @@ def main() -> int:
         recipe=job["name"],
         outputLimit=int(job["limits"]["outputBytes"]),
     )
-    state, message = asyncio.run(_execute(job, channel, context))
+    state, message, reason = asyncio.run(_execute(job, channel, context))
     channel.send(
         type="result",
         state=state,
         message=message,
+        reason=reason,
         outputBytes=context.outputBytes,
         peakMemoryBytes=_peakMemory(),
     )

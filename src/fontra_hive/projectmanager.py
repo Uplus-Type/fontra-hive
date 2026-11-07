@@ -726,15 +726,22 @@ class DevHiveProjectManager(CommentRoutesMixin):
         except runner.RunRefused as error:
             return web.Response(status=error.status, text=error.text)
         try:
-            if result.state == runner.TIMEOUT:
-                raise web.HTTPGatewayTimeout(text="The export took too long.")
             if not result.succeeded:
-                logger.error(
-                    "export of %s as %s failed: %s", name, format, result.log[-2000:]
+                # The log stays here (no path of the server in it); the
+                # browser gets one of our sentences.
+                logger.warning(
+                    "export of %s as %s ended %s: %s",
+                    name,
+                    format,
+                    result.state,
+                    result.log[-2000:],
                 )
-                raise web.HTTPInternalServerError(
-                    text=f"The export failed: {result.message}"
-                )
+                message = export.failure_message(result)
+                if message == export.FEATURES_REFUSED:
+                    raise web.HTTPUnprocessableEntity(text=message)
+                if message == export.EXPORT_TOO_LONG:
+                    raise web.HTTPGatewayTimeout(text=message)
+                raise web.HTTPInternalServerError(text=message)
             return await _sendFile(
                 request, result.directory / result.artifacts[0]["name"]
             )

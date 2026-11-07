@@ -590,6 +590,26 @@ def test_the_process_holds_no_secret(hive, tmp_path, monkeypatch):
     assert str(hive.runs) not in result.message  # no path of the server
 
 
+@needsValidation
+@needsFonts
+def test_refused_feature_code_is_said_so(hive):
+    store = GitRepoStore.open(hive.root / "Latin.git")
+    store.commit(
+        {"features.txt": b"include(/etc/hostname);\n"}, message="F", author=AUTHOR
+    )
+    store.close()
+    addRecipe(
+        hive,
+        "steps:\n- input: hive-read\n  project: Latin\n"
+        "- output: hive-artifact\n  format: ttf\n",
+    )
+    result = start(hive)
+    assertRecordedAndClean(hive, result, "invalid")
+    assert result.reason == runner.REFUSED_FEATURES
+    assert result.message == export.FEATURES_REFUSED
+    assert result.artifacts == []
+
+
 def test_messages_are_dressed():
     assert runner.dressMessage("") == "The run stopped without saying why."
     assert runner.dressMessage("a\nb\n") == "b"
