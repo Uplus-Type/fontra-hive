@@ -320,6 +320,9 @@ class HiveRecipeContext:
     # Measured for every run; bounded when the runner gives a limit.
     outputBytes: int = 0
     outputLimit: int | None = None
+    # hive-read refuses a project whose feature code includes files from
+    # elsewhere: the filters of a recipe would follow those includes.
+    checkFeatures: bool = True
 
     def addOutput(self, size: int) -> None:
         """Count ``size`` bytes of outputs, before they are kept."""
@@ -426,6 +429,14 @@ class HiveRead:
         store = GitRepoStore.open(hiveProject.repoPath)
         try:
             backend = GitFontraBackend(store, hiveProject.defaultBranch, commit=sha)
+            if context.checkFeatures:
+                from .export import check_feature_includes
+
+                try:
+                    check_feature_includes((await backend.getFeatures()).text)
+                except BaseException:
+                    await backend.aclose()
+                    raise
             context.reads.append(
                 ReadRecord(hiveProject.repository, sha, ref, hiveProject.path)
             )

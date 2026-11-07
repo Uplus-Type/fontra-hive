@@ -65,6 +65,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from .access import Access, HiveUser
+from .export import check_feature_includes
 from .hiveapi import HiveApiUnavailable
 from .recipe import (
     HiveProject,
@@ -109,6 +110,28 @@ INTERRUPTED_MESSAGE = "The server stopped during the run."
 REFUSED_FEATURES = "refused-features"  # feature code that includes other files
 STOPPED = "stopped"  # the process ended without a result: killed, or crashed
 REASONS = frozenset({REFUSED_FEATURES, STOPPED})
+STATES = frozenset(
+    {SUCCEEDED, INVALID, DENIED, FAILED, TIMEOUT, TOO_LARGE, OUT_OF_MEMORY}
+)
+
+# What a failed run says: one of these, never what a compiler or an action
+# printed, which may quote any file it read. That stays in the log.
+RUN_FAILED = "The run failed."
+COMPILER_CRASHED = "The compiler crashed."
+RUN_STOPPED = "The run stopped unexpectedly."
+RUN_NOT_STARTED = "The run could not start."
+RUN_INTERRUPTED = "The run was interrupted."
+RUN_SAID_TOO_MUCH = "The run said something it should not."
+FAILED_MESSAGES = frozenset(
+    {
+        RUN_FAILED,
+        COMPILER_CRASHED,
+        RUN_STOPPED,
+        RUN_NOT_STARTED,
+        RUN_INTERRUPTED,
+        RUN_SAID_TOO_MUCH,
+    }
+)
 
 # All the process sees of the server's environment.
 _ENVIRONMENT = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "PYTHONPATH", "VIRTUAL_ENV")
@@ -432,7 +455,7 @@ async def runRecipe(
     ``serverPaths``: more paths people must not read in messages and logs."""
     ticket = await registry.open(request)
     limits = limits.lowered(ticket.limits)
-    result = RunResult(ticket.id, FAILED, "The run stopped unexpectedly.")
+    result = RunResult(ticket.id, FAILED, RUN_STOPPED)
     try:
         async with slot or _runSlot:
             await _run(
@@ -446,7 +469,7 @@ async def runRecipe(
                 serverPaths,
             )
     except BaseException:
-        result.message = "The run was interrupted."
+        result.message = RUN_INTERRUPTED
         raise
     finally:
         await asyncio.shield(_close(registry, ticket, result))
@@ -512,7 +535,7 @@ async def _run(
             logTask.cancel()
     except OSError as error:
         logger.exception("recipe run %s", ticket.id)
-        result.message = f"The run could not start: {error.strerror or error}"
+        result.message = RUN_NOT_STARTED
     finally:
         if process is not None:
             _stop(process)
@@ -521,9 +544,9 @@ async def _run(
             result.reason = STOPPED
         paths = [str(p) for p in (workDir, runsRoot, *serverPaths)]
         result.log = _scrub(log.text(), paths)
-        if result.state == FAILED and (not result.message or PANIC in result.log):
-            result.message = dressMessage(result.log)
-        result.message = _scrub(result.message, paths)
+        if result.state == FAILED:
+            result.message = failedMessage(result)
+        result.message = _scrub(result.message, paths)[:MESSAGE_CHARACTERS]
         try:
             if result.succeeded:
                 # A built-in recipe keeps nothing: should the server die before
@@ -619,7 +642,7 @@ async def _follow(process, resolver, result: RunResult, onProgress) -> bool:
         try:
             line = await process.stdout.readline()
         except ValueError:  # a line longer than the stream's limit
-            result.message = "The run said something it should not."
+            result.message = RUN_SAID_TOO_MUCH
             return said
         if not line:
             return said
@@ -635,7 +658,8 @@ async def _follow(process, resolver, result: RunResult, onProgress) -> bool:
         elif kind == "artifact":
             result.artifacts.append(message["record"])
         elif kind == "result":
-            result.state = str(message.get("state", FAILED))
+            state = message.get("state")
+            result.state = state if state in STATES else FAILED
             result.message = str(message.get("message", ""))
             result.outputBytes = int(message.get("outputBytes") or 0)
             result.peakMemoryBytes = message.get("peakMemoryBytes")
@@ -703,20 +727,15 @@ def _scrub(text: str, paths) -> str:
     return text
 
 
-def dressMessage(text: str) -> str:
-    """One readable line from what a compiler or an action says: never a
-    stack, and a Rust panic says so."""
-    lines = [line.strip() for line in str(text).splitlines() if line.strip()]
-    if not lines:
-        return "The run stopped without saying why."
-    for index, line in enumerate(lines):
-        if PANIC in line or line.startswith(PANIC.lstrip()):
-            said = lines[index + 1] if index + 1 < len(lines) else ""
-            if said.startswith("note:"):
-                said = ""
-            line = f"The compiler crashed: {said}" if said else ""
-            return (line or "The compiler crashed.")[:MESSAGE_CHARACTERS]
-    return lines[-1][:MESSAGE_CHARACTERS]
+def failedMessage(result: RunResult) -> str:
+    """What people read of a failed run: one of :data:`FAILED_MESSAGES`."""
+    if result.message in FAILED_MESSAGES:
+        return result.message  # the server's own
+    if PANIC in result.log:
+        return COMPILER_CRASHED
+    if result.reason == STOPPED:
+        return RUN_STOPPED
+    return RUN_FAILED
 
 
 # --- projects, over the pipe ------------------------------------------------------
@@ -871,9 +890,13 @@ def _readRecipe(job: dict, workDir: pathlib.Path) -> Mapping:
                 raise _Invalid(f"{path} is not a file: links are refused")
             if not _safeTreePath(path):
                 raise _Invalid(f"{path!r} is not a path in the recipe")
+            data = store.read_blob(sha)
+            # Any asset may be feature code (add-features, or an include):
+            # checked before anything runs, as a font's features are.
+            check_feature_includes(data.decode("utf-8", "replace"))
             target = workDir / path
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(store.read_blob(sha))
+            target.write_bytes(data)
     finally:
         store.close()
     try:
@@ -992,8 +1015,9 @@ async def _execute(
     except MemoryError:
         return OUT_OF_MEMORY, "The run needed more memory than it may use.", ""
     except SystemExit as error:  # how fontmake ends
-        said = "" if isinstance(error.code, (int, type(None))) else error.code
-        return FAILED, dressMessage(said) if said else "", ""
+        if not isinstance(error.code, (int, type(None))):
+            logger.warning("the compiler stopped: %s", error.code)
+        return FAILED, "", ""
     except Exception as error:
         if isinstance(error, OSError) and error.errno == errno.EFBIG:
             return TOO_LARGE, "A file was larger than this run may produce.", ""
@@ -1002,7 +1026,7 @@ async def _execute(
 
             return INVALID, FEATURES_REFUSED, REFUSED_FEATURES
         logger.exception("the run failed")
-        return FAILED, dressMessage(error), ""
+        return FAILED, "", ""
     finally:
         provenance.flush()
         if current is not None:
@@ -1024,6 +1048,8 @@ def main() -> int:
         resolver=_PipeResolver(channel),
         recipe=job["name"],
         outputLimit=int(job["limits"]["outputBytes"]),
+        # A recipe of the server reads features only to compile, which checks.
+        checkFeatures=job["source"] is not None,
     )
     state, message, reason = asyncio.run(_execute(job, channel, context))
     channel.send(

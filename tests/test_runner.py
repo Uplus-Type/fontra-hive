@@ -560,9 +560,8 @@ def test_a_compiler_that_fails_ends_properly(hive, tmp_path, monkeypatch):
     )
     result = start(hive)
     assertRecordedAndClean(hive, result, "failed")
-    assert result.message == "The compiler crashed: index out of bounds"
-    assert "Traceback" not in result.message
-    assert "panicked" in result.log  # the whole text stays in the log
+    assert result.message == runner.COMPILER_CRASHED
+    assert "index out of bounds" in result.log  # the whole text stays in the log
 
 
 @needsValidation
@@ -585,9 +584,10 @@ def test_the_process_holds_no_secret(hive, tmp_path, monkeypatch):
     )
     result = start(hive)
     assert result.state == "failed"
-    assert "HIVE_SERVICE_KEY" not in result.message
-    assert "TMPDIR" in result.message
-    assert str(hive.runs) not in result.message  # no path of the server
+    assert result.message == runner.RUN_FAILED
+    assert "TMPDIR" in result.log  # what fontmake said is in the log
+    assert "HIVE_SERVICE_KEY" not in result.log
+    assert str(hive.runs) not in result.log  # no path of the server
 
 
 @needsValidation
@@ -610,16 +610,111 @@ def test_refused_feature_code_is_said_so(hive):
     assert result.artifacts == []
 
 
-def test_messages_are_dressed():
-    assert runner.dressMessage("") == "The run stopped without saying why."
-    assert runner.dressMessage("a\nb\n") == "b"
-    panic = "x\nthread 'a' panicked at b.rs:1:2:\nno glyph\nnote: backtrace"
-    assert runner.dressMessage(panic) == "The compiler crashed: no glyph"
-    assert (
-        runner.dressMessage("thread 'a' panicked at b.rs:1:2:\nnote: x")
-        == "The compiler crashed."
+def test_a_failed_run_says_one_of_our_sentences():
+    def failed(message="", log="", reason=""):
+        result = runner.RunResult("x", runner.FAILED, message, log=log)
+        result.reason = reason
+        return runner.failedMessage(result)
+
+    assert failed('got NAME "word"', "word\n") == runner.RUN_FAILED
+    assert failed("", "x\nthread 'a' panicked at b.rs:1:2:\nword") == (
+        runner.COMPILER_CRASHED
     )
-    assert len(runner.dressMessage("x" * 9000)) == runner.MESSAGE_CHARACTERS
+    assert failed("word", reason=runner.STOPPED) == runner.RUN_STOPPED
+    for message in runner.FAILED_MESSAGES:
+        assert failed(message, "thread 'a' panicked at b.rs:1:2:") == message
+
+
+@needsValidation
+def test_what_an_action_says_stays_in_the_log(hive):
+    addRecipe(
+        hive,
+        "steps:\n- input: hive-read\n  project: Latin\n"
+        "- filter: add-features\n  featureFile: assets/extra.fea\n"
+        "- output: hive-artifact\n  format: fontra\n",
+        {"assets/extra.fea": b"feature liga {\n  word-of-the-witness\n} liga;\n"},
+    )
+    result = start(hive)
+    assert result.state == "failed", result.message
+    assert result.message in runner.FAILED_MESSAGES
+    assert "word-of-the-witness" not in result.message
+    assert "word-of-the-witness" in result.log
+    assert recorded(hive, result)["message"] == result.message
+
+
+@needsValidation
+def test_feature_code_in_an_asset_is_checked_before_running(hive):
+    addRecipe(
+        hive,
+        "steps:\n- input: hive-read\n  project: Latin\n"
+        "- filter: add-features\n  featureFile: assets/extra.fea\n"
+        "- output: hive-artifact\n  format: fontra\n",
+        {"assets/extra.fea": b"include(/etc/hostname);\n"},
+    )
+    result = start(hive)
+    assertRecordedAndClean(hive, result, "invalid")
+    assert result.reason == runner.REFUSED_FEATURES
+    assert result.message == export.FEATURES_REFUSED
+    assert result.reads == []  # before anything is read
+
+
+@needsValidation
+def test_any_asset_is_checked(hive):
+    addRecipe(
+        hive,
+        "steps:\n- input: hive-read\n  project: Latin\n"
+        "- output: hive-artifact\n  format: fontra\n",
+        {"assets/shared/more.txt": b"feature liga {\n include ( ../../x );\n} liga;"},
+    )
+    result = start(hive)
+    assert (result.state, result.reason) == ("invalid", runner.REFUSED_FEATURES)
+
+
+@needsValidation
+def test_assets_with_relative_includes_are_fine(hive):
+    addRecipe(
+        hive,
+        "steps:\n- input: hive-read\n  project: Latin\n"
+        "- output: hive-artifact\n  format: fontra\n",
+        {
+            "assets/extra.fea": b"include(shared/more.fea); # include(/etc/x);\n",
+            "assets/shared/more.fea": b"feature liga { sub f i by f_i; } liga;\n",
+        },
+    )
+    result = start(hive)
+    assert result.succeeded, result.message
+
+
+def includeElsewhere(hive, project="Latin"):
+    store = GitRepoStore.open(hive.root / f"{project}.git")
+    try:
+        store.commit(
+            {"features.txt": b"include(/etc/hostname);\n"}, message="F", author=AUTHOR
+        )
+    finally:
+        store.close()
+
+
+@needsValidation
+def test_a_recipe_does_not_read_a_project_that_includes_files_from_elsewhere(hive):
+    includeElsewhere(hive)
+    addRecipe(
+        hive,
+        "steps:\n- input: hive-read\n  project: Latin\n"
+        "- output: hive-artifact\n  format: fontra\n",
+    )
+    result = start(hive)
+    assertRecordedAndClean(hive, result, "invalid")
+    assert result.reason == runner.REFUSED_FEATURES
+    assert result.message == export.FEATURES_REFUSED
+    assert result.reads == [] and result.artifacts == []
+
+
+def test_its_sources_are_still_downloaded(hive):
+    includeElsewhere(hive)
+    result = download(hive, "Latin", "Latin", "fontra")
+    assert result.succeeded, result.message
+    result.discard()
 
 
 def test_no_path_of_the_server_in_what_people_read():
