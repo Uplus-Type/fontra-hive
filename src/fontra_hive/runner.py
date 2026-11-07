@@ -55,6 +55,7 @@ import pathlib
 import re
 import shutil
 import signal
+import socket
 import stat
 import sys
 import tempfile
@@ -84,6 +85,7 @@ logger = logging.getLogger(__name__)
 RECIPE_FILE = "recipe.yaml"
 ASSETS_FOLDER = "assets"
 RUNS_DIR_VARIABLE = "HIVE_RUNS_DIR"
+SERVER_ID_VARIABLE = "HIVE_SERVER_ID"
 WORK_PREFIX = "work-"
 SEND_PREFIX = "send-"  # a built-in recipe's files, on their way to a person
 SWEEP_SECONDS = 15 * 60
@@ -149,6 +151,14 @@ def runsFolder(rootPath: pathlib.Path) -> pathlib.Path:
         if configured
         else rootPath.with_name(rootPath.name + ".runs")
     )
+
+
+def serverId() -> str:
+    """This server, for the registry: ``HIVE_SERVER_ID``, or the host's name.
+    Stable across restarts, so that a server closes its own runs only."""
+    configured = os.environ.get(SERVER_ID_VARIABLE, "").strip()
+    name = configured or socket.gethostname()
+    return re.sub(r"[^A-Za-z0-9._:-]", "-", name)[:100]
 
 
 @dataclass(frozen=True)
@@ -320,8 +330,8 @@ class RunRegistry(Protocol):
         """Their files are gone."""
 
     async def interrupted(self, before: str) -> list[str]:
-        """Runs open since before this moment (ISO 8601) stopped with their
-        server: closes them, and returns their ids."""
+        """Runs of this server open since before this moment (ISO 8601)
+        stopped with it: closes them, and returns their ids."""
 
 
 class LocalRunRegistry:
@@ -384,12 +394,14 @@ class HiveApiRunRegistry:
     the server did before there was a registry, so it goes on without one
     (an older hive-api, or one that is down); a recipe of its own does not."""
 
-    def __init__(self, api):
+    def __init__(self, api, server: str | None = None):
         self.api = api
+        self.server = serverId() if server is None else server
 
     async def open(self, request: RunRequest) -> RunTicket:
+        opening = {**_openingOf(request), "server": self.server}
         try:
-            status, data = await self.api.recipeRunOpen(_openingOf(request))
+            status, data = await self.api.recipeRunOpen(opening)
         except HiveApiUnavailable as error:
             if request.builtin:
                 logger.warning("recipe run not registered: %s", error)
@@ -420,7 +432,7 @@ class HiveApiRunRegistry:
         await self.api.recipeRunsErased(runs)
 
     async def interrupted(self, before: str) -> list[str]:
-        return await self.api.recipeRunsInterrupted(before)
+        return await self.api.recipeRunsInterrupted(before, self.server)
 
 
 def _openingOf(request: RunRequest) -> dict:

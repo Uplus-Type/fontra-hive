@@ -360,10 +360,13 @@ class HiveApi:
         if status != 200:
             raise HiveApiUnavailable(f"/api/internal/recipe-runs/expired: HTTP {status}")
 
-    async def recipeRunsInterrupted(self, before: str) -> list[str]:
-        """Close the runs open since before ``before``; returns their ids."""
+    async def recipeRunsInterrupted(self, before: str, server: str = "") -> list[str]:
+        """Close the runs of ``server`` open since before ``before``; returns
+        their ids."""
         status, data = await self._call(
-            "POST", "/api/internal/recipe-runs/interrupted", json={"before": before}
+            "POST",
+            "/api/internal/recipe-runs/interrupted",
+            json={"before": before, "server": server},
         )
         if status != 200 or not isinstance(data, dict):
             raise HiveApiUnavailable(

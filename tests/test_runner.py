@@ -930,6 +930,15 @@ def test_hive_api_refuses():
         run(registry.open(OF_A_RECIPE))
 
 
+def test_a_limit_of_hive_api_is_said_as_it_says_it():
+    registry = runner.HiveApiRunRegistry(
+        FakeApi((429, {"detail": "Too many builds today."})), server="s"
+    )
+    with pytest.raises(runner.RunRefused) as error:
+        run(registry.open(BUILT_IN))
+    assert (error.value.status, error.value.text) == (429, "Too many builds today.")
+
+
 @pytest.mark.parametrize(
     "answer", [HiveApiUnavailable("down"), (404, "<html>Not found</html>")]
 )
@@ -1286,17 +1295,29 @@ def test_hive_api_says_which_runs_expire():
         async def recipeRunsErased(self, runs):
             self.erased = runs
 
-        async def recipeRunsInterrupted(self, before):
-            self.before = before
+        async def recipeRunsInterrupted(self, before, server):
+            self.before = (before, server)
             return [RUN_ID]
 
     api = Api()
-    registry = runner.HiveApiRunRegistry(api)
+    registry = runner.HiveApiRunRegistry(api, server="fontra-1")
     assert run(registry.expired()) == [RUN_ID]
     run(registry.markExpired([RUN_ID]))
     assert api.erased == [RUN_ID]
     assert run(registry.interrupted("now")) == [RUN_ID]
-    assert api.before == "now"
+    assert api.before == ("now", "fontra-1")
+
+
+def test_a_run_says_which_server_opens_it(monkeypatch):
+    api = FakeApi((201, {"id": RUN_ID}))
+    run(runner.HiveApiRunRegistry(api, server="fontra-1").open(BUILT_IN))
+    assert api.opening["server"] == "fontra-1"
+    monkeypatch.setenv("HIVE_SERVER_ID", "  fontra 2/b  ")
+    assert runner.serverId() == "fontra-2-b"
+    run(runner.HiveApiRunRegistry(api).open(OF_A_RECIPE))
+    assert api.opening["server"] == "fontra-2-b"
+    monkeypatch.delenv("HIVE_SERVER_ID")
+    assert runner.serverId()  # the host's name
 
 
 def test_a_sweep_retries_the_interrupted_runs_while_the_api_is_down(hive, monkeypatch):
@@ -1367,11 +1388,11 @@ def test_the_client_of_the_routes_of_the_registry():
     api._call = call
     assert run(api.recipeRunsExpired()) == [RUN_ID]
     run(api.recipeRunsErased([RUN_ID]))
-    assert run(api.recipeRunsInterrupted("t")) == [RUN_ID]
+    assert run(api.recipeRunsInterrupted("t", "s")) == [RUN_ID]
     assert calls == [
         ("GET", "/api/internal/recipe-runs/expired", None),
         ("POST", "/api/internal/recipe-runs/expired", {"runs": [RUN_ID]}),
-        ("POST", "/api/internal/recipe-runs/interrupted", {"before": "t"}),
+        ("POST", "/api/internal/recipe-runs/interrupted", {"before": "t", "server": "s"}),
     ]
     answer = (404, "<html>")
     for method, args in [
