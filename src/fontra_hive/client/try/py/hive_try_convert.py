@@ -76,8 +76,9 @@ def fontcSources(archive: str, stem: str) -> dict:
     """A designspace + UFOs .zip (toDesignspaceZip) made ready for fontc,
     which compiles one variable font per designspace and does not take
     discrete axes (italic as 0/1, say): one designspace per combination of
-    their values, next to the same UFOs, as fontmake does.
-    Returns {"zip": path, "parts": [[designspace file, font file stem]]}."""
+    their values, next to the same UFOs, as fontmake does. A font without
+    axes is handed over as its UFO alone.
+    Returns {"zip": path, "parts": [[source file, font file stem]]}."""
     import zipfile
 
     from fontTools.designspaceLib import DesignSpaceDocument
@@ -91,7 +92,13 @@ def fontcSources(archive: str, stem: str) -> dict:
     doc = DesignSpaceDocument.fromfile(main)
     discrete = [axis for axis in doc.axes if getattr(axis, "values", None)]
     parts = []
-    if not discrete:
+    if not doc.axes and len(doc.sources) == 1:
+        # A font without axes: fontc 1.0.0 refuses its designspace (a source
+        # without <location>, "missing field `location`"), but takes the UFO
+        # on its own and makes the same static font of it.
+        parts.append([doc.sources[0].filename, stem])
+        main.unlink()
+    elif not discrete:
         _keepRulesWithGlyphs(doc, folder)
         doc.write(main)
         parts.append([main.name, stem])

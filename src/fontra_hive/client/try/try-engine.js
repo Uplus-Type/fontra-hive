@@ -317,7 +317,7 @@
   var fontcCalls = {};
   var fontcId = 1;
 
-  // Compile `main` (a .designspace among the files) with fontc: the
+  // Compile `main` (a .designspace, or a lone .ufo, among the files) with fontc: the
   // TrueType font, an ArrayBuffer. The files are copied, not moved: several
   // compiles may use them.
   function fontc(stem, main, entries, onProgress) {

@@ -354,3 +354,72 @@ def test_try_has_a_site_of_its_own(manager, monkeypatch):  # noqa: F811
         assert str(found.value.location) == "https://fontrahive.com/editor.html?project=MyFont"
 
     asyncio.run(go())
+
+
+def _try_convert():
+    """The hive_try_convert module of the browser bundle, imported from its folder."""
+    import importlib.util
+
+    path = (
+        pathlib.Path(__file__).parents[1]
+        / "src/fontra_hive/client/try/py/hive_try_convert.py"
+    )
+    spec = importlib.util.spec_from_file_location("hive_try_convert", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _designspace_zip(folder, stem, axes):
+    """A designspace with one UFO, zipped as Try exports it; ``axes``: none, or one."""
+    import zipfile
+
+    from fontTools.designspaceLib import AxisDescriptor, DesignSpaceDocument
+    from fontTools.ufoLib import UFOWriter
+
+    folder.mkdir(parents=True, exist_ok=True)
+    ufo = folder / f"{stem}_Regular.ufo"
+    writer = UFOWriter(ufo)
+    writer.writeInfo(SimpleNamespace(familyName=stem, styleName="Regular", unitsPerEm=1000))
+    writer.writeLayerContents()
+    doc = DesignSpaceDocument()
+    for axis in axes:
+        doc.addAxisDescriptor(**axis)
+    doc.addSourceDescriptor(
+        filename=ufo.name,
+        familyName=stem,
+        styleName="Regular",
+        location={a["name"]: a["default"] for a in axes},
+    )
+    doc.write(folder / f"{stem}.designspace")
+    archive = folder / f"{stem}.designspace.zip"
+    with zipfile.ZipFile(archive, "w") as z:
+        for path in sorted(folder.rglob("*")):
+            if path.is_file() and path != archive:
+                z.write(path, path.relative_to(folder).as_posix())
+    return archive
+
+
+def test_fontc_gets_the_ufo_of_a_font_without_axes(tmp_path, monkeypatch):
+    """A font made from scratch has no axes: its designspace has a source
+    without <location>, which fontc 1.0.0 refuses; the UFO alone compiles."""
+    import zipfile
+
+    convert = _try_convert()
+    monkeypatch.setattr(convert, "WORK", tmp_path / "work")
+    archive = _designspace_zip(tmp_path / "in", "testO", axes=[])
+    result = convert.fontcSources(str(archive), "testO")
+    assert result["parts"] == [["testO_Regular.ufo", "testO"]]
+    with zipfile.ZipFile(result["zip"]) as z:
+        names = z.namelist()
+    assert not any(name.endswith(".designspace") for name in names)
+    assert any(name.startswith("testO_Regular.ufo/") for name in names)
+
+
+def test_fontc_gets_the_designspace_of_a_font_with_axes(tmp_path, monkeypatch):
+    convert = _try_convert()
+    monkeypatch.setattr(convert, "WORK", tmp_path / "work")
+    weight = dict(name="Weight", tag="wght", minimum=100, default=400, maximum=900)
+    archive = _designspace_zip(tmp_path / "in", "Var", axes=[weight])
+    result = convert.fontcSources(str(archive), "Var")
+    assert result["parts"] == [["Var.designspace", "Var"]]
