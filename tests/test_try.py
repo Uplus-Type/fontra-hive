@@ -416,6 +416,29 @@ def test_fontc_gets_the_ufo_of_a_font_without_axes(tmp_path, monkeypatch):
     assert any(name.startswith("testO_Regular.ufo/") for name in names)
 
 
+def test_fontc_takes_the_sources_of_a_font_without_axes_as_exported(
+    tmp_path, monkeypatch
+):
+    """The sources of a font without axes are written as its UFO alone
+    (export.build, ``<name>-ufo.zip``); fontc is given that UFO."""
+    import zipfile
+
+    convert = _try_convert()
+    monkeypatch.setattr(convert, "WORK", tmp_path / "work")
+    full = _designspace_zip(tmp_path / "in", "testO", axes=[])
+    alone = tmp_path / "testO-ufo.zip"
+    with zipfile.ZipFile(full) as z, zipfile.ZipFile(alone, "w") as out:
+        for name in z.namelist():
+            if name.startswith("testO_Regular.ufo/"):
+                out.writestr(name, z.read(name))
+    result = convert.fontcSources(str(alone), "testO")
+    assert result["parts"] == [["testO_Regular.ufo", "testO"]]
+    with zipfile.ZipFile(result["zip"]) as z:
+        names = z.namelist()
+    assert not any(name.endswith(".designspace") for name in names)
+    assert any(name.startswith("testO_Regular.ufo/") for name in names)
+
+
 def test_fontc_gets_the_designspace_of_a_font_with_axes(tmp_path, monkeypatch):
     convert = _try_convert()
     monkeypatch.setattr(convert, "WORK", tmp_path / "work")

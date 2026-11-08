@@ -392,13 +392,26 @@
     }
   }
 
+  // The sources written by Python are a designspace with its UFOs
+  // ("<stem>-designspace.zip"), or the UFO alone for a font without axes
+  // ("<stem>-ufo.zip"), as the server names them (export.download_name).
+  async function sourcesZipName(stem, data) {
+    var entries = await Format.unzip(new Blob([data]));
+    for (var path of entries.keys()) {
+      if (path.indexOf("/") === -1 && path.endsWith(".designspace")) {
+        return stem + "-designspace.zip";
+      }
+    }
+    return stem + "-ufo.zip";
+  }
+
   async function downloadAs(format, onProgress) {
     if (localId) await localInfo();
     var stem = fileStem();
     if (COMPILED.indexOf(format) !== -1) return compiled(format, stem, onProgress);
     if (format === "designspace" && localId) {
       var result = await python("exportDesignspace", { name: project, stem: stem }, [], onProgress);
-      saveBlob(new Blob([result.data], { type: "application/zip" }), stem + ".designspace.zip");
+      saveBlob(new Blob([result.data], { type: "application/zip" }), await sourcesZipName(stem, result.data));
       return;
     }
     var files = await packageFiles(onProgress);
@@ -419,7 +432,7 @@
         transfer,
         onProgress
       );
-      saveBlob(new Blob([reply.data], { type: "application/zip" }), stem + ".designspace.zip");
+      saveBlob(new Blob([reply.data], { type: "application/zip" }), await sourcesZipName(stem, reply.data));
       return;
     }
     var zipped = new Map();

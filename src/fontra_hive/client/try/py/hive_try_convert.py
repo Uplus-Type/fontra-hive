@@ -88,7 +88,15 @@ def fontcSources(archive: str, stem: str) -> dict:
     folder = work / "sources"
     with zipfile.ZipFile(archive) as z:
         z.extractall(folder)
-    main = next(folder.glob("*.designspace"))
+    main = next(folder.glob("*.designspace"), None)
+    if main is None:
+        # The sources of a font without axes are its UFO alone
+        # (export.build, "<name>-ufo.zip"): what fontc takes.
+        ufos = sorted(folder.glob("*.ufo"))
+        if len(ufos) != 1:
+            raise ValueError("No designspace, and not a single UFO, in the sources.")
+        parts = [[ufos[0].name, stem]]
+        return {"zip": str(_zipFolder(folder, work)), "parts": parts}
     doc = DesignSpaceDocument.fromfile(main)
     discrete = [axis for axis in doc.axes if getattr(axis, "values", None)]
     parts = []

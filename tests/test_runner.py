@@ -219,7 +219,7 @@ steps:
     result = start(hive)
     assert result.succeeded, result.message
     names = [a["name"] for a in result.artifacts]
-    assert names == ["build.fontra.zip", "a-name-with-things.designspace.zip"]
+    assert names == ["build.fontra.zip", "a-name-with-things-designspace.zip"]
 
 
 @needsValidation
@@ -456,6 +456,29 @@ def test_limits_can_only_be_lowered():
     assert lowered == runner.RunLimits(5, 1000, 1000)
     assert limits.lowered(None) == limits
     assert limits.lowered({"timeSeconds": 0, "memoryBytes": True}) == limits
+
+
+def test_the_sources_of_a_font_without_axes_are_a_ufo_named_so(
+    hive, fontra_without_axes
+):
+    shutil.rmtree(hive.root / "Latin.git")
+    store = GitRepoStore.create(hive.root / "Latin.git")
+    store.import_directory(fontra_without_axes, message="Import", author=AUTHOR)
+    head = store.head("main")
+    store.close()
+    result = run(
+        runner.runRecipe(
+            runner.downloadRequest("Latin", head, "Latin", "designspace"),
+            resolver=projectResolverFor(hive.manager, token_for("jeremie")),
+            registry=runner.LocalRunRegistry(hive.runs),
+            runsRoot=hive.runs,
+        )
+    )
+    assert result.succeeded, result.message
+    assert [a["name"] for a in result.artifacts] == ["Latin-ufo.zip"]
+    assert result.artifacts[0]["format"] == "designspace"
+    with zipfile.ZipFile(result.directory / "Latin-ufo.zip") as archive:
+        assert not any(n.endswith(".designspace") for n in archive.namelist())
 
 
 def test_the_registry_gives_lower_limits(hive, fixture_fontra):

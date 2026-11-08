@@ -22,7 +22,11 @@ def test_formats_without_a_font_compiler():
     formats = export.supported_formats()
     assert formats[:2] == ["fontra", "designspace"]
     assert ("otf" in formats) == export.can_build_fonts()
-    assert export.download_name("Mutator", "designspace") == "Mutator.designspace.zip"
+    assert export.download_name("Mutator", "designspace") == "Mutator-designspace.zip"
+    assert export.download_name("Mutator", "designspace", ufo_only=True) == (
+        "Mutator-ufo.zip"
+    )
+    assert export.download_name("Mutator", "fontra") == "Mutator.fontra.zip"
     assert export.download_name("Mutator", "otf") == "Mutator.otf"
 
 
@@ -651,6 +655,38 @@ def test_rules_naming_a_missing_glyph_are_left_out(tmp_path):
 
 
 # --- the font without axes: its UFO alone -----------------------------------------------
+
+
+def test_sources_of_a_font_without_axes_are_its_ufo_alone(
+    tmp_path, fontra_without_axes
+):
+    result = run(
+        export.build(fontra_without_axes, tmp_path / "work", "Plain", "designspace")
+    )
+    assert result.name == "Plain-ufo.zip"
+    names = zipfile.ZipFile(result).namelist()
+    assert not any(name.endswith(".designspace") for name in names)
+    assert len({name.split("/")[0] for name in names}) == 1
+    assert names[0].split("/")[0].endswith(".ufo")
+    # the UFO that the designspace export writes, file for file
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    run(export._copy(fontra_without_axes, plain / "Plain.designspace"))
+    (ufo,) = plain.glob("*.ufo")
+    expected = {
+        path.relative_to(plain).as_posix(): path.read_bytes()
+        for path in sorted(ufo.rglob("*"))
+        if path.is_file()
+    }
+    with zipfile.ZipFile(result) as archive:
+        assert {name: archive.read(name) for name in names} == expected
+
+
+def test_sources_with_axes_are_named_designspace(tmp_path, fixture_fontra):
+    result = run(
+        export.build(fixture_fontra, tmp_path / "work", "Mutator", "designspace")
+    )
+    assert result.name == "Mutator-designspace.zip"
 
 
 def test_fontc_is_given_the_ufo_of_a_font_without_axes(

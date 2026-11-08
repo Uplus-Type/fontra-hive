@@ -546,7 +546,7 @@ def test_other_formats_are_converted_in_the_browser(server, browser, tmp_path):
     with page.expect_download(timeout=60000) as info:
         _exportAs(page, "Designspace + UFO (*.designspace)")
     download = info.value
-    assert download.suggested_filename == "Mutator.designspace.zip"
+    assert download.suggested_filename == "Mutator-designspace.zip"
     with zipfile.ZipFile(download.path()) as z:
         names = z.namelist()
     assert "Mutator.designspace" in names

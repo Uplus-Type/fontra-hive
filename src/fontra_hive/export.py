@@ -2,7 +2,8 @@
 
 Sources are always available: the ``.fontra`` package as stored in git, or a
 ``.designspace`` with its UFOs (converted by Fontra's ``copyFont``), each as a
-``.zip``. Fonts (``.otf``,
+``.zip``; a font without axes and with a single source is its UFO alone
+(``<name>-ufo.zip``, else ``<name>-designspace.zip``). Fonts (``.otf``,
 ``.ttf``, ``.woff2``) are built only when fontra-compile and fontmake are
 installed on the server: TrueType and WOFF2 by fontc when it is installed,
 with fontmake (as Fontra Pak builds, the ``compile-fontmake`` workflow of
@@ -159,7 +160,13 @@ def supported_formats() -> list[str]:
     return formats
 
 
-def download_name(stem: str, format: str) -> str:
+def download_name(stem: str, format: str, *, ufo_only: bool = False) -> str:
+    """The file's name. Sources as a designspace are ``<stem>-designspace.zip``
+    (macOS unzips ``X.designspace.zip`` to a folder ``X.designspace``), or
+    ``<stem>-ufo.zip`` when the font has no axis and a single source (``ufo_only``,
+    known once the sources are written: :func:`build` names its result)."""
+    if format == "designspace":
+        return stem + ("-ufo.zip" if ufo_only else "-designspace.zip")
     label, extension, zipped = {**SOURCE_FORMATS, **FONT_FORMATS}[format]
     return stem + extension + (".zip" if zipped else "")
 
@@ -399,7 +406,8 @@ async def build(
     source: pathlib.Path, work: pathlib.Path, stem: str, format: str
 ) -> pathlib.Path:
     """``source``: a ``.fontra`` folder. Returns the file to download, in
-    ``work``."""
+    ``work``. The sources as ``designspace`` of a font without axes and with a
+    single source are its UFO alone, in ``<stem>-ufo.zip``."""
     out = work / "out"
     out.mkdir(parents=True, exist_ok=True)
     if format == "fontra":
@@ -408,11 +416,18 @@ async def build(
         shutil.copytree(source, package)
         _zip(package, result)
     elif format == "designspace":
-        result = work / download_name(stem, format)
+        from fontTools.designspaceLib import DesignSpaceDocument
+
         designspace = out / f"{stem}.designspace"
         await _copy(source, designspace)
         ufos = sorted(out.glob("*.ufo"))
-        _zip(designspace, result, *ufos)
+        doc = DesignSpaceDocument.fromfile(designspace)
+        if has_one_source_without_axes(doc) and len(ufos) == 1:
+            result = work / download_name(stem, format, ufo_only=True)
+            _zip(ufos[0], result)
+        else:
+            result = work / download_name(stem, format)
+            _zip(designspace, result, *ufos)
     elif format in ("otf", "ttf"):
         result = work / download_name(stem, format)
         built = await _build_font(source, out, stem, format)

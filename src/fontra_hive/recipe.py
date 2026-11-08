@@ -663,6 +663,12 @@ class HiveArtifact:
             source = work / "source" / f"{stem}.fontra"
             await self._writeSource(source, continueOnError)
             result = await export.build(source, work, stem, self.format)
+            # The sources of a font without axes are its UFO alone, named so.
+            if result.name != fileName:
+                fileName = result.name
+                if any(artifact.name == fileName for artifact in context.artifacts):
+                    raise ActionError(f"hive-artifact: two artifacts called {fileName!r}")
+                target = pathlib.Path(outputDir) / fileName
             size = result.stat().st_size
             context.addOutput(size)
             target.parent.mkdir(parents=True, exist_ok=True)
