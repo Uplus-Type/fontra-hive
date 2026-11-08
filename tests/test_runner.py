@@ -172,10 +172,14 @@ def test_two_inputs_and_two_outputs_from_the_recipe_repository(hive):
         "hive-write",
         "hive-artifact",
     ]
+    # The hive-artifact output builds a font: the build says which compiler
+    # works (test_the_build_events_reach_the_server_in_order, below).
     assert [e["stage"] for e in events if "stage" in e] == [
         "validate",
         "access",
         "run",
+        "build",
+        "built",
     ]
     store = GitRepoStore.open(hive.root / "Target.git")
     assert store.head("workflow/build") == result.writes[0]["commit"]
