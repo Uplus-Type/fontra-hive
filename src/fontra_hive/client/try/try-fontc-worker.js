@@ -40,6 +40,12 @@ function plain(text) {
   return text.replace(/\x1b\[[0-9;]*m/g, "").trim();
 }
 
+// What fontc printed. Its errors and warnings go to stdout (tracing's fmt layer
+// writes there), a panic to stderr: read both, stdout first.
+function said(wasi) {
+  return plain([wasi.stdout, wasi.stderr].filter(Boolean).join("\n"));
+}
+
 async function compile(request, say) {
   say("Loading fontc (the first time takes a moment)…");
   const module = await fontcModule(request.url);
@@ -66,15 +72,15 @@ async function compile(request, say) {
     code = wasi.start(instance);
   } catch (error) {
     // A panic (unreachable) or a missing host function.
-    throw Object.assign(new Error("fontc stopped: " + (plain(wasi.stderr) || error.message)), { log: wasi.stderr });
+    throw Object.assign(new Error("fontc stopped: " + (said(wasi) || error.message)), { log: said(wasi) });
   }
   const data = fs.readFile(output);
   if (code !== 0 || !data) {
-    const log = plain(wasi.stderr);
+    const log = said(wasi);
     const last = log.split("\n").filter(Boolean).pop() || `exit code ${code}`;
     throw Object.assign(new Error(last), { log });
   }
-  return { data: data.buffer, log: plain(wasi.stderr) };
+  return { data: data.buffer, log: said(wasi) };
 }
 
 onmessage = async (event) => {
