@@ -855,6 +855,39 @@ def test_the_download_builds_fonts(hive, tmp_path, format):
     assert len(new) > 0 and new[:4] == legacy[:4]
 
 
+@needsFonts
+def test_the_build_events_reach_the_server_in_order(hive, tmp_path, monkeypatch):
+    from test_export import fake_fontc
+
+    # fontc as a program the process finds by HIVE_FONTC; fontmake never runs
+    script = tmp_path / "bin" / "fontc"
+    fake_fontc(tmp_path, monkeypatch)
+    monkeypatch.setenv("HIVE_FONTC", str(script))
+    store = GitRepoStore.open(hive.root / "Latin.git")
+    head = store.head("main")
+    store.close()
+    events = []
+    result = run(
+        runner.runRecipe(
+            runner.downloadRequest("Latin", head, "Latin", "ttf"),
+            resolver=projectResolverFor(hive.manager, token_for("jeremie")),
+            registry=hive.manager.recipeRuns,
+            runsRoot=hive.runs,
+            onProgress=events.append,
+        )
+    )
+    assert result.succeeded, result.message
+    stages = [e["stage"] for e in events if "stage" in e]
+    assert stages == ["validate", "access", "run", "build", "built"]
+    build, built = [e for e in events if e.get("stage") in ("build", "built")]
+    assert build["engine"] == "fontc" and built["engine"] == "fontc"
+    assert built["fallback"] is False and built["seconds"] >= 0
+    assert events.index(build) > events.index(
+        next(e for e in events if e.get("stage") == "run")
+    )
+    result.discard()
+
+
 def test_a_filtered_font_is_not_the_stored_package(hive):
     store = GitRepoStore.open(hive.root / "Latin.git")
     head = store.head("main")

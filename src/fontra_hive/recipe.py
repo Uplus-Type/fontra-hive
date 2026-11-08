@@ -68,7 +68,7 @@ import re
 import shutil
 import tempfile
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import aclosing, asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Iterator, Literal, Protocol
@@ -323,6 +323,8 @@ class HiveRecipeContext:
     # hive-read refuses a project whose feature code includes files from
     # elsewhere: the filters of a recipe would follow those includes.
     checkFeatures: bool = True
+    # The runner's way to tell the server what a build is doing (export.build).
+    notify: Callable[[dict], None] | None = None
 
     def addOutput(self, size: int) -> None:
         """Count ``size`` bytes of outputs, before they are kept."""
@@ -662,7 +664,9 @@ class HiveArtifact:
             work = pathlib.Path(tmp)
             source = work / "source" / f"{stem}.fontra"
             await self._writeSource(source, continueOnError)
-            result = await export.build(source, work, stem, self.format)
+            result = await export.build(
+                source, work, stem, self.format, context.notify
+            )
             # The sources of a font without axes are its UFO alone, named so.
             if result.name != fileName:
                 fileName = result.name

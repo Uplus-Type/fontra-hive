@@ -1073,6 +1073,8 @@ def main() -> int:
         outputLimit=int(job["limits"]["outputBytes"]),
         # A recipe of the server reads features only to compile, which checks.
         checkFeatures=job["source"] is not None,
+        # What a build says goes to the server as progress (the Download panel).
+        notify=lambda event: channel.send(type="progress", **event),
     )
     state, message, reason = asyncio.run(_execute(job, channel, context))
     channel.send(

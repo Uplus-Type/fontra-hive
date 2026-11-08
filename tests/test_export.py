@@ -838,3 +838,268 @@ def test_the_real_otf_comes_from_fontmake(tmp_path, fixture_fontra, caplog):
         result = run(export.build(fixture_fontra, tmp_path / "work", "Mutator", "otf"))
     assert result.read_bytes()[:4] == b"OTTO"
     assert engine_line(caplog)[0].startswith("engine=fontmake format=otf")
+
+
+# --- what the build says while it goes on (the Download panel) -----------------------
+
+
+def test_the_events_of_a_build_by_fontc(
+    tmp_path, fixture_fontra, monkeypatch, doubles
+):
+    fake_fontc(tmp_path, monkeypatch)
+    events = []
+    work = tmp_path / "work"
+    run(export.build(fixture_fontra, work, "Mutator", "ttf", events.append))
+    assert [(e["stage"], e["engine"]) for e in events] == [
+        ("build", "fontc"),
+        ("built", "fontc"),
+    ]
+    assert events[1]["fallback"] is False and events[1]["seconds"] >= 0
+    assert doubles == []
+
+
+def test_the_events_of_a_fallback_to_fontmake(
+    tmp_path, fixture_fontra, monkeypatch, doubles
+):
+    fake_fontc(tmp_path, monkeypatch, "panic")
+    events = []
+    work = tmp_path / "work"
+    run(export.build(fixture_fontra, work, "Mutator", "ttf", events.append))
+    assert events[:2] == [
+        {"stage": "build", "engine": "fontc"},
+        {"stage": "build", "engine": "fontmake", "fallback": True},
+    ]
+    assert events[2]["stage"] == "built"
+    assert (events[2]["engine"], events[2]["fallback"]) == ("fontmake", True)
+    assert len(events) == 3
+    # nothing of the panic in what the browser may be told
+    assert "panicked" not in json.dumps(events)
+
+
+def test_an_otf_is_fontmakes_from_the_start(
+    tmp_path, fixture_fontra, monkeypatch, doubles
+):
+    calls = fake_fontc(tmp_path, monkeypatch)
+    events = []
+    work = tmp_path / "work"
+    run(export.build(fixture_fontra, work, "Mutator", "otf", events.append))
+    assert called(calls) == []
+    assert events[0] == {"stage": "build", "engine": "fontmake", "fallback": False}
+    assert (events[-1]["stage"], events[-1]["engine"]) == ("built", "fontmake")
+
+
+def test_two_engines_failing_leave_no_built_event(
+    tmp_path, fixture_fontra, monkeypatch, doubles
+):
+    fake_fontc(tmp_path, monkeypatch, "panic")
+
+    async def broken(source, destination):
+        raise RuntimeError("fontmake could not")
+
+    monkeypatch.setattr(export, "_compile", broken)
+    events = []
+    with pytest.raises(RuntimeError):
+        run(
+            export.build(
+                fixture_fontra, tmp_path / "work", "Mutator", "ttf", events.append
+            )
+        )
+    assert [(e["stage"], e["engine"]) for e in events] == [
+        ("build", "fontc"),
+        ("build", "fontmake"),
+    ]
+
+
+def test_a_channel_that_fails_does_not_stop_the_build(
+    tmp_path, fixture_fontra, monkeypatch, doubles
+):
+    fake_fontc(tmp_path, monkeypatch)
+
+    def broken(event):
+        raise BrokenPipeError
+
+    result = run(
+        export.build(fixture_fontra, tmp_path / "work", "Mutator", "ttf", broken)
+    )
+    assert result.is_file()
+
+
+UUID_A = "0b7c1e2a-9f3d-4a5b-8c6d-1e2f3a4b5c6d"
+UUID_B = "5d4c3b2a-1f0e-4d9c-a8b7-6f5e4d3c2b1a"
+
+
+class Clock:
+    now = 100.0
+
+    def __call__(self):
+        return self.now
+
+
+def test_the_tracker_keeps_the_last_word_and_forgets_later():
+    clock = Clock()
+    tracker = export.BuildTracker(keep=60, clock=clock)
+    tracker.start(UUID_A, "Latin")
+    assert tracker.project(UUID_A) == "Latin"
+    assert tracker.snapshot(UUID_A) == {
+        "state": "running",
+        "stage": "",
+        "engine": "",
+        "fallback": False,
+        "seconds": 0.0,
+    }
+    tracker.update(UUID_A, {"type": "progress", "stage": "run", "state": "running"})
+    tracker.update(UUID_A, {"type": "progress", "step": "x", "action": "hive-artifact"})
+    tracker.update(UUID_A, {"stage": "build", "engine": "fontc"})
+    clock.now += 3
+    assert tracker.snapshot(UUID_A)["engine"] == "fontc"
+    assert tracker.snapshot(UUID_A)["seconds"] == 3.0  # how long it has run
+    tracker.update(UUID_A, {"stage": "build", "engine": "fontmake", "fallback": True})
+    tracker.update(UUID_A, {"stage": "built", "engine": "fontmake", "seconds": 42.34})
+    tracker.finish(UUID_A, True)
+    clock.now += 50
+    last = tracker.snapshot(UUID_A)
+    assert last == {
+        "state": "done",
+        "stage": "built",
+        "engine": "fontmake",
+        "fallback": True,
+        "seconds": 42.3,
+    }
+    tracker.update(UUID_A, {"stage": "build", "engine": "fontc"})  # too late
+    assert tracker.snapshot(UUID_A) == last
+    clock.now += 20
+    assert tracker.snapshot(UUID_A) is None and tracker.project(UUID_A) is None
+
+
+def test_the_tracker_refuses_what_is_not_a_fresh_identifier():
+    tracker = export.BuildTracker()
+    for bad in ["", "x", "../../etc", UUID_A.upper(), UUID_A.replace("-4", "-1")]:
+        with pytest.raises(ValueError, match="not an identifier"):
+            tracker.start(bad, "Latin")
+    tracker.start(UUID_A, "Latin")
+    with pytest.raises(ValueError, match="known identifier"):
+        tracker.start(UUID_A, "Latin")
+    tracker.start(UUID_B, "Other")
+    tracker.finish(UUID_B, False)
+    assert tracker.snapshot(UUID_B)["state"] == "failed"
+    # an engine the browser could show must be one of ours
+    tracker.update(UUID_A, {"stage": "build", "engine": "<script>"})
+    assert tracker.snapshot(UUID_A)["engine"] == ""
+
+
+@pytest.fixture
+def exports(tmp_path, fixture_fontra, monkeypatch):
+    """The export route and the progress route on a project, with a runner
+    that says what it is told to: ``exports.go(events, result, **query)``."""
+    root = tmp_path / "repos"
+    root.mkdir()
+    store = GitRepoStore.create(root / "Mutator.git")
+    store.import_directory(fixture_fontra, message="Import", author=ME)
+    store.close()
+    manager = DevHiveProjectManager(root)
+    seen = SimpleNamespace(projects=[], midway=None)
+
+    async def project(request, name, capability):
+        seen.projects.append((name, capability))
+        return root / "Mutator.git", None
+
+    async def authorize(request):
+        return "dev"
+
+    manager._project = project
+    manager.authorize = authorize
+    monkeypatch.setattr(export, "supported_formats", lambda: ["ttf"])
+
+    def go(events, result, **query):
+        async def runRecipe(request, **kwargs):
+            for event in events:
+                kwargs["onProgress"](event)
+                if seen.midway:
+                    await seen.midway()
+            return result
+
+        monkeypatch.setattr(runner, "runRecipe", runRecipe)
+        request = SimpleNamespace(
+            match_info={"name": "Mutator"}, query={"format": "ttf", **query}
+        )
+        with pytest.raises(web.HTTPException) as error:
+            run(manager.exportHandler(request))
+        return error.value
+
+    def progress(run_id):
+        request = SimpleNamespace(match_info={"run": run_id})
+        return run(manager.exportProgressHandler(request))
+
+    return SimpleNamespace(
+        manager=manager, go=go, progress=progress, seen=seen, root=root
+    )
+
+
+def test_the_progress_follows_a_failed_export_to_its_end(exports):
+    events = [
+        {"type": "progress", "stage": "run", "state": "running"},
+        {"type": "progress", "stage": "build", "engine": "fontc"},
+        {"type": "progress", "stage": "build", "engine": "fontmake", "fallback": True},
+    ]
+    answer = exports.go(events, failed(runner.FAILED), run=UUID_A)
+    assert (answer.status, answer.text) == (500, export.EXPORT_FAILED)
+    said = json.loads(exports.progress(UUID_A).text)
+    assert said["state"] == "failed" and said["stage"] == "build"
+    assert (said["engine"], said["fallback"]) == ("fontmake", True)
+    assert "word-of-the-log" not in json.dumps(said)
+    assert ("Mutator", "read") in exports.seen.projects
+
+
+def test_the_progress_is_there_while_the_export_runs(exports):
+    midway = []
+
+    async def look():
+        request = SimpleNamespace(match_info={"run": UUID_A})
+        answer = await exports.manager.exportProgressHandler(request)
+        midway.append(json.loads(answer.text))
+
+    exports.seen.midway = look
+    exports.go(
+        [{"type": "progress", "stage": "build", "engine": "fontc"}],
+        failed(runner.FAILED),
+        run=UUID_A,
+    )
+    assert midway[0]["state"] == "running" and midway[0]["engine"] == "fontc"
+
+
+def test_a_run_identifier_must_be_fresh_and_well_formed(exports):
+    assert exports.go([], failed(runner.FAILED), run="nope").status == 400
+    assert exports.go([], failed(runner.FAILED), run=UUID_A).status == 500
+    assert exports.go([], failed(runner.FAILED), run=UUID_A).status == 409
+    # without an identifier (curl, an older page) nothing is followed
+    assert exports.go([], failed(runner.FAILED)).status == 500
+    assert len(exports.manager.exportBuilds.entries) == 1
+
+
+def test_the_progress_of_an_unknown_run_is_not_found(exports):
+    with pytest.raises(web.HTTPNotFound):
+        exports.progress(UUID_B)
+
+
+def test_the_progress_is_for_whoever_may_read_the_project(exports):
+    exports.go([], failed(runner.FAILED), run=UUID_A)
+
+    async def hidden(request, name, capability):
+        raise web.HTTPNotFound()
+
+    exports.manager._project = hidden
+    with pytest.raises(web.HTTPNotFound):
+        exports.progress(UUID_A)
+
+
+def test_a_refused_run_ends_the_progress(exports, monkeypatch):
+    async def runRecipe(request, **kwargs):
+        raise runner.RunRefused(429, "too many")
+
+    monkeypatch.setattr(runner, "runRecipe", runRecipe)
+    request = SimpleNamespace(
+        match_info={"name": "Mutator"}, query={"format": "ttf", "run": UUID_A}
+    )
+    response = run(exports.manager.exportHandler(request))
+    assert response.status == 429
+    assert json.loads(exports.progress(UUID_A).text)["state"] == "failed"

@@ -173,6 +173,10 @@ class DevHiveProjectManager(CommentRoutesMixin):
         # project name -> client id -> presence entry (see presenceHandler)
         self.presence: dict[str, dict[str, dict]] = {}
         self.runsRoot = runner.runsFolder(rootPath)
+        from .export import BuildTracker
+
+        # Where the builds of the Download panel are (see exportProgressHandler).
+        self.exportBuilds = BuildTracker()
         self._runSweepTask: asyncio.Task | None = None
 
     async def aclose(self) -> None:
@@ -661,6 +665,9 @@ class DevHiveProjectManager(CommentRoutesMixin):
             web.get("/api/hive/projects/{name}/export", self.exportHandler),
             web.get("/api/hive/export-formats", self.exportFormatsHandler),
             web.get(
+                "/api/hive/recipe-runs/{run}/progress", self.exportProgressHandler
+            ),
+            web.get(
                 "/api/hive/recipe-runs/{run}/artifacts/{artifact}",
                 self.recipeArtifactHandler,
             ),
@@ -709,6 +716,15 @@ class DevHiveProjectManager(CommentRoutesMixin):
             name.split("/")[-1] + ("" if branch == DEFAULT_BRANCH else f"-{branch}")
         )
         token = await self.authorize(request)
+        # The browser's own identifier, to be asked about while this goes on.
+        tracked = request.query.get("run")
+        if tracked is not None:
+            try:
+                self.exportBuilds.start(tracked, name)
+            except ValueError as error:
+                if str(error) == "known identifier":
+                    raise web.HTTPConflict(text="This run is known.")
+                raise web.HTTPBadRequest(text="Not a run identifier.")
         try:
             result = await runner.runRecipe(
                 runner.downloadRequest(
@@ -722,9 +738,22 @@ class DevHiveProjectManager(CommentRoutesMixin):
                 registry=self.recipeRuns,
                 runsRoot=self.runsRoot,
                 serverPaths=[self.rootPath],
+                onProgress=(
+                    (lambda event: self.exportBuilds.update(tracked, event))
+                    if tracked
+                    else None
+                ),
             )
         except runner.RunRefused as error:
+            if tracked:
+                self.exportBuilds.finish(tracked, False)
             return web.Response(status=error.status, text=error.text)
+        except BaseException:
+            if tracked:
+                self.exportBuilds.finish(tracked, False)
+            raise
+        if tracked:
+            self.exportBuilds.finish(tracked, result.succeeded)
         try:
             if not result.succeeded:
                 # The log stays here (no path of the server in it); the
@@ -747,6 +776,20 @@ class DevHiveProjectManager(CommentRoutesMixin):
             )
         finally:
             result.discard()
+
+    async def exportProgressHandler(self, request: web.Request) -> web.Response:
+        """Where a Download build is: ``{state, stage, engine, fallback,
+        seconds}``, for whoever may read the project, while it runs and a
+        little after. The identifier is the one the browser gave the export."""
+        run = request.match_info["run"]
+        project = self.exportBuilds.project(run)
+        if project is None:
+            raise web.HTTPNotFound()
+        await self._project(request, project, "read")
+        snapshot = self.exportBuilds.snapshot(run)
+        if snapshot is None:
+            raise web.HTTPNotFound()
+        return web.json_response(snapshot, headers={"Cache-Control": "no-store"})
 
     async def recipeArtifactHandler(self, request: web.Request) -> web.StreamResponse:
         """A file of a recipe run, for whoever may read the recipe."""

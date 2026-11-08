@@ -404,8 +404,24 @@ async def _compile_fontc(
         raise failure
 
 
+def _announce(progress, **event) -> None:
+    """Tell the runner (and so the Download panel) what the build is doing:
+    ``stage`` ``build`` when an engine starts, ``built`` when the font is
+    made. Never a reason to stop the build."""
+    if progress is None:
+        return
+    try:
+        progress(event)
+    except Exception:  # a channel that closed: the build goes on
+        logger.debug("build event not sent", exc_info=True)
+
+
 async def _build_font(
-    source: pathlib.Path, out: pathlib.Path, stem: str, format: str
+    source: pathlib.Path,
+    out: pathlib.Path,
+    stem: str,
+    format: str,
+    progress=None,
 ) -> pathlib.Path:
     """``otf`` or ``ttf`` in ``out`` (``woff2`` starts from the ``ttf``). A
     TrueType font is made by fontc, then by fontmake if fontc cannot; an
@@ -414,6 +430,7 @@ async def _build_font(
     started = time.monotonic()
     engine, fallback = "fontmake", False
     if format != "otf" and can_run_fontc() is not None:
+        _announce(progress, stage="build", engine="fontc")
         try:
             given = await _fontc_input(source, out / "fontc")
             await _compile_fontc(given, target)
@@ -431,13 +448,22 @@ async def _build_font(
             )
             target.unlink(missing_ok=True)
     if engine == "fontmake":
+        _announce(progress, stage="build", engine="fontmake", fallback=fallback)
         await _compile(source, target)
+    seconds = time.monotonic() - started
     logger.info(
         "engine=%s format=%s seconds=%.1f fallback=%s",
         engine,
         format,
-        time.monotonic() - started,
+        seconds,
         "yes" if fallback else "no",
+    )
+    _announce(
+        progress,
+        stage="built",
+        engine=engine,
+        seconds=round(seconds, 1),
+        fallback=fallback,
     )
     return target
 
@@ -454,11 +480,17 @@ def _zip(folder: pathlib.Path, destination: pathlib.Path, *extra: pathlib.Path) 
 
 
 async def build(
-    source: pathlib.Path, work: pathlib.Path, stem: str, format: str
+    source: pathlib.Path,
+    work: pathlib.Path,
+    stem: str,
+    format: str,
+    progress=None,
 ) -> pathlib.Path:
     """``source``: a ``.fontra`` folder. Returns the file to download, in
-    ``work``. The sources as ``designspace`` of a font without axes and with a
-    single source are its UFO alone, in ``<stem>-ufo.zip``."""
+    ``work``. ``progress``: called with one dict per build event (see
+    :func:`_announce`) while a font is built. The sources as ``designspace``
+    of a font without axes and with a single source are its UFO alone, in
+    ``<stem>-ufo.zip``."""
     out = work / "out"
     out.mkdir(parents=True, exist_ok=True)
     if format == "fontra":
@@ -481,14 +513,108 @@ async def build(
             _zip(designspace, result, *ufos)
     elif format in ("otf", "ttf"):
         result = work / download_name(stem, format)
-        built = await _build_font(source, out, stem, format)
+        built = await _build_font(source, out, stem, format, progress)
         shutil.move(built, result)
     elif format == "woff2":
         from fontTools.ttLib import woff2
 
         result = work / download_name(stem, format)
-        ttf = await _build_font(source, out, stem, format)
+        ttf = await _build_font(source, out, stem, format, progress)
         woff2.compress(str(ttf), str(result))
     else:
         raise ValueError(f"unknown format {format!r}")
     return result
+
+
+# --- where the builds of the Download panel are ------------------------------------
+
+RUN_ID = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+)
+
+
+class BuildTracker:
+    """The last thing each Download build said, in the server's memory: the
+    browser chooses an identifier (a version 4 uuid), gives it with the export,
+    and asks for it every few seconds. An entry stays ``keep`` seconds after
+    its build ended, long enough for the last question; nothing is stored."""
+
+    LIMIT = 256
+
+    def __init__(self, keep: float = 120.0, clock=time.monotonic):
+        self.keep = keep
+        self.clock = clock
+        self.entries: dict[str, dict] = {}
+
+    def start(self, run: str, project: str) -> None:
+        """Raises ValueError for an identifier of the wrong form or already
+        known."""
+        if not RUN_ID.fullmatch(run):
+            raise ValueError("not an identifier")
+        self._forget()
+        if run in self.entries or len(self.entries) >= self.LIMIT:
+            raise ValueError("known identifier")
+        self.entries[run] = {
+            "project": project,
+            "state": "running",
+            "stage": "",
+            "engine": "",
+            "fallback": False,
+            "seconds": None,
+            "started": self.clock(),
+            "ended": None,
+        }
+
+    def update(self, run: str, event: dict) -> None:
+        """An event of the runner; the ones without a ``stage`` (the steps of
+        the recipe) say nothing of the build."""
+        entry = self.entries.get(run)
+        if entry is None or entry["ended"] is not None:
+            return
+        stage = event.get("stage")
+        if not isinstance(stage, str):
+            return
+        entry["stage"] = stage
+        engine = event.get("engine")
+        if engine in ("fontc", "fontmake"):
+            entry["engine"] = engine
+        if "fallback" in event:
+            entry["fallback"] = bool(event["fallback"])
+        seconds = event.get("seconds")
+        if isinstance(seconds, (int, float)) and not isinstance(seconds, bool):
+            entry["seconds"] = round(float(seconds), 1)
+
+    def finish(self, run: str, succeeded: bool) -> None:
+        entry = self.entries.get(run)
+        if entry is not None and entry["ended"] is None:
+            entry["state"] = "done" if succeeded else "failed"
+            entry["ended"] = self.clock()
+
+    def project(self, run: str) -> str | None:
+        self._forget()
+        entry = self.entries.get(run)
+        return None if entry is None else entry["project"]
+
+    def snapshot(self, run: str) -> dict | None:
+        """``{state, stage, engine, fallback, seconds}``; ``seconds`` is how
+        long the font took once made, else how long the build has run."""
+        self._forget()
+        entry = self.entries.get(run)
+        if entry is None:
+            return None
+        seconds = entry["seconds"]
+        if seconds is None:
+            seconds = round((entry["ended"] or self.clock()) - entry["started"], 1)
+        return {
+            "state": entry["state"],
+            "stage": entry["stage"],
+            "engine": entry["engine"],
+            "fallback": entry["fallback"],
+            "seconds": seconds,
+        }
+
+    def _forget(self) -> None:
+        now = self.clock()
+        for run, entry in list(self.entries.items()):
+            if entry["ended"] is not None and now - entry["ended"] > self.keep:
+                del self.entries[run]
