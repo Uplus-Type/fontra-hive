@@ -205,10 +205,16 @@ def _check_included(
     root: pathlib.Path,
     budget: list[int],
     depth: int,
+    chain: frozenset[pathlib.Path] = frozenset(),
 ) -> None:
     """Check the files that ``features`` includes, and theirs in turn. A name
     is looked for in ``folders`` (where feaLib and Fontra start from) and in
-    ``parent``, the folder of the including file (where Fontra also looks)."""
+    ``parent``, the folder of the including file (where Fontra also looks).
+    ``chain``: the real paths of the files being read, from the UFO's own
+    ``features.fea`` down to ``features``: a file already on it is not read
+    again. A family keeps one ``features.fea`` next to its UFOs, and each
+    UFO's ``features.fea`` says ``include(features.fea);``: looked for in
+    the UFO too, that name is the including file itself, not a loop."""
     names = _include_names(features)
     if not names:
         return
@@ -221,10 +227,18 @@ def _check_included(
                 path = folder / spelling
                 if not os.path.lexists(path):
                     continue  # not found: Fontra reads nothing either
-                text = _read_feature_file(path, root, budget)
                 included = _inside(path, root)
+                if included in chain:
+                    continue  # already open on this chain: nothing new to read
+                text = _read_feature_file(path, root, budget)
                 _check_included(
-                    text, folders, included.parent, root, budget, depth + 1
+                    text,
+                    folders,
+                    included.parent,
+                    root,
+                    budget,
+                    depth + 1,
+                    chain | {included},
                 )
 
 
@@ -269,7 +283,13 @@ def check_features(unpacked: pathlib.Path, source: pathlib.Path) -> None:
         try:
             text = _read_feature_file(features, root, None)
             _check_included(
-                text, [ufo.parent, ufo, *folders], None, root, [MAX_INCLUDED], 0
+                text,
+                [ufo.parent, ufo, *folders],
+                None,
+                root,
+                [MAX_INCLUDED],
+                0,
+                frozenset({_inside(features, root)}),
             )
         except FeaturesRefused:
             logger.warning("import refused: feature code of %s", ufo.name)

@@ -241,11 +241,24 @@ def test_included_files_are_bounded_together_and_in_depth(tmp_path):
             with pytest.raises(importer.ImportError_, match=FEATURES_REFUSED):
                 importer.check_features(folder, ufo)
 
+    # A file that includes itself reads nothing new: the check lets it be,
+    # feaLib will refuse it at compile time.
     folder = tmp_path / "loop"
     ufo = makeUFO(folder / "MyFont.ufo", "include(loop.fea);\n")
     (folder / "loop.fea").write_text("include(loop.fea);\n")
-    with pytest.raises(importer.ImportError_, match=FEATURES_REFUSED):
-        importer.check_features(folder, ufo)
+    importer.check_features(folder, ufo)
+
+
+def test_a_family_s_shared_features_fea_passes_the_check(tmp_path):
+    """Each UFO of a family says ``include(features.fea);`` in its own
+    ``features.fea``: feaLib reads the family's file next to the UFOs. The
+    check looks in the UFO too, where that name is the including file."""
+    folder = tmp_path / "Family"
+    folder.mkdir()
+    (folder / "features.fea").write_text("feature liga { sub A A by A; } liga;\n")
+    for style in ("Light", "Bold"):
+        makeUFO(folder / f"Family-{style}.ufo", "include(features.fea);\n")
+    importer.check_features(folder, folder / "Family-Bold.ufo")
 
 
 # (4)
