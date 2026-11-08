@@ -1501,6 +1501,9 @@ def exportAs(hive, monkeypatch, who):
 
 
 def records(hive):
+    # The runs folder only exists once a run has really started.
+    if not hive.runs.is_dir():
+        return []
     return [p for p in hive.runs.iterdir() if p.suffix == ".json"]
 
 
