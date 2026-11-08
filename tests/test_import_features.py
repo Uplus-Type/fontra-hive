@@ -241,12 +241,24 @@ def test_included_files_are_bounded_together_and_in_depth(tmp_path):
             with pytest.raises(importer.ImportError_, match=FEATURES_REFUSED):
                 importer.check_features(folder, ufo)
 
-    # A file that includes itself reads nothing new: the check lets it be,
-    # feaLib will refuse it at compile time.
+    # A file that includes itself, or two that include each other: Fontra
+    # would read them again and again, so the check refuses them.
     folder = tmp_path / "loop"
     ufo = makeUFO(folder / "MyFont.ufo", "include(loop.fea);\n")
     (folder / "loop.fea").write_text("include(loop.fea);\n")
-    importer.check_features(folder, ufo)
+    with pytest.raises(importer.ImportError_, match=FEATURES_REFUSED):
+        importer.check_features(folder, ufo)
+    folder = tmp_path / "mutual"
+    ufo = makeUFO(folder / "MyFont.ufo", "include(a.fea);\n")
+    (folder / "a.fea").write_text("include(b.fea);\n")
+    (folder / "b.fea").write_text("include(a.fea);\n")
+    with pytest.raises(importer.ImportError_, match=FEATURES_REFUSED):
+        importer.check_features(folder, ufo)
+    # The UFO's own features.fea counts in the budget of bytes read.
+    folder = tmp_path / "bighead"
+    ufo = makeUFO(folder / "MyFont.ufo", "#" * (importer.MAX_INCLUDED + 1) + "\n")
+    with pytest.raises(importer.ImportError_, match=FEATURES_REFUSED):
+        importer.check_features(folder, ufo)
 
 
 def test_a_family_s_shared_features_fea_passes_the_check(tmp_path):

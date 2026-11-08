@@ -222,24 +222,29 @@ def _check_included(
         raise FeaturesRefused(FEATURES_REFUSED)
     lookIn = [*folders, parent] if parent is not None else folders
     for name in sorted(names):
+        found = []
         for spelling in {name, name.strip(string.whitespace + "\"'")}:
             for folder in lookIn:
                 path = folder / spelling
-                if not os.path.lexists(path):
-                    continue  # not found: Fontra reads nothing either
-                included = _inside(path, root)
-                if included in chain:
-                    continue  # already open on this chain: nothing new to read
-                text = _read_feature_file(path, root, budget)
-                _check_included(
-                    text,
-                    folders,
-                    included.parent,
-                    root,
-                    budget,
-                    depth + 1,
-                    chain | {included},
-                )
+                if os.path.lexists(path):
+                    found.append(_inside(path, root))
+        if found and all(included in chain for included in found):
+            # Every file this name can mean is already open on the chain: a
+            # loop, which Fontra would follow again and again.
+            raise FeaturesRefused(FEATURES_REFUSED)
+        for included in found:
+            if included in chain:
+                continue  # the including file itself (a family's shared name)
+            text = _read_feature_file(included, root, budget)
+            _check_included(
+                text,
+                folders,
+                included.parent,
+                root,
+                budget,
+                depth + 1,
+                chain | {included},
+            )
 
 
 def _designspace_ufos(
@@ -281,13 +286,14 @@ def check_features(unpacked: pathlib.Path, source: pathlib.Path) -> None:
         if not os.path.lexists(features):
             continue
         try:
-            text = _read_feature_file(features, root, None)
+            budget = [MAX_INCLUDED]  # the UFO's own features.fea counts too
+            text = _read_feature_file(features, root, budget)
             _check_included(
                 text,
                 [ufo.parent, ufo, *folders],
                 None,
                 root,
-                [MAX_INCLUDED],
+                budget,
                 0,
                 frozenset({_inside(features, root)}),
             )
