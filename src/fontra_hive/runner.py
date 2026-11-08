@@ -1053,6 +1053,8 @@ def main() -> int:
     os.dup2(devnull, 0)
     os.close(devnull)
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
+    # One line per font built: the engine, how long (fontra_hive.export).
+    logging.getLogger("fontra_hive.export").setLevel(logging.INFO)
 
     job = channel.receive()
     _applyLimits(job["limits"])

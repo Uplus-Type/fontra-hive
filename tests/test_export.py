@@ -1,4 +1,7 @@
+import json
+import logging
 import pathlib
+import sys
 import zipfile
 from types import SimpleNamespace
 
@@ -327,3 +330,390 @@ def test_sources_stay_byte_for_byte(tmp_path, fixture_fontra):
                 if path.is_file():
                     name = path.relative_to(plain).as_posix()
                     assert archive.read(name) == path.read_bytes()
+
+
+# --- fontc, the first engine of ttf and woff2 -----------------------------------------
+
+FONTC_SCRIPT = """#!PYTHON
+import json, os, pathlib, sys
+args = sys.argv[1:]
+with open("CALLS", "a") as file:
+    call = {"args": args, "cwd": str(pathlib.Path.cwd()), "env": sorted(os.environ)}
+    file.write(json.dumps(call) + "\\n")
+mode = "MODE"
+if mode == "panic":
+    sys.stderr.write("thread 'main' panicked at fontc/src/lib.rs:1:1:\\n")
+    sys.stderr.write("not yet implemented: " + args[0] + "\\n")
+    sys.exit(101)
+if mode == "error":
+    print("x" * 5000)
+    print("ERROR failed to deserialize designspace: missing field `location`")
+    sys.stderr.write("y" * 5000 + "STDERR-END")
+    sys.exit(1)
+output = pathlib.Path(args[args.index("--output-file") + 1])
+if mode == "empty":
+    output.write_bytes(b"")
+    sys.exit(0)
+if mode == "nothing":
+    sys.exit(0)
+from fontTools.fontBuilder import FontBuilder
+from fontTools.pens.ttGlyphPen import TTGlyphPen
+builder = FontBuilder(1000, isTTF=True)
+builder.setupGlyphOrder([".notdef"])
+builder.setupCharacterMap({})
+builder.setupGlyf({".notdef": TTGlyphPen(None).glyph()})
+builder.setupHorizontalMetrics({".notdef": (500, 0)})
+builder.setupHorizontalHeader(ascent=800, descent=-200)
+builder.setupNameTable({"familyName": "Double", "styleName": "Regular"})
+builder.setupOS2()
+builder.setupPost()
+builder.save(output)
+"""
+
+
+def a_ttf(path):
+    from fontTools.fontBuilder import FontBuilder
+    from fontTools.pens.ttGlyphPen import TTGlyphPen
+
+    builder = FontBuilder(1000, isTTF=True)
+    builder.setupGlyphOrder([".notdef"])
+    builder.setupCharacterMap({})
+    builder.setupGlyf({".notdef": TTGlyphPen(None).glyph()})
+    builder.setupHorizontalMetrics({".notdef": (500, 0)})
+    builder.setupHorizontalHeader(ascent=800, descent=-200)
+    builder.setupNameTable({"familyName": "Double", "styleName": "Regular"})
+    builder.setupOS2()
+    builder.setupPost()
+    builder.save(path)
+
+
+def fake_fontc(tmp_path, monkeypatch, mode="ok"):
+    """A program called ``fontc`` that writes a small TrueType font (or fails as
+    ``mode`` says: panic, error, empty, nothing). Returns the file where each
+    call is written, one JSON line."""
+    calls = tmp_path / "fontc-calls.jsonl"
+    script = tmp_path / "bin" / "fontc"
+    script.parent.mkdir(exist_ok=True)
+    script.write_text(
+        FONTC_SCRIPT.replace("PYTHON", sys.executable)
+        .replace("CALLS", calls.as_posix())
+        .replace("MODE", mode)
+    )
+    script.chmod(0o755)
+    monkeypatch.setattr(export, "can_run_fontc", lambda: script)
+    return calls
+
+
+def called(calls):
+    if not calls.exists():
+        return []
+    return [json.loads(line) for line in calls.read_text().splitlines()]
+
+
+@pytest.fixture
+def doubles(monkeypatch):
+    """The sources and fontmake, as doubles: what is called, in order."""
+    seen = []
+
+    async def prepare(source, out):
+        seen.append("prepare")
+        out.mkdir(parents=True, exist_ok=True)
+        path = out / f"{source.stem}.designspace"
+        path.write_text("<designspace/>")
+        return path
+
+    async def compile(source, destination):
+        seen.append("fontmake")
+        if destination.suffix == ".ttf":
+            a_ttf(destination)
+        else:
+            destination.write_bytes(b"OTTO")
+
+    monkeypatch.setattr(export, "_prepare_sources", prepare)
+    monkeypatch.setattr(export, "_compile", compile)
+    return seen
+
+
+def engine_line(caplog):
+    return [r.getMessage() for r in caplog.records if "engine=" in r.getMessage()]
+
+
+def test_fontc_builds_the_ttf(tmp_path, fixture_fontra, monkeypatch, doubles, caplog):
+    from fontTools.ttLib import TTFont
+
+    calls = fake_fontc(tmp_path, monkeypatch)
+    with caplog.at_level(logging.INFO, logger="fontra_hive.export"):
+        result = run(export.build(fixture_fontra, tmp_path / "work", "Mutator", "ttf"))
+    assert result == tmp_path / "work" / "Mutator.ttf"
+    assert "glyf" in TTFont(result)
+    assert doubles == ["prepare"]  # fontmake was not called
+    (call,) = called(calls)
+    source, flag, output = call["args"]
+    assert source.endswith("source.designspace") and flag == "--output-file"
+    assert pathlib.Path(output).name == "Mutator.ttf"
+    assert pathlib.Path(call["cwd"]).resolve() == pathlib.Path(source).parent.resolve()
+    assert len(engine_line(caplog)) == 1
+    assert engine_line(caplog)[0].startswith("engine=fontc format=ttf seconds=")
+    assert engine_line(caplog)[0].endswith("fallback=no")
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+@pytest.mark.parametrize(
+    "mode, said",
+    [
+        ("panic", "panicked at fontc/src/lib.rs"),
+        ("error", "missing field `location`"),
+        ("empty", "exit code 0"),
+        ("nothing", "exit code 0"),
+    ],
+)
+def test_fontc_failing_falls_back_to_fontmake(
+    tmp_path, fixture_fontra, monkeypatch, doubles, caplog, mode, said
+):
+    from fontTools.ttLib import TTFont
+
+    calls = fake_fontc(tmp_path, monkeypatch, mode)
+    with caplog.at_level(logging.INFO, logger="fontra_hive.export"):
+        result = run(export.build(fixture_fontra, tmp_path / "work", "Mutator", "ttf"))
+    assert "glyf" in TTFont(result)  # made by the double of fontmake
+    assert doubles == ["prepare", "fontmake"]
+    assert len(called(calls)) == 1
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1 and said in warnings[0].getMessage()
+    assert "fontmake takes over" in warnings[0].getMessage()
+    assert str(tmp_path) not in caplog.text  # no path of the server in the log
+    assert engine_line(caplog)[0].startswith("engine=fontmake format=ttf seconds=")
+    assert engine_line(caplog)[0].endswith("fallback=yes")
+
+
+def test_fontc_output_is_kept_at_its_end(tmp_path, fixture_fontra, monkeypatch):
+    fake_fontc(tmp_path, monkeypatch, "error")
+    designspace = tmp_path / "sources" / "x.designspace"
+    designspace.parent.mkdir()
+    designspace.write_text("<designspace/>")
+    with pytest.raises(export.FontcFailed) as error:
+        run(export._compile_fontc(designspace, tmp_path / "out" / "x.ttf"))
+    failure = error.value
+    assert failure.returncode == 1
+    # stdout, where fontc prints its errors, and stderr, where it panics
+    assert len(failure.stdout) <= export.FONTC_TAIL_CHARACTERS
+    assert failure.stdout.endswith("missing field `location`")
+    assert failure.stderr.endswith("STDERR-END")
+    assert len(failure.stderr) <= export.FONTC_TAIL_CHARACTERS
+    assert len(failure.tail) <= export.FONTC_TAIL_CHARACTERS + 1
+    assert "missing field `location`" in failure.tail  # stdout is not lost
+    assert failure.tail.endswith("STDERR-END")
+    assert str(tmp_path) not in failure.tail
+
+
+def test_a_panic_is_an_exit_code_like_any_other(tmp_path, monkeypatch):
+    fake_fontc(tmp_path, monkeypatch, "panic")
+    designspace = tmp_path / "sources" / "x.designspace"
+    designspace.parent.mkdir()
+    designspace.write_text("<designspace/>")
+    with pytest.raises(export.FontcFailed) as error:
+        run(export._compile_fontc(designspace, tmp_path / "x.ttf"))
+    assert error.value.returncode == 101
+    assert "panicked" in error.value.stderr
+    assert str(tmp_path) not in error.value.stderr
+
+
+def test_fontc_gets_a_short_environment(tmp_path, monkeypatch):
+    calls = fake_fontc(tmp_path, monkeypatch)
+    monkeypatch.setenv("HIVE_SERVICE_KEY", "s3cret")
+    monkeypatch.setenv("AWS_SECRET", "s3cret")
+    designspace = tmp_path / "sources" / "x.designspace"
+    designspace.parent.mkdir()
+    designspace.write_text("<designspace/>")
+    run(export._compile_fontc(designspace, tmp_path / "x.ttf"))
+    (call,) = called(calls)
+    assert "HIVE_SERVICE_KEY" not in call["env"] and "AWS_SECRET" not in call["env"]
+
+
+def test_otf_is_fontmakes_alone(tmp_path, fixture_fontra, monkeypatch, doubles, caplog):
+    calls = fake_fontc(tmp_path, monkeypatch)
+    with caplog.at_level(logging.INFO, logger="fontra_hive.export"):
+        result = run(export.build(fixture_fontra, tmp_path / "work", "Mutator", "otf"))
+    assert result.read_bytes() == b"OTTO"
+    assert doubles == ["fontmake"]  # no sources made for fontc
+    assert called(calls) == []
+    assert engine_line(caplog)[0].startswith("engine=fontmake format=otf seconds=")
+    assert engine_line(caplog)[0].endswith("fallback=no")
+
+
+def test_woff2_is_made_from_the_ttf_of_fontc(
+    tmp_path, fixture_fontra, monkeypatch, doubles, caplog
+):
+    pytest.importorskip("brotli")
+    from fontTools.ttLib import TTFont
+
+    calls = fake_fontc(tmp_path, monkeypatch)
+    with caplog.at_level(logging.INFO, logger="fontra_hive.export"):
+        result = run(
+            export.build(fixture_fontra, tmp_path / "work", "Mutator", "woff2")
+        )
+    assert result == tmp_path / "work" / "Mutator.woff2"
+    assert result.read_bytes()[:4] == b"wOF2"
+    assert TTFont(result).flavor == "woff2"
+    assert doubles == ["prepare"] and len(called(calls)) == 1
+    assert engine_line(caplog)[0].startswith("engine=fontc format=woff2 seconds=")
+
+
+def test_without_fontc_it_is_fontmake_as_before(
+    tmp_path, fixture_fontra, monkeypatch, doubles, caplog
+):
+    from fontTools.ttLib import TTFont
+
+    monkeypatch.setattr(export, "can_run_fontc", lambda: None)
+    with caplog.at_level(logging.INFO, logger="fontra_hive.export"):
+        result = run(export.build(fixture_fontra, tmp_path / "work", "Mutator", "ttf"))
+    assert "glyf" in TTFont(result)
+    assert doubles == ["fontmake"]
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert engine_line(caplog)[0].endswith("fallback=no")
+    assert engine_line(caplog)[0].startswith("engine=fontmake format=ttf")
+
+
+def test_both_engines_failing_gives_the_error_of_fontmake(
+    tmp_path, fixture_fontra, monkeypatch, doubles
+):
+    fake_fontc(tmp_path, monkeypatch, "panic")
+
+    async def compile(source, destination):
+        raise RuntimeError("fontmake said no")
+
+    monkeypatch.setattr(export, "_compile", compile)
+    with pytest.raises(RuntimeError, match="fontmake said no"):
+        run(export.build(fixture_fontra, tmp_path / "work", "Mutator", "ttf"))
+
+
+def test_refused_features_do_not_fall_back(tmp_path, fixture_fontra, monkeypatch):
+    fake_fontc(tmp_path, monkeypatch)
+    seen = []
+
+    async def prepare(source, out):
+        raise export.FeaturesRefused(export.FEATURES_REFUSED)
+
+    async def compile(source, destination):
+        seen.append("fontmake")
+
+    monkeypatch.setattr(export, "_prepare_sources", prepare)
+    monkeypatch.setattr(export, "_compile", compile)
+    with pytest.raises(export.FeaturesRefused):
+        run(export.build(fixture_fontra, tmp_path / "work", "Mutator", "ttf"))
+    assert seen == []
+
+
+def test_fontc_is_looked_for_beside_the_interpreter_then_on_the_path(
+    tmp_path, monkeypatch
+):
+    beside = tmp_path / "venv" / "bin"
+    beside.mkdir(parents=True)
+    other = tmp_path / "other"
+    other.mkdir()
+    for folder in (beside, other):
+        (folder / "fontc").write_text("#!/bin/sh\n")
+        (folder / "fontc").chmod(0o755)
+    monkeypatch.setattr(sys, "executable", str(beside / "python"))
+    monkeypatch.setenv("PATH", str(other))
+    assert export.can_run_fontc() == beside / "fontc"
+    (beside / "fontc").unlink()
+    assert export.can_run_fontc() == other / "fontc"
+    (other / "fontc").unlink()
+    assert export.can_run_fontc() is None
+
+
+def test_fontc_does_not_change_the_formats_offered(monkeypatch):
+    before = export.supported_formats()
+    monkeypatch.setattr(export, "can_run_fontc", lambda: None)
+    assert export.supported_formats() == before
+
+
+def test_rules_naming_a_missing_glyph_are_left_out(tmp_path):
+    import plistlib
+
+    from fontTools.designspaceLib import DesignSpaceDocument, RuleDescriptor
+
+    doc = DesignSpaceDocument()
+    doc.addSourceDescriptor(filename="a.ufo", location={})
+    glyphs = tmp_path / "a.ufo" / "glyphs"
+    glyphs.mkdir(parents=True)
+    (glyphs / "contents.plist").write_bytes(
+        plistlib.dumps({"I": "I_.glif", "I.narrow": "I_.narrow.glif", "A": "A_.glif"})
+    )
+    kept = RuleDescriptor(name="kept", subs=[("I", "I.narrow")])
+    mixed = RuleDescriptor(name="mixed", subs=[("I", "I.narrow"), ("A", "A.alt")])
+    gone = RuleDescriptor(name="gone", subs=[("B", "B.alt")])
+    doc.rules.extend([kept, mixed, gone])
+    export.keep_rules_with_glyphs(doc, tmp_path)
+    assert [r.name for r in doc.rules] == ["kept", "mixed"]
+    assert doc.rules[1].subs == [("I", "I.narrow")]
+
+
+# --- the font without axes: its UFO alone -----------------------------------------------
+
+
+def test_fontc_is_given_the_ufo_of_a_font_without_axes(
+    tmp_path, fontra_without_axes
+):
+    sources = run(export._prepare_sources(fontra_without_axes, tmp_path / "fontc"))
+    assert sources.suffix == ".ufo" and sources.is_dir()
+    assert (sources / "glyphs" / "contents.plist").is_file()
+
+
+def test_fontc_is_given_the_designspace_of_a_font_with_axes(tmp_path, fixture_fontra):
+    pytest.importorskip("fontra")
+    from fontTools.designspaceLib import DesignSpaceDocument
+
+    sources = run(export._prepare_sources(fixture_fontra, tmp_path / "fontc"))
+    assert sources.suffix == ".designspace"
+    doc = DesignSpaceDocument.fromfile(sources)
+    assert [axis.name for axis in doc.axes] == ["width", "weight"]
+    assert len(doc.sources) == 5
+    assert all((sources.parent / source.filename).is_dir() for source in doc.sources)
+
+
+def test_features_are_checked_before_fontc_sees_them(tmp_path, fixture_fontra):
+    pytest.importorskip("fontra")
+    write_features(fixture_fontra, "include(/etc/hostname);\n")
+    with pytest.raises(export.FeaturesRefused):
+        run(export._prepare_sources(fixture_fontra, tmp_path / "fontc"))
+
+
+def test_the_real_sources_reach_fontc(tmp_path, fontra_without_axes, monkeypatch):
+    from fontTools.ttLib import TTFont
+
+    calls = fake_fontc(tmp_path, monkeypatch)
+    result = run(export.build(fontra_without_axes, tmp_path / "work", "Plain", "ttf"))
+    assert "glyf" in TTFont(result)
+    (call,) = called(calls)
+    assert call["args"][0].endswith(".ufo")
+
+
+# --- a real build, where fontc and fontmake are installed --------------------------------
+
+
+def test_the_real_fontc_builds_mutatorsans(tmp_path, fixture_fontra, caplog):
+    pytest.importorskip("fontra_compile")
+    pytest.importorskip("fontmake")
+    if export.can_run_fontc() is None:
+        pytest.skip("needs fontc")
+    from fontTools.ttLib import TTFont
+
+    with caplog.at_level(logging.INFO, logger="fontra_hive.export"):
+        result = run(export.build(fixture_fontra, tmp_path / "work", "Mutator", "ttf"))
+    font = TTFont(result)
+    assert "glyf" in font and "fvar" in font
+    assert engine_line(caplog)[0].startswith("engine=fontc format=ttf")
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_the_real_otf_comes_from_fontmake(tmp_path, fixture_fontra, caplog):
+    pytest.importorskip("fontra_compile")
+    pytest.importorskip("fontmake")
+    if export.can_run_fontc() is None:
+        pytest.skip("needs fontc")
+    with caplog.at_level(logging.INFO, logger="fontra_hive.export"):
+        result = run(export.build(fixture_fontra, tmp_path / "work", "Mutator", "otf"))
+    assert result.read_bytes()[:4] == b"OTTO"
+    assert engine_line(caplog)[0].startswith("engine=fontmake format=otf")

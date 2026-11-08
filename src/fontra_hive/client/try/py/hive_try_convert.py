@@ -92,19 +92,19 @@ def fontcSources(archive: str, stem: str) -> dict:
     doc = DesignSpaceDocument.fromfile(main)
     discrete = [axis for axis in doc.axes if getattr(axis, "values", None)]
     parts = []
-    if not doc.axes and len(doc.sources) == 1:
+    if export.has_one_source_without_axes(doc):
         # A font without axes: fontc 1.0.0 refuses its designspace (a source
         # without <location>, "missing field `location`"), but takes the UFO
         # on its own and makes the same static font of it.
         parts.append([doc.sources[0].filename, stem])
         main.unlink()
     elif not discrete:
-        _keepRulesWithGlyphs(doc, folder)
+        export.keep_rules_with_glyphs(doc, folder)
         doc.write(main)
         parts.append([main.name, stem])
     else:
         for location, sub in splitInterpolable(doc):
-            _keepRulesWithGlyphs(sub, folder)
+            export.keep_rules_with_glyphs(sub, folder)
             names = []
             for axis in discrete:
                 value = location.get(axis.name)
@@ -117,28 +117,15 @@ def fontcSources(archive: str, stem: str) -> dict:
             sub.write(folder / name)
             parts.append([name, f"{stem}-{suffix}"])
         main.unlink()
+    return {"zip": str(_zipFolder(folder, work)), "parts": parts}
+
+
+def _zipFolder(folder, work):
+    import zipfile
+
     result = work / "fontc-sources.zip"
     with zipfile.ZipFile(result, "w", zipfile.ZIP_STORED) as z:
         for path in sorted(folder.rglob("*")):
             if path.is_file():
                 z.write(path, path.relative_to(folder).as_posix())
-    return {"zip": str(result), "parts": parts}
-
-
-def _keepRulesWithGlyphs(doc, folder) -> None:
-    """Rules (glyph substitutions) whose glyphs are all in the font: fontc
-    stops on one that names a glyph the font does not have (an italic
-    without I.narrow, say), where fontmake leaves it out."""
-    import plistlib
-
-    names = set()
-    for source in doc.sources:
-        contents = folder / source.filename / "glyphs" / "contents.plist"
-        if contents.is_file():
-            names.update(plistlib.loads(contents.read_bytes()))
-    if not names:
-        return
-    for rule in list(doc.rules):
-        rule.subs = [(a, b) for a, b in rule.subs if a in names and b in names]
-        if not rule.subs:
-            doc.rules.remove(rule)
+    return result
