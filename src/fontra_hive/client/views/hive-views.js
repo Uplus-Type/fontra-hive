@@ -179,17 +179,91 @@ async function fetchOk(path, options = {}) {
   return response;
 }
 
+// How often the Download panel asks the server what the build is doing.
+const EXPORT_POLL_MS = 2000;
+// A successful build says so this long; a failed one stays until it is closed.
+const EXPORT_DONE_MS = 10000;
+
+// A version 4 uuid, which the server takes as the name of this export.
+function newRunId() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function secondsText(seconds) {
+  return seconds >= 10 ? `${Math.round(seconds)} s` : `${Number(seconds).toFixed(1)} s`;
+}
+
+// What the notice says while a font is built, from the server's progress.
+export function exportProgressText(format, progress) {
+  if (!progress || progress.state !== "running") return `Preparing ${format}…`;
+  if (progress.engine === "fontmake" && progress.fallback) {
+    return "fontc could not build this font, fontmake takes over (this takes longer)…";
+  }
+  if (progress.engine) return `Building with ${progress.engine}…`;
+  return `Preparing ${format}…`;
+}
+
+// "ttf built by fontc in 42 s"; nothing when the server built no font.
+export function exportDoneText(format, progress) {
+  if (!progress || progress.stage !== "built" || !progress.engine) return "";
+  const text = `${format} built by ${progress.engine} in ${secondsText(progress.seconds)}`;
+  return progress.fallback ? `${text} (fontc could not build it)` : text;
+}
+
+// The engines that worked on a font, for the end of an error message.
+export function exportEnginesText(progress) {
+  if (!progress || !progress.engine) return "";
+  return progress.fallback ? "(fontc, then fontmake)" : `(${progress.engine})`;
+}
+
 // Build a project's file on the server and hand it to the browser as a
-// download (a notice while it builds: fonts can take a while).
+// download. A notice says what the server is doing (which compiler works,
+// and when fontmake takes over from fontc): it asks every two seconds under
+// an identifier of its own. The notice of a failure stays until closed.
 export async function exportDownload(project, format) {
+  const run = newRunId();
   const url =
     `/api/hive/projects/${encodeURIComponent(project.name)}/export` +
-    `?format=${encodeURIComponent(format || "fontra")}&branch=${encodeURIComponent(project.branch || "main")}`;
-  const notice = el("div", { class: "hive-notice" }, [`Preparing ${format}…`]);
+    `?format=${encodeURIComponent(format || "fontra")}&branch=${encodeURIComponent(project.branch || "main")}` +
+    `&run=${run}`;
+  const progressURL = `/api/hive/recipe-runs/${run}/progress`;
+  const message = el("span", { class: "message" }, [`Preparing ${format}…`]);
+  const notice = el("div", { class: "hive-notice" }, [
+    message,
+    el("button", { class: "close", type: "button", title: "Close", "aria-label": "Close", onclick: () => notice.remove() }, ["×"]),
+  ]);
   ensureStyle();
   document.body.append(notice);
+
+  const askProgress = async () => {
+    try {
+      const response = await fetch(progressURL, { credentials: "same-origin" });
+      return response.ok ? await response.json() : null;
+    } catch (error) {
+      return null; // the answer of the export itself is the one that counts
+    }
+  };
+  const pollMs = window.__hiveExportPollMs || EXPORT_POLL_MS; // the tests hurry it
+  let last = null;
+  let polling = true;
+  const poll = async () => {
+    if (!polling) return;
+    const progress = await askProgress();
+    if (!polling) return;
+    if (progress) {
+      last = progress;
+      message.textContent = exportProgressText(format, progress);
+    }
+    setTimeout(poll, pollMs);
+  };
+  setTimeout(poll, pollMs);
   try {
     const response = await fetch(url, { credentials: "same-origin" });
+    polling = false;
     if (!response.ok) throw new Error((await response.text()) || `Error ${response.status}`);
     const disposition = response.headers.get("Content-Disposition") || "";
     const name = /filename="([^"]+)"/.exec(disposition)?.[1] || `font.${format}`;
@@ -199,11 +273,18 @@ export async function exportDownload(project, format) {
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(link.href), 60000);
-    notice.remove();
+    const done = exportDoneText(format, (await askProgress()) || last);
+    if (done) {
+      message.textContent = done;
+      setTimeout(() => notice.remove(), EXPORT_DONE_MS);
+    } else {
+      notice.remove();
+    }
   } catch (error) {
-    notice.textContent = `Export failed: ${error.message}`;
+    polling = false;
+    const engines = exportEnginesText((await askProgress()) || last);
+    message.textContent = `Export failed: ${error.message}${engines ? ` ${engines}` : ""}`;
     notice.classList.add("error");
-    setTimeout(() => notice.remove(), 8000);
   }
 }
 
@@ -343,6 +424,9 @@ const STYLE = `
     background: #222; color: white; padding: 0.6em 1.1em; border-radius: 0.6em; z-index: 1000;
     font-family: fontra-ui-regular, sans-serif; box-shadow: 1px 2px 8px #0005; }
   .hive-notice.error { background: var(--fontra-red-color, #f11759); }
+  .hive-notice .close { margin-left: 0.8em; padding: 0 0.2em; font: inherit; font-size: 1.2em; line-height: 1;
+    background: none; border: none; color: inherit; opacity: 0.7; cursor: pointer; }
+  .hive-notice .close:hover { opacity: 1; }
   .hive-branch { display: flex; align-items: center; gap: 0.3em; font: inherit; font-family: fontra-ui-regular;
                  font-size: 0.92em; cursor: pointer; border: 1px solid transparent; border-radius: 1em;
                  padding: 2px 9px 2px 7px; background: none; color: inherit; max-width: 16em; }

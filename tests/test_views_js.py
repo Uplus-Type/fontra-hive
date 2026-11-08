@@ -861,3 +861,136 @@ def test_merge_helpers(browser_and_url):
       }""")
     assert result == ["a, b", "a, b and 2 more", "r", "b", "b"]
     page.close()
+
+
+# --- the Download panel says which compiler works ------------------------------------
+
+BUILDING = {
+    "state": "running",
+    "stage": "build",
+    "engine": "fontc",
+    "fallback": False,
+    "seconds": 1,
+}
+TAKEN_OVER = {
+    "state": "running",
+    "stage": "build",
+    "engine": "fontmake",
+    "fallback": True,
+    "seconds": 5,
+}
+
+
+def start_export(page, outcome):
+    """Call exportDownload with a server that answers progress with
+    ``window.progress`` and the export itself when ``window.release()`` is
+    called, as ``outcome`` says (``fail`` or ``succeed``)."""
+    page.evaluate(
+        """(outcome) => {
+          window.__hiveExportPollMs = 30;
+          window.progress = { state: "running", stage: "run", engine: "", fallback: false, seconds: 0 };
+          window.requested = [];
+          const original = window.fetch;
+          window.fetch = async (url, options) => {
+            const parsed = new URL(url, location.href);
+            window.requested.push(parsed.pathname + parsed.search);
+            if (parsed.pathname.endsWith("/progress")) return new Response(JSON.stringify(window.progress));
+            if (parsed.pathname.endsWith("/export")) {
+              await new Promise((resolve) => (window.release = resolve));
+              if (outcome === "fail") return new Response("The export failed.", { status: 500 });
+              return new Response(new Blob(["font"]), {
+                headers: { "Content-Disposition": 'attachment; filename="Mutator.ttf"' },
+              });
+            }
+            return original(url, options);
+          };
+          window.exporting = window.hiveModule.exportDownload({ name: "Mutator", branch: "main" }, "ttf");
+        }""",
+        outcome,
+    )
+
+
+def notice_text(page):
+    return page.evaluate("document.querySelector('.hive-notice .message')?.textContent ?? null")
+
+
+def test_the_download_notice_follows_the_compilers_and_stays_after_a_failure(
+    browser_and_url,
+):
+    page = open_page(browser_and_url)
+    start_export(page, "fail")
+    page.wait_for_function("document.querySelector('.hive-notice')")
+    assert notice_text(page) == "Preparing ttf…"
+    page.evaluate("(p) => (window.progress = p)", BUILDING)
+    page.wait_for_function(
+        "document.querySelector('.hive-notice .message').textContent === 'Building with fontc…'"
+    )
+    page.evaluate("(p) => (window.progress = p)", TAKEN_OVER)
+    page.wait_for_function(
+        "document.querySelector('.hive-notice .message').textContent.startsWith('fontc could not build this font, fontmake takes over')"
+    )
+    assert "(this takes longer)" in notice_text(page)
+    # the export is asked for with an identifier of the browser's own
+    export = page.evaluate("window.requested.find((r) => r.includes('/export'))")
+    run = export.split("run=")[1]
+    assert len(run) == 36 and run[14] == "4"
+    assert any(r == f"/api/hive/recipe-runs/{run}/progress" for r in page.evaluate("window.requested"))
+    page.evaluate("(p) => (window.progress = { ...p, state: 'failed' })", TAKEN_OVER)
+    page.evaluate("window.release()")
+    page.wait_for_function(
+        "document.querySelector('.hive-notice .message').textContent.startsWith('Export failed')"
+    )
+    assert notice_text(page) == "Export failed: The export failed. (fontc, then fontmake)"
+    assert page.evaluate("document.querySelector('.hive-notice').classList.contains('error')")
+    page.wait_for_timeout(500)  # it used to go after eight seconds: it stays
+    assert notice_text(page) is not None
+    page.click(".hive-notice .close")
+    assert page.query_selector(".hive-notice") is None
+    assert page.errors == []
+    page.close()
+
+
+def test_the_download_notice_says_who_built_the_font(browser_and_url):
+    page = open_page(browser_and_url)
+    start_export(page, "succeed")
+    page.evaluate("(p) => (window.progress = p)", BUILDING)
+    page.wait_for_function(
+        "document.querySelector('.hive-notice .message').textContent === 'Building with fontc…'"
+    )
+    page.evaluate(
+        "(p) => (window.progress = p)",
+        {"state": "done", "stage": "built", "engine": "fontc", "fallback": False, "seconds": 42.3},
+    )
+    page.evaluate("window.release()")
+    page.wait_for_function(
+        "document.querySelector('.hive-notice .message')?.textContent === 'ttf built by fontc in 42 s'"
+    )
+    page.close()
+
+
+def test_a_server_that_builds_no_font_leaves_no_notice(browser_and_url):
+    page = open_page(browser_and_url)
+    start_export(page, "succeed")
+    page.evaluate("window.release()")
+    page.wait_for_function("!document.querySelector('.hive-notice')")
+    page.close()
+
+
+def test_the_download_notice_texts(browser_and_url):
+    page = open_page(browser_and_url)
+    result = page.evaluate("""() => {
+          const m = window.hiveModule;
+          const done = { stage: "built", engine: "fontmake", fallback: true, seconds: 2.34 };
+          return [m.exportProgressText("woff2", null), m.exportDoneText("woff2", done),
+                  m.exportDoneText("ttf", { stage: "run" }), m.exportEnginesText({ engine: "fontc", fallback: false }),
+                  m.exportEnginesText(null), m.exportEnginesText({ engine: "fontmake", fallback: true })];
+        }""")
+    assert result == [
+        "Preparing woff2…",
+        "woff2 built by fontmake in 2.3 s (fontc could not build it)",
+        "",
+        "(fontc)",
+        "",
+        "(fontc, then fontmake)",
+    ]
+    page.close()
