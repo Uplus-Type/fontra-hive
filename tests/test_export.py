@@ -273,6 +273,7 @@ def test_a_refused_font_through_the_route(route, tmp_path):
 
 
 def test_fontmake_works_in_a_folder_of_its_own(tmp_path, fixture_fontra, monkeypatch):
+    monkeypatch.setattr(export, "can_run_fontc", lambda: None)  # fontmake's way
     pytest.importorskip("fontra_compile")
     from fontra_compile.compile_fontmake_action import CompileFontMakeAction
 
@@ -294,6 +295,7 @@ def test_fontmake_works_in_a_folder_of_its_own(tmp_path, fixture_fontra, monkeyp
 def test_a_relative_include_is_looked_for_in_that_folder(
     tmp_path, fixture_fontra, monkeypatch
 ):
+    monkeypatch.setattr(export, "can_run_fontc", lambda: None)  # fontmake's way
     pytest.importorskip("fontra_compile")
     server = tmp_path / "server"
     server.mkdir()

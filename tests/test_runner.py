@@ -570,6 +570,7 @@ def main(args=None):
 @needsValidation
 @needsFonts
 def test_a_compiler_that_fails_ends_properly(hive, tmp_path, monkeypatch):
+    # An OpenType font: only fontmake makes it (a TrueType one is made by fontc).
     shim = tmp_path / "shim" / "fontmake"
     shim.mkdir(parents=True)
     (shim / "__init__.py").write_text("")
@@ -579,7 +580,7 @@ def test_a_compiler_that_fails_ends_properly(hive, tmp_path, monkeypatch):
     addRecipe(
         hive,
         "steps:\n- input: hive-read\n  project: Latin\n"
-        "- output: hive-artifact\n  format: ttf\n",
+        "- output: hive-artifact\n  format: otf\n",
     )
     result = start(hive)
     assertRecordedAndClean(hive, result, "failed")
@@ -590,6 +591,7 @@ def test_a_compiler_that_fails_ends_properly(hive, tmp_path, monkeypatch):
 @needsValidation
 @needsFonts
 def test_the_process_holds_no_secret(hive, tmp_path, monkeypatch):
+    # An OpenType font: only fontmake makes it (a TrueType one is made by fontc).
     shim = tmp_path / "shim" / "fontmake"
     shim.mkdir(parents=True)
     (shim / "__init__.py").write_text("")
@@ -603,7 +605,7 @@ def test_the_process_holds_no_secret(hive, tmp_path, monkeypatch):
     addRecipe(
         hive,
         "steps:\n- input: hive-read\n  project: Latin\n"
-        "- output: hive-artifact\n  format: ttf\n",
+        "- output: hive-artifact\n  format: otf\n",
     )
     result = start(hive)
     assert result.state == "failed"
