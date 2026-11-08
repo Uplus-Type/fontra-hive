@@ -23,7 +23,6 @@ import time
 from dataclasses import dataclass
 
 import aiohttp
-import jwt
 
 from .access import CAPABILITIES, Access, HiveUser
 from .remotesync import RemoteNotUsable
@@ -139,6 +138,8 @@ class HiveApi:
     # --- identity ------------------------------------------------------------
 
     async def _publicKeys(self, *, refresh: bool = False) -> dict[str, object]:
+        import jwt  # here, not at import time: Try loads this module in the browser
+
         # At most one refetch every 30 s, even with a flood of unknown kids.
         if self._keys and not (refresh and time.monotonic() - self._keysFetchedAt > 30):
             return self._keys
@@ -152,6 +153,8 @@ class HiveApi:
 
     async def userFromAccessToken(self, token: str | None) -> HiveUser | None:
         """The user of a valid access token (signature, expiry, audience)."""
+        import jwt  # here, not at import time: Try loads this module in the browser
+
         if not token:
             return None
         try:

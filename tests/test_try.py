@@ -176,6 +176,39 @@ def test_python_bundle_for_the_browser():
     assert "glyphs" not in entryPoints  # in the second bundle, loaded when needed
 
 
+def test_the_bundle_s_modules_import_nothing_the_browser_lacks():
+    """Try loads fontra_hive's server modules in Pyodide (hive_try_server.py
+    imports the project manager). Whatever a module of the package imports
+    at import time must be in the bundle, a stand-in, or the standard
+    library: a server-only library (jwt, say) is imported inside the function
+    that needs it. On 8 Nov 2026 a top-level ``import jwt`` left Try blank."""
+    import ast
+    import sys
+    from importlib import resources
+
+    from fontra_hive import trybundle
+
+    allowed = set(sys.stdlib_module_names) | set(trybundle.PACKAGES)
+    allowed |= {name.split("/")[0] for name in trybundle.STUBS}
+    package = pathlib.Path(str(resources.files("fontra_hive")))
+    offenders = {}
+    for path in sorted(package.rglob("*.py")):
+        if "client" in path.relative_to(package).parts:
+            continue
+        for node in ast.parse(path.read_text(encoding="utf-8")).body:
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                names = [node.module]
+            else:
+                continue
+            for name in names:
+                root = name.split(".")[0]
+                if root not in allowed:
+                    offenders.setdefault(path.name, set()).add(root)
+    assert offenders == {}, offenders
+
+
 def test_glyphs_bundle_for_the_browser():
     """Reading Glyphs files: glyphsLib, fontra-glyphs and a pure-Python
     openstep_plist, in a second bundle loaded only when a Glyphs file is opened."""
