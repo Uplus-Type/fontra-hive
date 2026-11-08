@@ -177,6 +177,8 @@ class DevHiveProjectManager(CommentRoutesMixin):
 
         # Where the builds of the Download panel are (see exportProgressHandler).
         self.exportBuilds = BuildTracker()
+        # Who has a Download going on (waiting for the runner or running).
+        self.exportsInProgress: set[str] = set()
         self._runSweepTask: asyncio.Task | None = None
 
     async def aclose(self) -> None:
@@ -715,67 +717,75 @@ class DevHiveProjectManager(CommentRoutesMixin):
         stem = export.safe_stem(
             name.split("/")[-1] + ("" if branch == DEFAULT_BRANCH else f"-{branch}")
         )
-        token = await self.authorize(request)
-        # The browser's own identifier, to be asked about while this goes on.
-        tracked = request.query.get("run")
-        if tracked is not None:
+        # One export at a time per person, asked before the run is opened.
+        who = access.user.uid if access is not None else ""
+        if who in self.exportsInProgress:
+            raise web.HTTPConflict(text=export.EXPORT_IN_PROGRESS)
+        self.exportsInProgress.add(who)
+        try:
+            token = await self.authorize(request)
+            # The browser's own identifier, to be asked about while this goes on.
+            tracked = request.query.get("run")
+            if tracked is not None:
+                try:
+                    self.exportBuilds.start(tracked, name)
+                except ValueError as error:
+                    if str(error) == "known identifier":
+                        raise web.HTTPConflict(text="This run is known.")
+                    raise web.HTTPBadRequest(text="Not a run identifier.")
             try:
-                self.exportBuilds.start(tracked, name)
-            except ValueError as error:
-                if str(error) == "known identifier":
-                    raise web.HTTPConflict(text="This run is known.")
-                raise web.HTTPBadRequest(text="Not a run identifier.")
-        try:
-            result = await runner.runRecipe(
-                runner.downloadRequest(
-                    name,
-                    head,
-                    stem,
-                    format,
-                    user=access.user.uid if access is not None else "",
-                ),
-                resolver=projectResolverFor(self, token),
-                registry=self.recipeRuns,
-                runsRoot=self.runsRoot,
-                serverPaths=[self.rootPath],
-                onProgress=(
-                    (lambda event: self.exportBuilds.update(tracked, event))
-                    if tracked
-                    else None
-                ),
-            )
-        except runner.RunRefused as error:
-            if tracked:
-                self.exportBuilds.finish(tracked, False)
-            return web.Response(status=error.status, text=error.text)
-        except BaseException:
-            if tracked:
-                self.exportBuilds.finish(tracked, False)
-            raise
-        if tracked:
-            self.exportBuilds.finish(tracked, result.succeeded)
-        try:
-            if not result.succeeded:
-                # The log stays here (no path of the server in it); the
-                # browser gets one of our sentences.
-                logger.warning(
-                    "export of %s as %s ended %s: %s",
-                    name,
-                    format,
-                    result.state,
-                    result.log[-2000:],
+                result = await runner.runRecipe(
+                    runner.downloadRequest(
+                        name,
+                        head,
+                        stem,
+                        format,
+                        user=who,
+                    ),
+                    resolver=projectResolverFor(self, token),
+                    registry=self.recipeRuns,
+                    runsRoot=self.runsRoot,
+                    serverPaths=[self.rootPath],
+                    onProgress=(
+                        (lambda event: self.exportBuilds.update(tracked, event))
+                        if tracked
+                        else None
+                    ),
                 )
-                message = export.failure_message(result)
-                if message == export.FEATURES_REFUSED:
-                    raise web.HTTPUnprocessableEntity(text=message)
-                if message == export.EXPORT_TOO_LONG:
-                    raise web.HTTPGatewayTimeout(text=message)
-                raise web.HTTPInternalServerError(text=message)
-            return await _sendFile(
-                request, result.directory / result.artifacts[0]["name"]
-            )
+            except runner.RunRefused as error:
+                if tracked:
+                    self.exportBuilds.finish(tracked, False)
+                return web.Response(status=error.status, text=error.text)
+            except BaseException:
+                if tracked:
+                    self.exportBuilds.finish(tracked, False)
+                raise
+            if tracked:
+                self.exportBuilds.finish(tracked, result.succeeded)
+            try:
+                if not result.succeeded:
+                    # The log stays here (no path of the server in it); the
+                    # browser gets one of our sentences.
+                    logger.warning(
+                        "export of %s as %s ended %s: %s",
+                        name,
+                        format,
+                        result.state,
+                        result.log[-2000:],
+                    )
+                    message = export.failure_message(result)
+                    if message == export.FEATURES_REFUSED:
+                        raise web.HTTPUnprocessableEntity(text=message)
+                    if message == export.EXPORT_TOO_LONG:
+                        raise web.HTTPGatewayTimeout(text=message)
+                    raise web.HTTPInternalServerError(text=message)
+                return await _sendFile(
+                    request, result.directory / result.artifacts[0]["name"]
+                )
+            finally:
+                result.discard()
         finally:
-            result.discard()
+            self.exportsInProgress.discard(who)
 
     async def exportProgressHandler(self, request: web.Request) -> web.Response:
         """Where a Download build is: ``{state, stage, engine, fallback,

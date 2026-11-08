@@ -67,6 +67,7 @@ EXPORT_FAILED = "The export failed."
 EXPORT_TOO_LONG = "The export took too long."
 COMPILER_STOPPED = "The font compiler was stopped."
 FEATURES_REFUSED = "Feature code can only include files from the project."
+EXPORT_IN_PROGRESS = "You already have an export in progress."
 
 _INCLUDE = r"include(?:\s|#[^\r\n]*)*\(([^)]*)"
 _ANY_INCLUDE = re.compile(_INCLUDE, re.IGNORECASE)

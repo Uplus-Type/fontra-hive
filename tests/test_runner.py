@@ -1464,3 +1464,130 @@ def test_the_client_of_the_routes_of_the_registry():
     ]:
         with pytest.raises(HiveApiUnavailable):
             run(method(*args))
+
+
+# --- one export in flight per person ---------------------------------------------
+
+
+class Gated:
+    """runRecipe, held at the door until ``release`` is set."""
+
+    def __init__(self, real):
+        self.real, self.calls = real, 0
+        self.started, self.release = asyncio.Event(), asyncio.Event()
+
+    async def __call__(self, *args, **kwargs):
+        self.calls += 1
+        self.started.set()
+        await self.release.wait()
+        return await self.real(*args, **kwargs)
+
+
+def exportAs(hive, monkeypatch, who):
+    from fontra_hive import projectmanager
+
+    async def sendFile(request, path):
+        return "sent"
+
+    async def authorize(request):
+        return token_for(request.who)
+
+    monkeypatch.setattr(projectmanager, "_sendFile", sendFile)
+    monkeypatch.setattr(hive.manager, "authorize", authorize)
+    request = types.SimpleNamespace(
+        match_info={"name": "Latin"}, query={"format": "fontra"}, who=who
+    )
+    return hive.manager.exportHandler(request)
+
+
+def records(hive):
+    return [p for p in hive.runs.iterdir() if p.suffix == ".json"]
+
+
+def makeAnaAManager(hive):
+    users = json.loads((hive.root.parent / "users.json").read_text())
+    users["projects"]["Latin"]["collaborators"]["ana"] = "manager"
+    path = hive.root.parent / "users.json"
+    path.write_text(json.dumps(users))
+    os.utime(path, (path.stat().st_mtime + 5, path.stat().st_mtime + 5))
+
+
+def test_a_second_export_of_a_person_is_refused_before_the_registry(
+    hive, monkeypatch
+):
+    from aiohttp import web
+
+    from fontra_hive import projectmanager
+
+    gated = Gated(runner.runRecipe)
+    monkeypatch.setattr(projectmanager.runner, "runRecipe", gated)
+
+    async def scenario():
+        first = asyncio.create_task(exportAs(hive, monkeypatch, "jeremie"))
+        await gated.started.wait()
+        with pytest.raises(web.HTTPConflict) as refused:
+            await exportAs(hive, monkeypatch, "jeremie")
+        assert refused.value.text == export.EXPORT_IN_PROGRESS
+        assert gated.calls == 1 and records(hive) == []  # nothing opened
+        gated.release.set()
+        return await first
+
+    assert run(scenario()) == "sent"
+    assert len(records(hive)) == 1  # only the first run
+
+
+def test_another_person_is_not_held_by_it(hive, monkeypatch):
+    from fontra_hive import projectmanager
+
+    makeAnaAManager(hive)
+    gated = Gated(runner.runRecipe)
+    monkeypatch.setattr(projectmanager.runner, "runRecipe", gated)
+
+    async def scenario():
+        first = asyncio.create_task(exportAs(hive, monkeypatch, "jeremie"))
+        await gated.started.wait()
+        second = asyncio.create_task(exportAs(hive, monkeypatch, "ana"))
+        while gated.calls < 2:
+            await asyncio.sleep(0.01)
+        gated.release.set()
+        return await first, await second
+
+    assert run(scenario()) == ("sent", "sent")
+
+
+def test_the_place_is_free_once_the_first_export_ends(hive, monkeypatch):
+    assert run(exportAs(hive, monkeypatch, "jeremie")) == "sent"
+    assert run(exportAs(hive, monkeypatch, "jeremie")) == "sent"
+    assert hive.manager.exportsInProgress == set()
+
+
+def test_a_cancelled_export_frees_the_place(hive, monkeypatch):
+    from fontra_hive import projectmanager
+
+    gated = Gated(runner.runRecipe)
+    monkeypatch.setattr(projectmanager.runner, "runRecipe", gated)
+
+    async def scenario():
+        first = asyncio.create_task(exportAs(hive, monkeypatch, "jeremie"))
+        await gated.started.wait()
+        first.cancel()  # the browser closed the request
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        assert hive.manager.exportsInProgress == set()
+        gated.release.set()
+        return await exportAs(hive, monkeypatch, "jeremie")
+
+    assert run(scenario()) == "sent"
+
+
+def test_a_failed_export_frees_the_place(hive, monkeypatch):
+    from aiohttp import web
+
+    from fontra_hive import projectmanager
+
+    monkeypatch.setattr(
+        projectmanager.runner, "runRecipe", _withLimits(runner.runRecipe, 0.01)
+    )
+    with pytest.raises(web.HTTPGatewayTimeout):
+        run(exportAs(hive, monkeypatch, "jeremie"))
+    assert hive.manager.exportsInProgress == set()
