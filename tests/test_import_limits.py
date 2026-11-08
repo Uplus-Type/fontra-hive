@@ -176,3 +176,29 @@ def test_the_check_asks_without_counting(tmp_path):
 
     run(go())
 
+
+
+def test_the_finder_s_extras_do_not_count_among_the_files(tmp_path, monkeypatch):
+    """A .zip made by the Finder carries __MACOSX/ and .DS_Store entries: they
+    are left out, and not counted against the limit on files."""
+    import zipfile
+
+    from fontra_hive import importer
+
+    monkeypatch.setattr(importer, "MAX_FILES", 3)
+    archive = tmp_path / "font.zip"
+    with zipfile.ZipFile(archive, "w") as z:
+        for name in ("A.ufo/metainfo.plist", "A.ufo/glyphs/a.glif", "A.ufo/.DS_Store"):
+            z.writestr(name, "x")
+        for name in ("__MACOSX/A.ufo/._metainfo.plist", "__MACOSX/A.ufo/glyphs/._a.glif"):
+            z.writestr(name, "x")
+    importer.unzip(archive, tmp_path / "out")
+    assert sorted(p.name for p in (tmp_path / "out" / "A.ufo").rglob("*") if p.is_file()) == [
+        "a.glif",
+        "metainfo.plist",
+    ]
+    with zipfile.ZipFile(archive, "a") as z:
+        z.writestr("A.ufo/glyphs/b.glif", "x")
+        z.writestr("A.ufo/glyphs/c.glif", "x")
+    with pytest.raises(importer.ImportError_, match="Too many files"):
+        importer.unzip(archive, tmp_path / "out2")

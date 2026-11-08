@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 MAX_UPLOAD = 300 * 1024 * 1024  # bytes, as sent
 MAX_UNZIPPED = 1024 * 1024 * 1024  # bytes, once unpacked
-MAX_FILES = 100_000
+MAX_FILES = 500_000  # a pan-CJK family: several UFOs of 50 000 glyphs
 # Folder formats, most complete first: a designspace brings its UFOs along.
 FOLDER_PREFERENCE = ["fontra", "designspace", "glyphspackage", "ufo"]
 # Feature files that a UFO's feature code includes: bytes read, all files
@@ -62,13 +62,18 @@ def readableExtensions() -> set[str]:
     return {ep.name.lower() for ep in entry_points(group="fontra.filesystem.backends")}
 
 
+def _skipped(name: str) -> bool:
+    """What the Finder adds to a .zip and an import leaves out, uncounted."""
+    return name.startswith("__MACOSX/") or pathlib.PurePosixPath(name).name == ".DS_Store"
+
+
 def unzip(archive: pathlib.Path, destination: pathlib.Path) -> None:
     try:
         zf = zipfile.ZipFile(archive)
     except zipfile.BadZipFile:
         raise ImportError_("This .zip file is damaged.")
     with zf:
-        infos = zf.infolist()
+        infos = [i for i in zf.infolist() if not _skipped(i.filename)]
         if len(infos) > MAX_FILES:
             raise ImportError_("Too many files in the .zip.")
         if sum(i.file_size for i in infos) > MAX_UNZIPPED:
@@ -81,11 +86,6 @@ def unzip(archive: pathlib.Path, destination: pathlib.Path) -> None:
             target = (destination / name).resolve()
             if root != target and root not in target.parents:
                 raise ImportError_("The .zip contains a path outside of it.")
-            if (
-                name.startswith("__MACOSX/")
-                or pathlib.PurePosixPath(name).name == ".DS_Store"
-            ):
-                continue
             if info.is_dir():
                 target.mkdir(parents=True, exist_ok=True)
                 continue
