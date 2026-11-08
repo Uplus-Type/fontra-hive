@@ -1,39 +1,66 @@
 #!/bin/sh
-# Fontra Hive, "Try Fontra": build fontc (googlefonts/fontc) for the browser,
-# as a WASI program (wasm32-wasip1). The page runs it in a worker
-# (client/try/try-fontc-worker.js, on the in-memory WASI host of
-# client/try/try-wasi.js) to export TTF and WOFF2 without a server.
-# fontc reads the font as designspace + UFOs, prepared by
-# client/try/py/hive_try_convert.py (fontcSources): it cannot compile
-# .fontra yet at this revision. No OTF: fontc writes TrueType outlines.
+# Fontra Hive: build fontc (googlefonts/fontc) at the revision pinned here,
+# from one clone, for the two places that compile fonts:
+#
+# - native: the program the server runs for TrueType and WOFF2 downloads
+#   (src/fontra_hive/export.py), installed by hive-api's install.sh in
+#   $HIVE/fontc/fontc-<rev> (link $HIVE/fontc/current);
+# - wasm: "Try Fontra" in the browser, a WASI program (wasm32-wasip1) that the
+#   page runs in a worker (client/try/try-fontc-worker.js, on the in-memory
+#   WASI host of client/try/try-wasi.js).
+#
+# Both read the .fontra package directly (fontc's fontra2fontir). No OTF:
+# fontc writes TrueType outlines; the server builds OTF with fontmake.
 #
 # Usage: tools/build-fontc-wasm.sh [output-folder]   (default: ./build)
-# Needs rustup (https://rustup.rs) and git. Takes a few minutes.
+#   FONTC_TARGETS="native wasm" (the default), or one of the two.
+# Needs rustup (https://rustup.rs) and git. Takes ten to twenty minutes for
+# both; the two targets compile their dependencies separately.
 #
-# The fontc revision is pinned: the page and the server expect this build
-# (FONTC_REV, and the sha256 printed at the end, go in hive-api's install.sh).
+# Writes fontc-<rev7> and fontc-<rev7>.wasm, and prints their sha256. The
+# revision is read from here by install.sh: one place for the server and the
+# page, so that both build the same font.
 #
 # Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
 set -eu
 
-FONTC_REV=${FONTC_REV:-4c75e67852cb9bde966e7532b1f2a1ae53e87e55}
+FONTC_REV=${FONTC_REV:-d73bdfae3b08ae80db6b248f8a03cbe00eaf3bb6}
 OUT=${1:-build}
-TARGET=wasm32-wasip1
+TARGETS=${FONTC_TARGETS:-native wasm}
+WASM=wasm32-wasip1
+REV7=$(printf %s "$FONTC_REV" | cut -c1-7)
 
 command -v rustup >/dev/null || { echo "rustup is needed: https://rustup.rs" >&2; exit 1; }
-rustup target add "$TARGET"
+for target in $TARGETS; do
+  case $target in
+    native|wasm) ;;
+    *) echo "unknown target $target (native, wasm)" >&2; exit 1 ;;
+  esac
+done
+case " $TARGETS " in *" wasm "*) rustup target add "$WASM" ;; esac
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
+# A full clone: fontc's build reads its tags and commit (git describe), which
+# `fontc --vv` prints, and install.sh checks.
 git clone --quiet https://github.com/googlefonts/fontc "$WORK/fontc"
 git -C "$WORK/fontc" checkout --quiet "$FONTC_REV"
 
-# Without rayon: no threads in the browser (fontc then works sequentially).
-( cd "$WORK/fontc" && cargo build --locked --release -p fontc \
-    --no-default-features --features cli --target "$TARGET" )
-
 mkdir -p "$OUT"
-NAME="fontc-${FONTC_REV%"${FONTC_REV#???????}"}.wasm"
-cp "$WORK/fontc/target/$TARGET/release/fontc.wasm" "$OUT/$NAME"
-ls -l "$OUT/$NAME"
-if command -v shasum >/dev/null; then shasum -a 256 "$OUT/$NAME"; else sha256sum "$OUT/$NAME"; fi
+sum() { if command -v shasum >/dev/null; then shasum -a 256 "$1"; else sha256sum "$1"; fi; }
+for target in $TARGETS; do
+  if [ "$target" = native ]; then
+    # With rayon (the default features): the server has several cores.
+    ( cd "$WORK/fontc" && cargo build --locked --release -p fontc )
+    cp "$WORK/fontc/target/release/fontc" "$OUT/fontc-$REV7"
+    built="$OUT/fontc-$REV7"
+  else
+    # Without rayon: no threads in the browser (fontc then works sequentially).
+    ( cd "$WORK/fontc" && cargo build --locked --release -p fontc \
+        --no-default-features --features cli --target "$WASM" )
+    cp "$WORK/fontc/target/$WASM/release/fontc.wasm" "$OUT/fontc-$REV7.wasm"
+    built="$OUT/fontc-$REV7.wasm"
+  fi
+  ls -l "$built"
+  sum "$built"
+done
