@@ -1469,6 +1469,9 @@ def test_the_client_of_the_routes_of_the_registry():
 # --- one export in flight per person ---------------------------------------------
 
 
+PATIENCE = 20  # seconds a test waits for something that should be quick
+
+
 class Gated:
     """runRecipe, held at the door until ``release`` is set."""
 
@@ -1479,8 +1482,11 @@ class Gated:
     async def __call__(self, *args, **kwargs):
         self.calls += 1
         self.started.set()
-        await self.release.wait()
+        await asyncio.wait_for(self.release.wait(), PATIENCE)
         return await self.real(*args, **kwargs)
+
+    async def untilStarted(self):
+        await asyncio.wait_for(self.started.wait(), PATIENCE)
 
 
 def exportAs(hive, monkeypatch, who):
@@ -1527,13 +1533,13 @@ def test_a_second_export_of_a_person_is_refused_before_the_registry(
 
     async def scenario():
         first = asyncio.create_task(exportAs(hive, monkeypatch, "jeremie"))
-        await gated.started.wait()
+        await gated.untilStarted()
         with pytest.raises(web.HTTPConflict) as refused:
             await exportAs(hive, monkeypatch, "jeremie")
         assert refused.value.text == export.EXPORT_IN_PROGRESS
         assert gated.calls == 1 and records(hive) == []  # nothing opened
         gated.release.set()
-        return await first
+        return await asyncio.wait_for(first, PATIENCE)
 
     assert run(scenario()) == "sent"
     assert len(records(hive)) == 1  # only the first run
@@ -1548,12 +1554,20 @@ def test_another_person_is_not_held_by_it(hive, monkeypatch):
 
     async def scenario():
         first = asyncio.create_task(exportAs(hive, monkeypatch, "jeremie"))
-        await gated.started.wait()
+        await gated.untilStarted()
         second = asyncio.create_task(exportAs(hive, monkeypatch, "ana"))
-        while gated.calls < 2:
-            await asyncio.sleep(0.01)
+
+        async def bothAtTheDoor():
+            while gated.calls < 2:
+                if second.done():
+                    second.result()  # refused instead: say why
+                await asyncio.sleep(0.01)
+        await asyncio.wait_for(bothAtTheDoor(), PATIENCE)
         gated.release.set()
-        return await first, await second
+        return (
+            await asyncio.wait_for(first, PATIENCE),
+            await asyncio.wait_for(second, PATIENCE),
+        )
 
     assert run(scenario()) == ("sent", "sent")
 
@@ -1572,7 +1586,7 @@ def test_a_cancelled_export_frees_the_place(hive, monkeypatch):
 
     async def scenario():
         first = asyncio.create_task(exportAs(hive, monkeypatch, "jeremie"))
-        await gated.started.wait()
+        await gated.untilStarted()
         first.cancel()  # the browser closed the request
         with pytest.raises(asyncio.CancelledError):
             await first
