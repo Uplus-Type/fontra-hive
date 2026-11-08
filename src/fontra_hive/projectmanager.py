@@ -718,7 +718,8 @@ class DevHiveProjectManager(CommentRoutesMixin):
             name.split("/")[-1] + ("" if branch == DEFAULT_BRANCH else f"-{branch}")
         )
         # One export at a time per person, asked before the run is opened.
-        who = access.user.uid if access is not None else ""
+        # hive-api's stable id; in development (no uid) the username.
+        who = (access.user.uid or access.user.username) if access is not None else ""
         if who in self.exportsInProgress:
             raise web.HTTPConflict(text=export.EXPORT_IN_PROGRESS)
         self.exportsInProgress.add(who)
