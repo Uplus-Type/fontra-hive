@@ -317,9 +317,8 @@
   var fontcCalls = {};
   var fontcId = 1;
 
-  // Compile `main` (a .designspace, or a lone .ufo, among the files) with fontc: the
-  // TrueType font, an ArrayBuffer. The files are copied, not moved: several
-  // compiles may use them.
+  // Compile `main` (the .fontra folder among the files) with fontc: the
+  // TrueType font, an ArrayBuffer. The files' buffers are handed over (moved).
   function fontc(stem, main, entries, onProgress) {
     if (!fontcWorker) {
       fontcWorker = new Worker("/hive/try/try-fontc-worker.js?v=" + encodeURIComponent(TRY_VERSION), {
@@ -342,54 +341,30 @@
     return new Promise(function (resolve, reject) {
       var id = fontcId++;
       fontcCalls[id] = { resolve: resolve, reject: reject, onProgress: onProgress };
-      fontcWorker.postMessage({ id: id, url: FONTC_URL, stem: stem, main: main, files: entries });
+      fontcWorker.postMessage(
+        { id: id, url: FONTC_URL, stem: stem, main: main, files: entries },
+        entries.map(function (entry) {
+          return entry[1];
+        })
+      );
     });
   }
 
-  async function asBuffers(files) {
-    var entries = [];
-    for (var [path, data] of files) {
-      entries.push([path, await (typeof data === "string" ? new Blob([data]) : data).arrayBuffer()]);
-    }
-    return entries;
-  }
-
-  // fontc reads the font as designspace + UFOs (its .fontra reader is not
-  // written yet): made by Python here, as "Export as designspace" does.
-  async function designspaceZip(stem, onProgress) {
-    if (localId) {
-      return (await python("exportDesignspace", { name: project, stem: stem }, [], onProgress)).data;
-    }
-    var entries = await asBuffers(await packageFiles(onProgress));
-    var reply = await python(
-      "toDesignspaceZip",
-      { stem: stem, files: entries },
-      entries.map(function (e) {
-        return e[1];
-      }),
-      onProgress
-    );
-    return reply.data;
-  }
-
-  // One variable font per combination of discrete axis values (Upright,
-  // Italic…): a single file, or a .zip of them.
+  // fontc reads the .fontra package itself: the files of "Export as
+  // .fontra" (background images left out: fontc has no use for them), in a
+  // folder <stem>.fontra. Discrete axes (Upright, Italic…) are pinned to
+  // their default: one font, as the server builds it.
   async function compiled(format, stem, onProgress) {
-    var zipped = await designspaceZip(stem, onProgress);
-    var prepared = await python("forFontc", { data: zipped, stem: stem }, [zipped], onProgress);
-    var entries = await asBuffers(await Format.unzip(new Blob([prepared.data])));
-    var fonts = new Map();
-    for (var part of prepared.parts) {
-      var data = await fontc(part[1], part[0], entries, onProgress);
-      if (format === "woff2") data = (await python("woff2", { data: data }, [data], onProgress)).data;
-      fonts.set(part[1] + "." + format, new Blob([data], { type: "font/" + format }));
+    var main = stem + ".fontra";
+    var entries = [];
+    for (var [path, data] of await packageFiles(onProgress)) {
+      if (path.indexOf(Format.IMAGES_DIR) === 0) continue;
+      var buffer = await (typeof data === "string" ? new Blob([data]) : data).arrayBuffer();
+      entries.push([main + "/" + path, buffer]);
     }
-    if (fonts.size === 1) {
-      var [name, blob] = fonts.entries().next().value;
-      saveBlob(blob, name);
-    } else {
-      saveBlob(await Format.zip(fonts), stem + "." + format + ".zip");
-    }
+    var font = await fontc(stem, main, entries, onProgress);
+    if (format === "woff2") font = (await python("woff2", { data: font }, [font], onProgress)).data;
+    saveBlob(new Blob([font], { type: "font/" + format }), stem + "." + format);
   }
 
   // The sources written by Python are a designspace with its UFOs

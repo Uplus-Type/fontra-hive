@@ -2,14 +2,14 @@
 // export compiled fonts without a server. A module worker of its own (a
 // compile takes seconds, and must not hold up the editor's Python).
 //
-// fontc is built for wasm32-wasip1 (tools/build-fontc-wasm.sh) and run
-// here on an in-memory file system (try-wasi.js): the font goes in as
-// files (a .designspace and its UFOs: fontc does not read .fontra yet),
-// fontc writes the TrueType font, which goes back.
+// fontc is built for wasm32-wasip1 (tools/build-fontc-wasm.sh, the
+// revision the server runs too) and run here on an in-memory file system
+// (try-wasi.js): the font goes in as files (the .fontra package, which fontc
+// reads itself), fontc writes the TrueType font, which goes back.
 //
 // Request: {id, url, stem, main, files: [[path, ArrayBuffer]]} (main: the
-// .designspace among them to compile; else the first .designspace, .glyphs
-// or .ufo)
+// .fontra folder among them to compile; else the first .fontra or .ufo
+// folder, .designspace or .glyphs)
 // → {id, data: ArrayBuffer, log} or {id, error, log}; {id, progress}.
 //
 // Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
@@ -54,9 +54,9 @@ async function compile(request, say) {
   for (const [path, data] of request.files) fs.writeFile(`/font/${path}`, data);
   const main =
     request.main ||
-    request.files.map((f) => f[0]).find((p) => /^[^/]+\.(designspace|glyphs)$/i.test(p)) ||
-    request.files.map((f) => f[0].split("/")[0]).find((p) => /\.ufo$/i.test(p));
-  if (!main) throw new Error("No designspace, UFO or Glyphs file to compile.");
+    request.files.map((f) => f[0].split("/")[0]).find((p) => /\.(fontra|ufo)$/i.test(p)) ||
+    request.files.map((f) => f[0]).find((p) => /^[^/]+\.(designspace|glyphs)$/i.test(p));
+  if (!main) throw new Error("No .fontra package, UFO, designspace or Glyphs file to compile.");
   const source = `/font/${main}`;
   fs.mkdirp("/out");
   fs.mkdirp("/build");
