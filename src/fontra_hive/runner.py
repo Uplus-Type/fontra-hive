@@ -135,8 +135,17 @@ FAILED_MESSAGES = frozenset(
     }
 )
 
-# All the process sees of the server's environment.
-_ENVIRONMENT = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "PYTHONPATH", "VIRTUAL_ENV")
+# All the process sees of the server's environment (HIVE_FONTC: where fontc
+# is, a path and no secret).
+_ENVIRONMENT = (
+    "PATH",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "PYTHONPATH",
+    "VIRTUAL_ENV",
+    "HIVE_FONTC",
+)
 
 _runSlot = asyncio.Semaphore(RUNS_AT_ONCE)
 _RUN_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")

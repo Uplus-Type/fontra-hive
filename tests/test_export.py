@@ -452,12 +452,14 @@ def test_fontc_builds_the_ttf(tmp_path, fixture_fontra, monkeypatch, doubles, ca
         result = run(export.build(fixture_fontra, tmp_path / "work", "Mutator", "ttf"))
     assert result == tmp_path / "work" / "Mutator.ttf"
     assert "glyf" in TTFont(result)
-    assert doubles == ["prepare"]  # fontmake was not called
+    assert doubles == []  # no designspace made, fontmake not called
     (call,) = called(calls)
     source, flag, output = call["args"]
-    assert source.endswith("source.designspace") and flag == "--output-file"
+    # fontc reads the .fontra package itself, in the export's own folder
+    assert pathlib.Path(source) == fixture_fontra.resolve() and flag == "--output-file"
     assert pathlib.Path(output).name == "Mutator.ttf"
-    assert pathlib.Path(call["cwd"]).resolve() == pathlib.Path(source).parent.resolve()
+    assert pathlib.Path(call["cwd"]) == pathlib.Path(output).parent
+    assert pathlib.Path(call["cwd"]).is_relative_to((tmp_path / "work").resolve())
     assert len(engine_line(caplog)) == 1
     assert engine_line(caplog)[0].startswith("engine=fontc format=ttf seconds=")
     assert engine_line(caplog)[0].endswith("fallback=no")
@@ -482,7 +484,7 @@ def test_fontc_failing_falls_back_to_fontmake(
     with caplog.at_level(logging.INFO, logger="fontra_hive.export"):
         result = run(export.build(fixture_fontra, tmp_path / "work", "Mutator", "ttf"))
     assert "glyf" in TTFont(result)  # made by the double of fontmake
-    assert doubles == ["prepare", "fontmake"]
+    assert doubles == ["fontmake"]
     assert len(called(calls)) == 1
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 1 and said in warnings[0].getMessage()
@@ -561,7 +563,8 @@ def test_woff2_is_made_from_the_ttf_of_fontc(
     assert result == tmp_path / "work" / "Mutator.woff2"
     assert result.read_bytes()[:4] == b"wOF2"
     assert TTFont(result).flavor == "woff2"
-    assert doubles == ["prepare"] and len(called(calls)) == 1
+    assert doubles == [] and len(called(calls)) == 1
+    assert called(calls)[0]["args"][0].endswith(".fontra")
     assert engine_line(caplog)[0].startswith("engine=fontc format=woff2 seconds=")
 
 
@@ -593,39 +596,87 @@ def test_both_engines_failing_gives_the_error_of_fontmake(
         run(export.build(fixture_fontra, tmp_path / "work", "Mutator", "ttf"))
 
 
-def test_refused_features_do_not_fall_back(tmp_path, fixture_fontra, monkeypatch):
-    fake_fontc(tmp_path, monkeypatch)
-    seen = []
-
-    async def prepare(source, out):
-        raise export.FeaturesRefused(export.FEATURES_REFUSED)
-
-    async def compile(source, destination):
-        seen.append("fontmake")
-
-    monkeypatch.setattr(export, "_prepare_sources", prepare)
-    monkeypatch.setattr(export, "_compile", compile)
+def test_refused_features_do_not_fall_back(
+    tmp_path, fixture_fontra, monkeypatch, doubles
+):
+    # fontc reads features.txt of the package (fea-rs would follow an
+    # include as feaLib does): checked before it runs, and no fontmake then.
+    calls = fake_fontc(tmp_path, monkeypatch)
+    write_features(fixture_fontra, "include(/etc/hostname);\n")
     with pytest.raises(export.FeaturesRefused):
         run(export.build(fixture_fontra, tmp_path / "work", "Mutator", "ttf"))
-    assert seen == []
+    assert called(calls) == [] and doubles == []
 
 
-def test_fontc_is_looked_for_beside_the_interpreter_then_on_the_path(
-    tmp_path, monkeypatch
+def test_the_features_fontc_reads_are_the_package_s(tmp_path, fixture_fontra):
+    write_features(fixture_fontra, "include(../../secret.fea);\n")
+    with pytest.raises(export.FeaturesRefused):
+        run(export._fontc_input(fixture_fontra, tmp_path / "fontc"))
+    write_features(fixture_fontra, "include(kern.fea);\n")
+    given = run(export._fontc_input(fixture_fontra, tmp_path / "fontc"))
+    assert given == fixture_fontra
+    (fixture_fontra / "features.txt").unlink()
+    given = run(export._fontc_input(fixture_fontra, tmp_path / "fontc"))
+    assert given == fixture_fontra
+
+
+def skip_export(package, names):
+    path = package / "font-data.json"
+    data = json.loads(path.read_text())
+    data.setdefault("customData", {})["public.skipExportGlyphs"] = names
+    path.write_text(json.dumps(data, indent=2))
+
+
+def test_glyphs_not_to_export_go_by_a_designspace(
+    tmp_path, fixture_fontra, monkeypatch, doubles, caplog
 ):
-    beside = tmp_path / "venv" / "bin"
-    beside.mkdir(parents=True)
-    other = tmp_path / "other"
-    other.mkdir()
-    for folder in (beside, other):
-        (folder / "fontc").write_text("#!/bin/sh\n")
-        (folder / "fontc").chmod(0o755)
-    monkeypatch.setattr(sys, "executable", str(beside / "python"))
-    monkeypatch.setenv("PATH", str(other))
-    assert export.can_run_fontc() == beside / "fontc"
-    (beside / "fontc").unlink()
-    assert export.can_run_fontc() == other / "fontc"
-    (other / "fontc").unlink()
+    # fontc leaves out public.skipExportGlyphs from a designspace, not from a
+    # .fontra package: such a font goes the way it went before.
+    calls = fake_fontc(tmp_path, monkeypatch)
+    skip_export(fixture_fontra, ["B"])
+    with caplog.at_level(logging.INFO, logger="fontra_hive.export"):
+        run(export.build(fixture_fontra, tmp_path / "work", "Mutator", "ttf"))
+    assert doubles == ["prepare"]
+    (call,) = called(calls)
+    assert call["args"][0].endswith("source.designspace")
+    assert "glyphs not to export" in caplog.text
+    assert engine_line(caplog)[0].startswith("engine=fontc format=ttf")
+
+
+def test_an_empty_list_of_glyphs_not_to_export_is_none(
+    tmp_path, fixture_fontra, monkeypatch, doubles
+):
+    calls = fake_fontc(tmp_path, monkeypatch)
+    skip_export(fixture_fontra, [])
+    run(export.build(fixture_fontra, tmp_path / "work", "Mutator", "ttf"))
+    assert doubles == [] and called(calls)[0]["args"][0].endswith(".fontra")
+
+
+def test_where_fontc_is_looked_for(tmp_path, monkeypatch):
+    # $HIVE_FONTC (install.sh), then $HIVE/fontc/current beside $HIVE/venv,
+    # then pip's beside the interpreter, then the PATH.
+    hive = tmp_path / "hive"
+    configured = tmp_path / "elsewhere" / "fontc-d73bdfa"
+    current = hive / "fontc" / "current"
+    beside = hive / "venv" / "bin" / "fontc"
+    on_path = tmp_path / "other" / "fontc"
+    for program in (configured, current, beside, on_path):
+        program.parent.mkdir(parents=True, exist_ok=True)
+        program.write_text("#!/bin/sh\n")
+        program.chmod(0o755)
+    monkeypatch.setattr(sys, "prefix", str(hive / "venv"))
+    monkeypatch.setattr(sys, "executable", str(hive / "venv" / "bin" / "python"))
+    monkeypatch.setenv("PATH", str(on_path.parent))
+    monkeypatch.setenv("HIVE_FONTC", str(configured))
+    assert export.can_run_fontc() == configured
+    configured.unlink()  # set, but not there (a build that failed): the next
+    assert export.can_run_fontc() == current
+    monkeypatch.setenv("HIVE_FONTC", "")
+    current.unlink()
+    assert export.can_run_fontc() == beside
+    beside.unlink()
+    assert export.can_run_fontc() == on_path
+    on_path.chmod(0o644)  # not a program
     assert export.can_run_fontc() is None
 
 
@@ -718,39 +769,71 @@ def test_features_are_checked_before_fontc_sees_them(tmp_path, fixture_fontra):
         run(export._prepare_sources(fixture_fontra, tmp_path / "fontc"))
 
 
-def test_the_real_sources_reach_fontc(tmp_path, fontra_without_axes, monkeypatch):
+def test_a_font_without_axes_reaches_fontc_as_it_is(
+    tmp_path, fontra_without_axes, monkeypatch
+):
+    # A font made from scratch: fontc 1.0.0 refused its designspace (a source
+    # without <location>); the package needs no such detour.
     from fontTools.ttLib import TTFont
 
     calls = fake_fontc(tmp_path, monkeypatch)
     result = run(export.build(fontra_without_axes, tmp_path / "work", "Plain", "ttf"))
     assert "glyf" in TTFont(result)
     (call,) = called(calls)
-    assert call["args"][0].endswith(".ufo")
+    assert pathlib.Path(call["args"][0]) == fontra_without_axes.resolve()
+
+
+def test_no_server_path_in_what_fontc_says(tmp_path, fixture_fontra, monkeypatch):
+    calls = fake_fontc(tmp_path, monkeypatch, "panic")  # it prints its input
+    with pytest.raises(export.FontcFailed) as error:
+        run(export._compile_fontc(fixture_fontra, tmp_path / "work" / "out" / "x.ttf"))
+    assert len(called(calls)) == 1
+    assert str(tmp_path) not in error.value.tail
+    assert "not yet implemented" in error.value.tail
 
 
 # --- a real build, where fontc and fontmake are installed --------------------------------
 
 
-def test_the_real_fontc_builds_mutatorsans(tmp_path, fixture_fontra, caplog):
-    pytest.importorskip("fontra_compile")
-    pytest.importorskip("fontmake")
+def needs_fontc():
+    """fontc, built from main at the revision of tools/build-fontc-wasm.sh
+    (fontc 1.0.0 from PyPI cannot read a .fontra package)."""
     if export.can_run_fontc() is None:
-        pytest.skip("needs fontc")
+        pytest.skip("needs fontc (tools/build-fontc-wasm.sh, or HIVE_FONTC)")
+
+
+def test_the_real_fontc_builds_mutatorsans(tmp_path, fixture_fontra, caplog):
+    needs_fontc()
     from fontTools.ttLib import TTFont
 
     with caplog.at_level(logging.INFO, logger="fontra_hive.export"):
         result = run(export.build(fixture_fontra, tmp_path / "work", "Mutator", "ttf"))
     font = TTFont(result)
     assert "glyf" in font and "fvar" in font
-    assert engine_line(caplog)[0].startswith("engine=fontc format=ttf")
+    assert {axis.axisTag for axis in font["fvar"].axes} == {"wght", "wdth"}
+    assert font["cmap"].getBestCmap()[ord("A")] == "A"
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert engine_line(caplog)[0].startswith("engine=fontc format=ttf")
+
+
+def test_the_real_fontc_builds_a_font_without_axes(
+    tmp_path, fontra_without_axes, caplog
+):
+    needs_fontc()
+    from fontTools.ttLib import TTFont
+
+    work = tmp_path / "work"
+    with caplog.at_level(logging.INFO, logger="fontra_hive.export"):
+        result = run(export.build(fontra_without_axes, work, "Plain", "ttf"))
+    font = TTFont(result)
+    assert "glyf" in font and "fvar" not in font
+    assert engine_line(caplog)[0].startswith("engine=fontc format=ttf")
 
 
 def test_the_real_otf_comes_from_fontmake(tmp_path, fixture_fontra, caplog):
     pytest.importorskip("fontra_compile")
     pytest.importorskip("fontmake")
-    if export.can_run_fontc() is None:
-        pytest.skip("needs fontc")
+    needs_fontc()
     with caplog.at_level(logging.INFO, logger="fontra_hive.export"):
         result = run(export.build(fixture_fontra, tmp_path / "work", "Mutator", "otf"))
     assert result.read_bytes()[:4] == b"OTTO"

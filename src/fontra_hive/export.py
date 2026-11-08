@@ -5,10 +5,11 @@ Sources are always available: the ``.fontra`` package as stored in git, or a
 ``.zip``; a font without axes and with a single source is its UFO alone
 (``<name>-ufo.zip``, else ``<name>-designspace.zip``). Fonts (``.otf``,
 ``.ttf``, ``.woff2``) are built only when fontra-compile and fontmake are
-installed on the server: TrueType and WOFF2 by fontc when it is installed,
-with fontmake (as Fontra Pak builds, the ``compile-fontmake`` workflow of
-fontra-compile) when fontc is missing or stops on the font; OpenType (CFF) by
-fontmake, which fontc cannot write.
+installed on the server: TrueType and WOFF2 by fontc when it is installed
+(googlefonts/fontc at the revision of ``tools/build-fontc-wasm.sh``, which
+reads the ``.fontra`` package itself), with fontmake (as Fontra Pak builds, the
+``compile-fontmake`` workflow of fontra-compile) when fontc is missing or stops
+on the font; OpenType (CFF) by fontmake, which fontc cannot write.
 
 A build runs in its own process, the recipe runner's: a large font can take
 minutes and a lot of memory, and must not stall the server. The Download
@@ -54,6 +55,11 @@ FONT_FORMATS = {
 
 # What fontc printed, kept at most: the end is where it says why it stopped.
 FONTC_TAIL_CHARACTERS = 2000
+# Where install.sh puts fontc ($HIVE/fontc/current, set by fontra-hive.service).
+FONTC_VARIABLE = "HIVE_FONTC"
+# Glyphs that a font says not to export (the UFO convention, in the font's
+# custom data): fontc honours it in a designspace, not in a .fontra package.
+SKIP_EXPORT_GLYPHS = "public.skipExportGlyphs"
 # All fontc sees of the environment (it needs no network, no secret).
 _FONTC_ENVIRONMENT = ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE")
 
@@ -144,11 +150,19 @@ def can_build_fonts() -> bool:
 
 
 def can_run_fontc() -> pathlib.Path | None:
-    """The ``fontc`` program that pip installed beside the interpreter, else
-    the one on the PATH; None when there is none."""
-    beside = pathlib.Path(sys.executable).with_name("fontc")
-    if beside.is_file() and os.access(beside, os.X_OK):
-        return beside
+    """The ``fontc`` program: ``$HIVE_FONTC`` (install.sh sets it), else
+    ``fontc/current`` beside the Python environment (``$HIVE/fontc/current``
+    for ``$HIVE/venv``), else one installed beside the interpreter (pip, before
+    November 2026), else the one on the PATH; None when there is none."""
+    candidates = []
+    configured = os.environ.get(FONTC_VARIABLE, "").strip()
+    if configured:
+        candidates.append(pathlib.Path(configured))
+    candidates.append(pathlib.Path(sys.prefix).parent / "fontc" / "current")
+    candidates.append(pathlib.Path(sys.executable).with_name("fontc"))
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
     found = shutil.which("fontc")
     return pathlib.Path(found) if found else None
 
@@ -243,18 +257,53 @@ def keep_rules_with_glyphs(doc, folder) -> None:
 
 def has_one_source_without_axes(doc) -> bool:
     """A font without axes and with a single source: its UFO is all of it.
-    (fontc 1.0.0 refuses the designspace of such a font, a source without
-    ``<location>``, and takes the UFO alone.)"""
+    (fontc 1.0.0 refused the designspace of such a font, a source without
+    ``<location>``, and took the UFO alone.)"""
     return not doc.axes and len(doc.sources) == 1
 
 
+def _package_features(package: pathlib.Path) -> str:
+    """The feature code of a ``.fontra`` package, as fontc reads it."""
+    features = package / "features.txt"
+    return features.read_text("utf-8", "replace") if features.is_file() else ""
+
+
+def _skipped_glyphs(package: pathlib.Path) -> list:
+    """The glyphs a ``.fontra`` package says not to export
+    (``public.skipExportGlyphs`` in its custom data), if any."""
+    import json
+
+    try:
+        data = json.loads((package / "font-data.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        return []
+    custom = data.get("customData") if isinstance(data, dict) else None
+    skipped = custom.get(SKIP_EXPORT_GLYPHS) if isinstance(custom, dict) else None
+    return skipped if isinstance(skipped, list) else []
+
+
+async def _fontc_input(source: pathlib.Path, out: pathlib.Path) -> pathlib.Path:
+    """What fontc is given: the ``.fontra`` package itself (fontc reads it,
+    pins discrete axes to their default, decomposes variable components and
+    propagates anchors, as :func:`_compile` does before fontmake), its
+    feature code checked first. A font that names glyphs not to export goes
+    by a designspace (:func:`_prepare_sources`): fontc leaves them out there,
+    not in a package."""
+    check_feature_includes(_package_features(source))
+    if _skipped_glyphs(source):
+        logger.info("fontc reads a designspace: the font has glyphs not to export")
+        return await _prepare_sources(source, out)
+    return source
+
+
 async def _prepare_sources(source: pathlib.Path, out: pathlib.Path) -> pathlib.Path:
-    """The font as fontc reads it, written in ``out``: the filters of
-    :func:`_compile` (same steps) and a designspace with its UFOs, rules that
-    name a missing glyph left out. Returns what fontc is given: the
+    """The font as a designspace for fontc, written in ``out``: the filters
+    of :func:`_compile` (same steps) and a designspace with its UFOs, rules
+    that name a missing glyph left out. Returns what fontc is given: the
     designspace, or the UFO alone for a font without axes and a single source.
     Discrete axes are dropped (the default is built), as in :func:`_compile`.
-    The feature code is checked first."""
+    The feature code is checked first. Only for a font with glyphs not to
+    export (:func:`_fontc_input`); the others go to fontc as they are."""
     from fontTools.designspaceLib import DesignSpaceDocument
 
     from fontra.backends import getFileSystemBackend
@@ -308,8 +357,9 @@ async def _compile_fontc(
     destination: pathlib.Path,
     timeout: float | None = None,
 ) -> None:
-    """Run fontc on ``source`` (a designspace, or a UFO) and write
-    ``destination``. Anything but a font made raises :class:`FontcFailed`:
+    """Run fontc on ``source`` (a ``.fontra`` package, a designspace or a
+    UFO) and write ``destination``, in the folder of ``destination`` (the
+    export's own). Anything but a font made raises :class:`FontcFailed`:
     an exit code other than 0 (a Rust panic ends with 101, and is no
     different), no file or an empty one, a program that does not start.
     ``timeout``: seconds; the runner's clock stops a build before that
@@ -319,7 +369,8 @@ async def _compile_fontc(
         raise FontcFailed(None, stderr="fontc is not installed")
     source = source.resolve()
     destination = destination.resolve()
-    folders = (source.parent, destination.parent, destination.parent.parent)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    folders = (source, source.parent, destination.parent, destination.parent.parent)
     environment = {k: os.environ[k] for k in _FONTC_ENVIRONMENT if k in os.environ}
     try:
         process = await asyncio.create_subprocess_exec(
@@ -327,7 +378,7 @@ async def _compile_fontc(
             os.fspath(source),
             "--output-file",
             os.fspath(destination),
-            cwd=source.parent,
+            cwd=destination.parent,
             env=environment,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
@@ -364,8 +415,8 @@ async def _build_font(
     engine, fallback = "fontmake", False
     if format != "otf" and can_run_fontc() is not None:
         try:
-            sources = await _prepare_sources(source, out / "fontc")
-            await _compile_fontc(sources, target)
+            given = await _fontc_input(source, out / "fontc")
+            await _compile_fontc(given, target)
             engine = "fontc"
         except (FeaturesRefused, MemoryError):
             raise
@@ -374,7 +425,7 @@ async def _build_font(
             if isinstance(error, FontcFailed):
                 detail = f"exit code {error.returncode}\n{error.tail}"
             else:
-                detail = f"{type(error).__name__} while preparing the sources"
+                detail = f"{type(error).__name__} before fontc ran"
             logger.warning(
                 "fontc could not build %s, fontmake takes over: %s", format, detail
             )
