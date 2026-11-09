@@ -2,6 +2,7 @@
 mocked hive-api. Skipped without Playwright."""
 
 import json
+import re
 
 import pytest
 
@@ -662,7 +663,10 @@ def test_project_branches(browser_and_url):  # noqa: F811
     page.click("text=Fontra package")
     page.wait_for_function("calls.some(c => c.path.endsWith('/export'))")
     export = page.evaluate("calls.find(c => c.path.endsWith('/export'))")
-    assert export["query"] == "?format=fontra&branch=wide"
+    # (Since 5601e12 the export carries a run id, so the Download panel can
+    # follow the compiler's progress.)
+    assert export["query"].startswith("?format=fontra&branch=wide&run=")
+    assert re.fullmatch(r"[0-9a-f-]{36}", export["query"].rsplit("run=", 1)[1])
     assert page.errors == []
     page.close()
 
