@@ -638,6 +638,7 @@ class DevHiveProjectManager(CommentRoutesMixin):
             web.get("/hive/try/python{which:(-glyphs)?}.zip", self.pythonBundleHandler),
             web.get("/hive/pyodide/{name}", self.pyodideHandler),
             web.get("/hive/try/fontc.wasm", self.fontcHandler),
+            web.get("/hive/views/register.js", self.registerScriptHandler),
             web.get("/hive/{path:.*}", self.clientFileHandler),
             # Editor plug-ins Hive serves from a folder ($HIVE_PLUGINS_DIR):
             # U+Marks at /umarks/.
@@ -893,6 +894,20 @@ class DevHiveProjectManager(CommentRoutesMixin):
         except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
             raise web.HTTPNotFound()
         return _revalidatedResponse(request, data, contentType)
+
+    async def registerScriptHandler(self, request: web.Request) -> web.Response:
+        """/hive/views/register.js, with the list of the editor plug-ins this
+        server serves written into it (hivePlugins): the script runs before
+        Fontra's modules and registers them in the browser, without asking
+        the server anything. Revalidated like the other files: a plug-in
+        added or removed changes the script, and so its ETag."""
+        source = (
+            resources.files("fontra_hive")
+            .joinpath("client", "views", "register.js")
+            .read_text(encoding="utf-8")
+        )
+        data = renderRegisterScript(source, hivePlugins()).encode("utf-8")
+        return _revalidatedResponse(request, data, "text/javascript")
 
     async def folderPluginHandler(
         self, request: web.Request, *, plugin: str
@@ -2069,6 +2084,10 @@ FOLDER_PLUGIN_CONTENT_TYPES = {
     "html": "text/html",
     "png": "image/png",
 }
+# The Hive plug-in itself (history, snapshots, comments), always served.
+HIVE_PLUGIN = "/hive/plugin"
+
+
 def folderPluginPath(name: str) -> pathlib.Path | None:
     """The folder of one of FOLDER_PLUGINS, if this server has it: in
     $HIVE_PLUGINS_DIR, with its plugin.json (a missing or half-fetched
@@ -2081,6 +2100,33 @@ def folderPluginPath(name: str) -> pathlib.Path | None:
         return folder if (folder / "plugin.json").is_file() else None
     except OSError:
         return None
+
+
+def hivePlugins() -> list[str]:
+    """The addresses of the editor plug-ins Hive gives everyone, as Fontra's
+    Settings › Plugins writes them (a path ending with "/" is read on this
+    site, never on jsDelivr): the Hive plug-in, then each folder plug-in
+    that is there. Looked up at each page, so that one removed on the server
+    (hive-api: an empty deploy/umarks-version) is gone from the next page."""
+    return [HIVE_PLUGIN] + [
+        f"/{name}/" for name in FOLDER_PLUGINS if folderPluginPath(name) is not None
+    ]
+
+
+# The line of client/views/register.js the server writes the list into.
+REGISTER_PLUGINS_LINE = re.compile(
+    r"^(  var PLUGINS = )\[[^\n]*\];( // written by the server.*)$", re.M
+)
+
+
+def renderRegisterScript(source: str, plugins: list[str]) -> str:
+    """register.js with ``plugins`` as its list (its own default otherwise:
+    the Hive plug-in alone)."""
+    return REGISTER_PLUGINS_LINE.sub(
+        lambda m: m.group(1) + json.dumps(plugins) + ";" + m.group(2),
+        source,
+        count=1,
+    )
 
 
 def _revalidatedResponse(request, data: bytes, contentType: str) -> web.Response:

@@ -210,6 +210,104 @@ def test_the_history_plugin_registers_itself(browser_and_url):
     page.close()
 
 
+def plugins_page(browser_and_url, served, storage=None, added=None):
+    """A Hive page whose register.js lists ``served`` (as the server writes
+    it), with Fontra's plug-in list ``storage`` and what Hive added before."""
+    from fontra_hive.projectmanager import renderRegisterScript
+
+    browser, base = browser_and_url
+    page = browser.new_page()
+    script = renderRegisterScript(
+        (CLIENT_DIR / "views" / "register.js").read_text(encoding="utf-8"), served
+    )
+    page.route(
+        "**/views/register.js",
+        lambda route: route.fulfill(content_type="text/javascript", body=script),
+    )
+    page.route(
+        "**/plugins.html",
+        lambda route: route.fulfill(
+            content_type="text/html",
+            body='<!doctype html><html><head><script src="/views/register.js"></script></head></html>',
+        ),
+    )
+    # Before the first load only: what this browser had before.
+    page.goto(f"{base}/plugins.html?setup")
+    page.evaluate(
+        """([storage, added]) => {
+          localStorage.clear();
+          if (storage) localStorage.setItem('fontra.pluginsplugins', JSON.stringify(storage));
+          if (added) localStorage.setItem('hive.pluginsAdded', JSON.stringify(added));
+        }""",
+        [storage, added],
+    )
+    page.goto(f"{base}/plugins.html")
+    return page
+
+
+def registered(page):
+    return [
+        p["address"]
+        for p in json.loads(page.evaluate("localStorage.getItem('fontra.pluginsplugins')"))
+    ]
+
+
+def test_a_new_browser_gets_every_plugin_hive_serves(browser_and_url):
+    page = plugins_page(browser_and_url, ["/hive/plugin", "/umarks/"])
+    assert registered(page) == ["/hive/plugin", "/umarks/"]
+    page.reload()
+    assert registered(page) == ["/hive/plugin", "/umarks/"]
+    page.close()
+
+
+def test_plugins_are_added_after_the_persons_own(browser_and_url):
+    # Someone with Hive's plug-in already and one of their own (U+Marks from
+    # jsDelivr, say): U+Marks from Hive comes after, nothing of theirs moves
+    # (U+Marks loads once, whichever address comes first).
+    storage = [{"address": "/hive/plugin"}, {"address": "Uplus-Type/fontra-umarks"}]
+    page = plugins_page(browser_and_url, ["/hive/plugin", "/umarks/"], storage)
+    assert registered(page) == ["/hive/plugin", "Uplus-Type/fontra-umarks", "/umarks/"]
+    assert json.loads(page.evaluate("localStorage.getItem('hive.pluginsAdded')")) == [
+        "/umarks/"
+    ]
+    page.close()
+
+
+def test_a_plugin_removed_on_the_server_leaves_the_browser(browser_and_url):
+    storage = [
+        {"address": "/hive/plugin"},
+        {"address": "someone/else"},
+        {"address": "/umarks/"},
+    ]
+    page = plugins_page(browser_and_url, ["/hive/plugin"], storage, added=["/umarks/"])
+    assert registered(page) == ["/hive/plugin", "someone/else"]
+    assert json.loads(page.evaluate("localStorage.getItem('hive.pluginsAdded')")) == []
+    page.close()
+    # Put back on the server: registered again.
+    page = plugins_page(
+        browser_and_url, ["/hive/plugin", "/umarks/"], [{"address": "/hive/plugin"}]
+    )
+    assert registered(page) == ["/hive/plugin", "/umarks/"]
+    page.close()
+
+
+def test_what_the_person_added_is_never_removed(browser_and_url):
+    # /umarks/ added by hand (not by Hive): it stays when Hive no longer
+    # serves it.
+    storage = [{"address": "/hive/plugin"}, {"address": "/umarks/"}]
+    page = plugins_page(browser_and_url, ["/hive/plugin"], storage, added=[])
+    assert registered(page) == ["/hive/plugin", "/umarks/"]
+    page.close()
+
+
+def test_an_unexpected_list_is_left_alone(browser_and_url):
+    page = plugins_page(browser_and_url, ["/hive/plugin", "/umarks/"])
+    page.evaluate("localStorage.setItem('fontra.pluginsplugins', '{\"a\": 1}')")
+    page.reload()
+    assert page.evaluate("localStorage.getItem('fontra.pluginsplugins')") == '{"a": 1}'
+    page.close()
+
+
 def test_top_bar_chip_presence_and_menu(browser_and_url):
     page = open_page(browser_and_url)
     # Our block sits in the top bar, with Fontra's project name moved into it.

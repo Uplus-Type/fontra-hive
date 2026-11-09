@@ -1,5 +1,6 @@
-"""Editor plug-ins Hive gives everyone, served from a folder of
-$HIVE_PLUGINS_DIR (U+Marks at /umarks/)."""
+"""Editor plug-ins Hive gives everyone: the ones served from a folder of
+$HIVE_PLUGINS_DIR (U+Marks at /umarks/), and the list the pages hand to the
+browser (register.js on Hive's pages, <meta name="hive-plugins"> on Try's)."""
 
 import asyncio
 import json
@@ -8,10 +9,13 @@ from types import SimpleNamespace
 
 import pytest
 from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
 from test_views import manager  # noqa: F401  (fixture)
 
 from fontra_hive.projectmanager import (
     FOLDER_PLUGINS,
+    hivePlugins,
+    renderRegisterScript,
 )
 
 
@@ -100,17 +104,81 @@ def test_only_files_of_the_folder(manager, plugins_dir):  # noqa: F811
 
 def test_no_folder_no_plugin(manager, plugins_dir, monkeypatch):  # noqa: F811
     async def go():
+        assert hivePlugins() == ["/hive/plugin", "/umarks/"]
         # A checkout without its manifest (half fetched): no plug-in.
         (plugins_dir / "umarks" / "plugin.json").unlink()
+        assert hivePlugins() == ["/hive/plugin"]
         with pytest.raises(web.HTTPNotFound):
             await get(manager, "init.js")
         # Removed (an empty deploy/umarks-version): a clean 404.
         monkeypatch.setenv("HIVE_PLUGINS_DIR", os.fspath(plugins_dir / "none"))
+        assert hivePlugins() == ["/hive/plugin"]
         with pytest.raises(web.HTTPNotFound):
             await get(manager, "plugin.json")
         # A server without the variable (Fontra Pak-like, tests): the same.
         monkeypatch.delenv("HIVE_PLUGINS_DIR")
+        assert hivePlugins() == ["/hive/plugin"]
         with pytest.raises(web.HTTPNotFound):
             await get(manager, "plugin.json")
 
     asyncio.run(go())
+
+
+def test_the_routes_through_aiohttp(manager, plugins_dir):  # noqa: F811
+    """The real routes, in their order: /umarks/ before anything of Fontra's,
+    register.js before the other client files, and the server starts and
+    answers whether or not the folder is there."""
+
+    async def go():
+        app = web.Application()
+        app.add_routes(manager.webRoutes())
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get("/umarks/plugin.json")
+            assert response.status == 200
+            assert response.headers["Cache-Control"] == "no-cache"
+            assert (await response.json(content_type=None))["name"] == "U+Marks"
+            assert (await client.get("/umarks/guide/index.html")).status == 200
+            for bad in ["/umarks/", "/umarks/guide/", "/umarks/%2e%2e/secret.js"]:
+                assert (await client.get(bad)).status == 404, bad
+            script = await client.get("/hive/views/register.js")
+            assert script.status == 200
+            assert script.headers["Cache-Control"] == "no-cache"
+            text = await script.text()
+            assert 'var PLUGINS = ["/hive/plugin", "/umarks/"];' in text
+            etag = script.headers["ETag"]
+            same = await client.get(
+                "/hive/views/register.js", headers={"If-None-Match": etag}
+            )
+            assert same.status == 304
+            # Removed on the server: gone at once, without a restart.
+            (plugins_dir / "umarks" / "plugin.json").unlink()
+            assert (await client.get("/umarks/plugin.json")).status == 404
+            script = await client.get(
+                "/hive/views/register.js", headers={"If-None-Match": etag}
+            )
+            assert script.status == 200  # a new list, a new ETag
+            assert 'var PLUGINS = ["/hive/plugin"];' in await script.text()
+
+    asyncio.run(go())
+
+
+def test_register_script_gets_the_list():
+    source = (
+        "(function () {\n"
+        '  var PLUGINS = ["/hive/plugin"]; // written by the server (renderRegisterScript)\n'
+        "})();\n"
+    )
+    rendered = renderRegisterScript(source, ["/hive/plugin", "/umarks/"])
+    assert (
+        '  var PLUGINS = ["/hive/plugin", "/umarks/"]; // written by the server' in rendered
+    )
+    # The file itself has the line the server rewrites.
+    from importlib import resources
+
+    real = (
+        resources.files("fontra_hive")
+        .joinpath("client", "views", "register.js")
+        .read_text(encoding="utf-8")
+    )
+    assert renderRegisterScript(real, ["/x/"]) != real
+    assert 'var PLUGINS = ["/x/"];' in renderRegisterScript(real, ["/x/"])
