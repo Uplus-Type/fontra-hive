@@ -14,6 +14,7 @@ from test_views import manager  # noqa: F401  (fixture)
 
 from fontra_hive.projectmanager import (
     FOLDER_PLUGINS,
+    TRY_PROJECT,
     hivePlugins,
     renderRegisterScript,
 )
@@ -182,3 +183,28 @@ def test_register_script_gets_the_list():
     )
     assert renderRegisterScript(real, ["/x/"]) != real
     assert 'var PLUGINS = ["/x/"];' in renderRegisterScript(real, ["/x/"])
+
+
+def try_request():
+    return SimpleNamespace(
+        match_info={},
+        query={"project": TRY_PROJECT},
+        cookies={},
+        headers={},
+        host="localhost:8000",
+        path_qs="/editor.html",
+    )
+
+
+def test_try_pages_list_the_plugins(manager, plugins_dir, monkeypatch):  # noqa: F811
+    async def go():
+        page = (await manager.viewHandler(try_request(), view="editor")).text
+        meta = '<meta name="hive-plugins" content="[&quot;/hive/plugin&quot;, &quot;/umarks/&quot;]">'
+        assert meta in page
+        assert page.index(meta) < page.index("try-engine.js")
+        monkeypatch.delenv("HIVE_PLUGINS_DIR")
+        page = (await manager.viewHandler(try_request(), view="editor")).text
+        assert "/umarks/" not in page
+        assert 'name="hive-plugins" content="[&quot;/hive/plugin&quot;]"' in page
+
+    asyncio.run(go())

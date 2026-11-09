@@ -33,10 +33,30 @@
   var localName = project.startsWith(LOCAL_PREFIX) ? project.split("@")[0] : null;
   var localId = localName ? localName.slice(LOCAL_PREFIX.length) : null;
 
-  // The editor's plug-ins: none on the demo; on a font kept here, the Hive
-  // plug-in (history, snapshots, comments), served by Python in the browser.
-  // Fontra's own list is left untouched for the real editor.
-  var PLUGINS = localId ? JSON.stringify([{ address: "/hive/plugin" }]) : "[]";
+  // The editor's plug-ins: the ones the server serves to everyone
+  // (<meta name="hive-plugins">, projectmanager.hivePlugins: U+Marks at
+  // /umarks/, entirely in the browser), on the demo too; and on a font kept
+  // here, the Hive plug-in (history, snapshots, comments), served by Python
+  // in the browser. Fontra's own list is left untouched for the real editor.
+  var PLUGINS = JSON.stringify(
+    (function () {
+      var served = ["/hive/plugin"];
+      try {
+        var meta = document.querySelector('meta[name="hive-plugins"]');
+        var list = meta ? JSON.parse(meta.content) : served;
+        if (Array.isArray(list)) served = list;
+      } catch (error) {
+        // no list: the Hive plug-in alone, as before
+      }
+      return served
+        .filter(function (address) {
+          return typeof address === "string" && (address !== "/hive/plugin" || localId);
+        })
+        .map(function (address) {
+          return { address: address };
+        });
+    })()
+  );
   try {
     var getItem = Storage.prototype.getItem;
     var setItem = Storage.prototype.setItem;

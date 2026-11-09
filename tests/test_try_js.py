@@ -49,6 +49,10 @@ def _fontraClient():
 PYODIDE_DIR = os.environ.get("HIVE_TEST_PYODIDE_DIR")
 # fontc built for the browser (tools/build-fontc-wasm.sh): compiled exports.
 FONTC_WASM = os.environ.get("HIVE_TEST_FONTC_WASM")
+# A checkout of U+Marks (github.com/Uplus-Type/fontra-umarks, at the tag of
+# hive-api's deploy/umarks-version), served at /umarks/ as $HIVE_PLUGINS_DIR
+# does on the server.
+UMARKS_DIR = os.environ.get("HIVE_TEST_UMARKS_DIR")
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -86,7 +90,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             html = (self.fontraClient / "editor.html").read_text(encoding="utf-8")
             pyodide = "/hive/pyodide/" if PYODIDE_DIR else None
             fontc = "/hive/try/fontc.wasm" if FONTC_WASM else None
-            return self._send(injectTryScripts(html, pyodide, fontc).encode(), "text/html")
+            plugins = ["/hive/plugin", "/umarks/"] if UMARKS_DIR else None
+            return self._send(
+                injectTryScripts(html, pyodide, fontc, plugins=plugins).encode(), "text/html"
+            )
         if path == "/hive/try/fontc.wasm" and FONTC_WASM:
             return self._send(pathlib.Path(FONTC_WASM).read_bytes(), "application/wasm")
         if path == "/hive/try/python.zip":
@@ -101,7 +108,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self.send_error(404)
                 return
             return self._send(glyphs[0], "application/zip")
-        if path.startswith("/hive/pyodide/") and PYODIDE_DIR:
+        if path.startswith("/umarks/") and UMARKS_DIR:
+            file = pathlib.Path(UMARKS_DIR) / path[len("/umarks/") :]
+        elif path.startswith("/hive/pyodide/") and PYODIDE_DIR:
             file = pathlib.Path(PYODIDE_DIR) / path[len("/hive/pyodide/") :]
         elif path.startswith("/hive/"):
             file = CLIENT_DIR / path[len("/hive/") :]
@@ -115,6 +124,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_error(404)
             return
         types = {
+            ".json": "application/json",
             ".js": "text/javascript",
             ".mjs": "text/javascript",
             ".wasm": "application/wasm",
@@ -241,6 +251,51 @@ def test_the_real_editor_opens_and_edits_the_demo(server, browser):
     )
     assert after != before
     assert after == client  # the engine's copy follows the editor's
+    assert not errors
+    page.close()
+
+
+def test_the_demo_lists_the_plugins_the_server_serves(server, browser):
+    """U+Marks (and any folder plug-in) on the demo too; the Hive plug-in
+    only on a font kept in the browser, where Python serves its requests."""
+    page = browser.new_page()
+    meta = '<meta name="hive-plugins" content=\'["/hive/plugin", "/umarks/"]\'>'
+    for project, expected in [
+        ("demo%3AMutatorSans", [{"address": "/umarks/"}]),
+        ("local%3A0123456789ab", [{"address": "/hive/plugin"}, {"address": "/umarks/"}]),
+    ]:
+        page.route(
+            "**/listed.html*",
+            lambda route: route.fulfill(
+                content_type="text/html",
+                body=BARE_PAGE.replace("<head>", "<head>" + meta),
+            ),
+        )
+        page.goto(f"{server}/listed.html?project={project}")
+        plugins = page.evaluate("localStorage.getItem('fontra.pluginsplugins')")
+        assert json.loads(plugins) == expected, project
+        page.unroute("**/listed.html*")
+    page.close()
+
+
+def test_umarks_opens_in_the_real_editor_on_the_demo(server, browser):
+    """The panel is there with nothing added by hand (the dotted circle of the
+    right sidebar), and its guide is served next to it."""
+    if Handler.fontraClient is None:
+        pytest.skip("Fontra's built client is not installed")
+    if not UMARKS_DIR:
+        pytest.skip("no U+Marks checkout (HIVE_TEST_UMARKS_DIR)")
+    page = browser.new_page(viewport={"width": 1400, "height": 850})
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.goto(f"{server}/editor.html?{TRY_PAGE_QUERY}")
+    page.wait_for_function("window.editorController?.umarks?.panel", timeout=20000)
+    assert page.evaluate("!!document.querySelector('panel-umarks')")
+    assert page.evaluate("window.editorController.umarks.pluginPath") == "/umarks"
+    guide = page.evaluate(
+        "fetch('/umarks/guide/index.html').then(r => r.status)"
+    )
+    assert guide == 200
     assert not errors
     page.close()
 

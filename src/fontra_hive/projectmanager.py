@@ -288,7 +288,9 @@ class DevHiveProjectManager(CommentRoutesMixin):
         except FileNotFoundError:
             raise web.HTTPNotFound()
         return _htmlResponse(
-            injectTryScripts(text, pyodideURL(), fontcURL(), tryVersion())
+            injectTryScripts(
+                text, pyodideURL(), fontcURL(), tryVersion(), plugins=hivePlugins()
+            )
         )
 
     async def pythonBundleHandler(self, request: web.Request) -> web.Response:
@@ -2031,14 +2033,24 @@ def injectTryScripts(
     pyodide: str | None = None,
     fontc: str | None = None,
     version: str | None = None,
+    plugins: list[str] | None = None,
 ) -> str:
     """Fontra's page for "Try Fontra": the demo engine first in <head> (it
     must replace the WebSocket before Fontra's modules run), Hive's icons,
     and the notice at the end of <body>. None of Hive's own scripts.
     ``pyodide``: where the page loads Pyodide from, if not its default;
     ``fontc``: fontc for the browser, if this server has it (compiled
-    exports); ``version``: of Try Fontra's code (tryVersion)."""
-    html = injectTryMeta(html, pyodide, fontc, version, TRY_HEAD_SCRIPT + HIVE_ICON_LINKS)
+    exports); ``version``: of Try Fontra's code (tryVersion); ``plugins``:
+    the editor plug-ins this server serves (hivePlugins), which try-engine.js
+    gives the editor (the Hive plug-in on a font kept in the browser only)."""
+    html = injectTryMeta(
+        html,
+        pyodide,
+        fontc,
+        version,
+        TRY_HEAD_SCRIPT + HIVE_ICON_LINKS,
+        plugins=plugins,
+    )
     body = html.lower().rfind("</body>")
     if body == -1:
         return html + TRY_BODY_SCRIPT
@@ -2051,9 +2063,11 @@ def injectTryMeta(
     fontc: str | None = None,
     version: str | None = None,
     after: str = "",
+    plugins: list[str] | None = None,
 ) -> str:
     """The <meta> tags Try's pages read (where Pyodide and fontc are, the
-    version of Try's code), and ``after`` them, at the start of <head>."""
+    version of Try's code, the editor plug-ins), and ``after`` them, at the
+    start of <head>."""
     lower = html.lower()
     head = lower.find("<head>")
     cut = head + len("<head>") if head != -1 else 0
@@ -2063,6 +2077,7 @@ def injectTryMeta(
             ("hive-pyodide", pyodide),
             ("hive-fontc", fontc),
             ("hive-try-version", version),
+            ("hive-plugins", json.dumps(plugins) if plugins is not None else None),
         )
         if value
     )
