@@ -639,6 +639,15 @@ class DevHiveProjectManager(CommentRoutesMixin):
             web.get("/hive/pyodide/{name}", self.pyodideHandler),
             web.get("/hive/try/fontc.wasm", self.fontcHandler),
             web.get("/hive/{path:.*}", self.clientFileHandler),
+            # Editor plug-ins Hive serves from a folder ($HIVE_PLUGINS_DIR):
+            # U+Marks at /umarks/.
+            *(
+                web.get(
+                    f"/{name}/{{path:.*}}",
+                    partial(self.folderPluginHandler, plugin=name),
+                )
+                for name in FOLDER_PLUGINS
+            ),
             web.get("/favicon.ico", self.faviconHandler),
             web.get("/api/hive/me", self.meHandler),
             web.get("/api/hive/projects/{name}/access", self.accessHandler),
@@ -883,11 +892,38 @@ class DevHiveProjectManager(CommentRoutesMixin):
             data = resource.read_bytes()
         except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
             raise web.HTTPNotFound()
-        etag = '"' + hashlib.sha1(data).hexdigest()[:20] + '"'
-        headers = {"Cache-Control": "no-cache", "ETag": etag}
-        if request.headers.get("If-None-Match") == etag:
-            raise web.HTTPNotModified(headers=headers)
-        return web.Response(body=data, content_type=contentType, headers=headers)
+        return _revalidatedResponse(request, data, contentType)
+
+    async def folderPluginHandler(
+        self, request: web.Request, *, plugin: str
+    ) -> web.Response:
+        """/<plugin>/<file>: an editor plug-in entirely in the browser (U+Marks),
+        served from its folder in $HIVE_PLUGINS_DIR, a checkout of its public
+        repository at a pinned tag (hive-api's install.sh). Files only (no
+        listing of a folder), nothing hidden or outside the folder, a few
+        types, always revalidated: a plug-in updated on the server is the one
+        the browser gets at the next reload. 404 when the folder is not there
+        (the plug-in is then not in hivePlugins either)."""
+        folder = folderPluginPath(plugin)
+        parts = request.match_info.get("path", "").split("/")
+        if folder is None or any(
+            p in ("", ".", "..") or p.startswith(".") for p in parts
+        ):
+            raise web.HTTPNotFound()
+        contentType = FOLDER_PLUGIN_CONTENT_TYPES.get(
+            parts[-1].rsplit(".", 1)[-1].lower() if "." in parts[-1] else ""
+        )
+        if contentType is None:
+            raise web.HTTPNotFound()
+        path = folder.joinpath(*parts)
+        try:
+            # Not through a link to elsewhere either.
+            if not path.resolve().is_relative_to(folder.resolve()):
+                raise web.HTTPNotFound()
+            data = path.read_bytes()
+        except (FileNotFoundError, IsADirectoryError, NotADirectoryError, OSError):
+            raise web.HTTPNotFound()
+        return _revalidatedResponse(request, data, contentType)
 
     async def restoreHandler(self, request: web.Request) -> web.Response:
         """Bring one glyph back to the state it had at ``ref``, as a new commit.
@@ -2016,6 +2052,45 @@ def injectTryMeta(
         if value
     )
     return html[:cut] + meta + after + html[cut:]
+
+
+# Editor plug-ins entirely in the browser that Hive serves from a folder of
+# their own in $HIVE_PLUGINS_DIR (fontra-hive.service; a checkout of each
+# public repository at the tag hive-api pins, deploy/<name>-version), each at
+# /<name>/. U+Marks now; U+Derive the same way.
+FOLDER_PLUGINS = ("umarks",)
+# What a plug-in folder may serve: its manifest, its modules, styles, icons,
+# its guide and the guide's pictures.
+FOLDER_PLUGIN_CONTENT_TYPES = {
+    "json": "application/json",
+    "js": "text/javascript",
+    "css": "text/css",
+    "svg": "image/svg+xml",
+    "html": "text/html",
+    "png": "image/png",
+}
+def folderPluginPath(name: str) -> pathlib.Path | None:
+    """The folder of one of FOLDER_PLUGINS, if this server has it: in
+    $HIVE_PLUGINS_DIR, with its plugin.json (a missing or half-fetched
+    checkout is no plug-in)."""
+    root = os.environ.get("HIVE_PLUGINS_DIR")
+    if not root or name not in FOLDER_PLUGINS:
+        return None
+    folder = pathlib.Path(root) / name
+    try:
+        return folder if (folder / "plugin.json").is_file() else None
+    except OSError:
+        return None
+
+
+def _revalidatedResponse(request, data: bytes, contentType: str) -> web.Response:
+    """A file the browser must ask for again each time (``no-cache``),
+    answered by a 304 while its ETag is the same."""
+    etag = '"' + hashlib.sha1(data).hexdigest()[:20] + '"'
+    headers = {"Cache-Control": "no-cache", "ETag": etag}
+    if request.headers.get("If-None-Match") == etag:
+        raise web.HTTPNotModified(headers=headers)
+    return web.Response(body=data, content_type=contentType, headers=headers)
 
 
 def _htmlResponse(text: str) -> web.Response:
