@@ -5,7 +5,8 @@
 // font (MutatorSans) kept here first — Python loads, the font becomes a git
 // repository in the browser — and opened in the editor with Hive's history,
 // branches and comments. Where this browser cannot keep files (a private
-// window), the example opens as a plain demo instead, nothing saved.
+// window — Safari's expose the API but refuse to write), the example opens
+// as a plain demo instead, nothing saved.
 //
 // Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
 
@@ -55,8 +56,11 @@ export async function start({ store = window.HiveTryStore, tryAPI = window.hiveT
   try {
     projects = await store.list();
   } catch (error) {
-    console.error(error);
-    projects = [];
+    // The API is there but this browser will not use it (Safari, private
+    // window): the demo, as where the API is missing.
+    console.warn("Try: this browser cannot keep files here —", error);
+    go(DEMO_URL);
+    return "demo";
   }
   const latest = latestProject(projects);
   if (latest) {

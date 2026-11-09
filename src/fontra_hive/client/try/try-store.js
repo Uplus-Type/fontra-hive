@@ -74,7 +74,12 @@
       try {
         dir = await directory(ROOT);
       } catch (error) {
-        return projects;
+        // No font kept here yet: nothing to list. Anything else — Safari's
+        // private windows expose OPFS but refuse to use it ("the operation
+        // failed for an unknown transient reason") — is the caller's to
+        // decide: the start page then opens the plain demo.
+        if (error && error.name === "NotFoundError") return projects;
+        throw error;
       }
       for await (var entry of dir.values()) {
         if (entry.kind !== "directory") continue;

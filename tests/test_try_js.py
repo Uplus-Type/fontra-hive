@@ -954,7 +954,15 @@ START_STUBS = """(() => {
   window.__kept = [];
   window.__stubStore = (available, projects) => ({
     available: () => available,
-    list: async () => projects,
+    list: async () => {
+      if (projects === "refused") {
+        // Safari, private window: the API is there, every call fails.
+        const error = new Error("The operation failed for an unknown transient reason");
+        error.name = "UnknownError";
+        throw error;
+      }
+      return projects;
+    },
   });
   window.__stubAPI = {
     saveCopy: async (name, progress) => {
@@ -990,6 +998,11 @@ def test_the_start_page_opens_the_latest_font_or_keeps_the_example(server, brows
 
     # Nothing can be kept: the demo, in JavaScript, nothing saved.
     assert start(False, []) == ["demo", []]
+    page.wait_for_url("**/editor.html?project=demo%3AMutatorSans*")
+
+    # The API is there but refuses to work (Safari, private window): the demo
+    # too, with no error shown — not a copy of the example that would fail.
+    assert start(True, "refused") == ["demo", []]
     page.wait_for_url("**/editor.html?project=demo%3AMutatorSans*")
 
     # A first visit: the example is kept, and opened with its sample text.
