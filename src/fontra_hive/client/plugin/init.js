@@ -102,6 +102,10 @@ const STYLES = `
   .snapshot-button.active {
     background: rgba(128, 128, 128, 0.25);
   }
+  .snapshot-button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
   .snapshot-form {
     display: flex;
     flex-direction: column;
@@ -403,6 +407,21 @@ function el(tag, attrs = {}, children = []) {
 
 // The names of the glyph's sources changed by some versions (the server
 // gives each version its "sources"), newest first, without repeats.
+// Why "Snapshot…" is greyed (null: it is not). A snapshot of the whole font
+// takes the right to change its font settings; one of a glyph, a designer's
+// role. Unknown capabilities (null): open, the server decides.
+export function snapshotRefusal(glyphName, capabilities) {
+  if (!capabilities) return null;
+  if (glyphName) {
+    return capabilities.includes("snapshot")
+      ? null
+      : "Your role cannot name versions on this project";
+  }
+  return capabilities.includes("fontsettings")
+    ? null
+    : "A snapshot of the whole font is for the people who change the font settings on this project. Ask a manager.";
+}
+
 export function changedSources(commits) {
   return [...new Set(commits.flatMap((c) => c.sources || []))].filter(Boolean);
 }
@@ -614,6 +633,9 @@ class HiveHistoryPanel extends HTMLElement {
     this.preloadGeneration = 0;
     this.armedRestore = null; // {sha, timer}
     this.snapshotForm = null; // {info, error, busy} while the form is open
+    // What the person may do here (/access), once known: a snapshot of the
+    // whole font takes "fontsettings", one of a glyph "snapshot".
+    this.capabilities = null;
 
     const shadow = this.attachShadow({ mode: "open" });
     const style = document.createElement("style");
@@ -685,6 +707,27 @@ class HiveHistoryPanel extends HTMLElement {
     }
 
     this.installPreviewLayer();
+    this.loadCapabilities();
+  }
+
+  async loadCapabilities() {
+    try {
+      const response = await fetch(
+        new URL(
+          `/api/hive/projects/${encodeURIComponent(this.projectName)}/access`,
+          window.location.origin
+        )
+      );
+      if (!response.ok) return;
+      const { capabilities } = await response.json();
+      // "*": no accounts (a development server without a directory).
+      if (Array.isArray(capabilities) && !capabilities.includes("*")) {
+        this.capabilities = capabilities;
+        this.updateHeader(this.selectedGlyphName);
+      }
+    } catch (error) {
+      // unknown: the server still says no if it must
+    }
   }
 
   // --- sidebar protocol ----------------------------------------------------
@@ -751,10 +794,16 @@ class HiveHistoryPanel extends HTMLElement {
   // of the whole font.
   updateHeader(glyphName) {
     this.titleElement.textContent = glyphName ? "Glyph history" : "Font history";
-    this.snapshotButton.title = glyphName
-      ? `Name this version of ${glyphName}: groups its versions made since its last snapshot`
-      : "Name the current state of the whole font: groups the changes made since the last snapshot";
-    if (this.snapshotForm && this.snapshotForm.glyph !== glyphName) this.toggleSnapshotForm();
+    const refusal = snapshotRefusal(glyphName, this.capabilities);
+    this.snapshotButton.disabled = Boolean(refusal);
+    this.snapshotButton.title =
+      refusal ||
+      (glyphName
+        ? `Name this version of ${glyphName}: groups its versions made since its last snapshot`
+        : "Name the current state of the whole font: groups the changes made since the last snapshot");
+    if (this.snapshotForm && (this.snapshotForm.glyph !== glyphName || refusal)) {
+      this.toggleSnapshotForm();
+    }
   }
 
   async refresh(force = false) {

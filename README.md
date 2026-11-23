@@ -146,11 +146,26 @@ fontra --launch hive-dev repos
   observer gets Fontra's read-only mode (lock icon) and any edit they send
   is refused before it is written or broadcast; the Hive routes (history,
   Restore, snapshots) check the same capabilities.
+- **Beyond the glyph.** Three more capabilities, which designers have by
+  role: `fontsettings` (font info, units per em, axes, sources, features,
+  conditional substitutions, status definitions, the font's custom data
+  except the plug-ins' keys), `kerning` (groups included) and `plugindata`
+  (the custom data plug-ins write: `umarks.*`, the project's glyph sets).
+  A project can keep each one to managers and admins, or to a list of
+  designers (hive-api's project settings; in the development file,
+  `"writers": {"fontsettings": "managers", "kerning": ["fabio"]}` on a
+  project). Each change is read path by path (`fontra_hive.writedomains`)
+  and refused as a whole if one part falls in a domain the person may not
+  write; a top-level key of the font this table does not know counts as
+  font settings. Font info opens in Fontra's read-only mode for them (for
+  that connection only), the editor's kerning tool is greyed, and the
+  font's snapshot ("Snapshot…" with no glyph selected) takes `fontsettings`.
 - With hive-api, the capabilities are those of the role that hive-api also
   lists for that person and project (`/api/internal/access`): the accounts
   service can take some away, never add one, and its `notice` (why) is
   passed on in `…/access`. Every route that writes into a project's fonts
-  needs one of `edit`, `branch`, `snapshot`, `merge`, `tag`;
+  needs one of `edit`, `branch`, `snapshot`, `merge`, `tag` (and a font's
+  snapshot `fontsettings` too);
   `tests/test_capabilities.py` walks all of them.
 - Every edit is committed under the name of the person who made it, with a
   pseudonymous address (`<username>@hive`), never their real email: open the

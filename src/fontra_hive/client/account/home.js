@@ -1484,6 +1484,16 @@ async function projectSection(projectId) {
       }, ["Manage people…"]),
     ])
   );
+  // Who can change what goes beyond the glyph (an older hive-api: nothing).
+  if (!project.trashed) {
+    let writers = null;
+    try {
+      writers = await get(`${base}/writers`);
+    } catch (error) {
+      writers = null;
+    }
+    if (writers) content.push(writersPanel(base, writers));
+  }
 
   let branches = null;
   if (withFont && !project.trashed) {
@@ -1595,6 +1605,108 @@ async function projectSection(projectId) {
     );
   }
   main().replaceChildren(...content);
+}
+
+// --- beyond the glyph ------------------------------------------------------------------
+
+// What each domain covers, in the designer's words.
+export const DOMAIN_HINTS = {
+  fontsettings: "Font info, axes, sources and line metrics, features, and the font's other settings",
+  kerning: "Kerning pairs and groups",
+  plugindata: "What plug-ins keep in the font, such as U+Marks rules and glyph sets",
+};
+export const WRITERS_CHOICES = [
+  ["all", "All designers"],
+  ["managers", "Managers and admins only"],
+  ["listed", "These people"],
+];
+
+// The body of PUT …/writers from the form's state: {domain: {who, people}}.
+export function writersPayload(state) {
+  const body = {};
+  for (const [domain, { who, people }] of Object.entries(state)) {
+    body[domain] = who === "listed" ? { who, people: [...people].sort() } : { who };
+  }
+  return body;
+}
+
+function writersPanel(base, data) {
+  const panel = el("div", { class: "panel writers" });
+  const render = (data, message) => {
+    const state = {};
+    const fieldsets = data.domains.map((domain) => {
+      state[domain.id] = { who: domain.who, people: new Set(domain.people.map((p) => p.username)) };
+      const people = el("div", { class: "writers-people", hidden: domain.who !== "listed" },
+        data.designers.length
+          ? data.designers.map((p) => el("label", { class: "check" }, [
+              el("input", {
+                type: "checkbox",
+                value: p.username,
+                checked: state[domain.id].people.has(p.username),
+                disabled: !data.canChange,
+                onchange: (event) => {
+                  const chosen = state[domain.id].people;
+                  if (event.target.checked) chosen.add(p.username);
+                  else chosen.delete(p.username);
+                },
+              }),
+              p.name,
+              el("small", {}, [p.username]),
+            ]))
+          : [el("p", { class: "note" }, ["No designer on this project yet."])]
+      );
+      return el("fieldset", { class: "writers-domain", "data-domain": domain.id }, [
+        el("legend", {}, [domain.label]),
+        el("p", { class: "note" }, [DOMAIN_HINTS[domain.id] || ""]),
+        el("div", { class: "choices" }, WRITERS_CHOICES.map(([value, label]) =>
+          el("label", {}, [
+            el("input", {
+              type: "radio",
+              name: `writers-${domain.id}`,
+              value,
+              checked: domain.who === value,
+              disabled: !data.canChange,
+              onchange: () => {
+                state[domain.id].who = value;
+                people.hidden = value !== "listed";
+              },
+            }),
+            label,
+          ])
+        )),
+        people,
+      ]);
+    });
+    const error = el("div", { class: "error" });
+    const ok = el("div", { class: "ok" }, [message || ""]);
+    const save = data.canChange
+      ? el("button", {
+          onclick: async (event) => {
+            event.target.disabled = true;
+            error.textContent = ok.textContent = "";
+            try {
+              render(await call(`${base}/writers`, writersPayload(state), "PUT"), "Saved.");
+            } catch (e) {
+              error.textContent = e.message;
+              event.target.disabled = false;
+            }
+          },
+        }, ["Save"])
+      : null;
+    panel.replaceChildren(
+      el("h3", { style: "margin-top:0" }, ["Who can change what goes beyond the glyph"]),
+      el("p", { class: "note" }, [
+        "The glyphs stay open to every designer. Managers and admins can always change everything.",
+        data.canChange ? "" : " Only the project's admins change these settings.",
+      ]),
+      ...fieldsets,
+      error,
+      ok,
+      save ? el("div", { class: "row" }, [save]) : null,
+    );
+  };
+  render(data);
+  return panel;
 }
 
 // --- organizations ---------------------------------------------------------------------

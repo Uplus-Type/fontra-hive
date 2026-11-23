@@ -37,7 +37,7 @@ from multidict import CIMultiDict
 
 from . import importer
 from . import remote as git_remote
-from .access import CAPABILITIES, Access
+from .access import CAPABILITIES, Access, markReadOnlyConnection, splitReadOnlyMark
 from .gitstore import DEFAULT_BRANCH, SERVER_SIGNATURE, GitRepoStore
 from .hiveapi import (
     ACCESS_COOKIE,
@@ -49,6 +49,7 @@ from .hiveapi import (
 from .runner import HiveApiRunRegistry
 from .remotesync import NoRemote, RemoteNotUsable, RemoteSync
 from .projectmanager import DevHiveProjectManager, _htmlResponse, _sameOrigin
+from .writedomains import WRITE_DOMAINS, refusal
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +122,8 @@ def _refusal(access: Access, capability: str) -> str:
     would allow it."""
     if access.notice and capability in CAPABILITIES.get(access.role, ()):
         return access.notice["text"]
+    if capability in WRITE_DOMAINS and access.can("edit"):
+        return refusal(capability)  # the project keeps it to some people
     return f"{access.role} cannot {capability}"
 
 
@@ -244,10 +247,17 @@ class HiveProjectManager(DevHiveProjectManager):
         except HiveApiUnavailable as error:
             logger.warning("hive-api unavailable: %s", error)
             return None
-        return token_for_uid(user.uid) if user is not None else None
+        token = token_for_uid(user.uid) if user is not None else None
+        return markReadOnlyConnection(token, request)
 
     def accessFor(self, token: str | None, projectName: str) -> Access | None:
         return self.api.cachedAccess(token, projectName)
+
+    async def _accessForView(self, request: web.Request, name: str) -> Access | None:
+        try:
+            return (await self._projectAccess(request, name)).access
+        except web.HTTPException:
+            return None
 
     async def _projectAccess(self, request: web.Request, name: str) -> ProjectAccess:
         token = await self.authorize(request)
@@ -630,6 +640,7 @@ class HiveProjectManager(DevHiveProjectManager):
 
     async def projectAvailable(self, projectIdentifier: str, token: str) -> bool:
         name, branch = splitIdentifier(projectIdentifier)
+        token, _ = splitReadOnlyMark(token)  # the connection keeps its mark
         try:
             projectAccess = await self.api.access(token, name)
         except HiveApiUnavailable:
@@ -669,6 +680,7 @@ class HiveProjectManager(DevHiveProjectManager):
         self, projectIdentifier: str, token: str, readOnly: bool = False
     ) -> FontHandler | None:
         name, branch = splitIdentifier(projectIdentifier)
+        token, _ = splitReadOnlyMark(token)  # the connection keeps its mark
         try:
             projectAccess = await self.api.access(token, name)
         except HiveApiUnavailable as error:

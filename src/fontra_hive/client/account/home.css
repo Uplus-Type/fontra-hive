@@ -210,3 +210,12 @@ button.busy { display: inline-flex; align-items: center; gap: 0.5em; }
 .panel.remote .fonts-note:empty { display: none; }
 .panel.remote .fonts-note .look-again { margin-left: 0.3em; }
 .panel.remote label select:disabled { opacity: 0.7; }
+
+/* Who can change what goes beyond the glyph (project settings). */
+.writers fieldset { border: none; margin: 0 0 1em; padding: 0.8em 0 0; border-top: 1px solid #8882; }
+.writers legend { font-weight: bold; padding: 0; }
+.writers fieldset > .note { margin: 0.2em 0 0.6em; }
+.writers .choices { flex-direction: row; flex-wrap: wrap; gap: 0.4em 1.4em; }
+.writers .writers-people { display: flex; flex-wrap: wrap; gap: 0.3em 1.4em; margin: 0.7em 0 0 1.6em; }
+.writers .writers-people[hidden] { display: none; }
+.writers .writers-people small { opacity: 0.6; }

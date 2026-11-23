@@ -2125,3 +2125,160 @@ def test_an_import_refused_before_the_file_is_sent(browser_and_url):  # noqa: F8
     assert uploads == []
     assert page.errors == []
     page.close()
+
+
+WRITERS = {
+    "domains": [
+        {
+            "id": "fontsettings",
+            "label": "Font settings",
+            "who": "listed",
+            "people": [{"username": "fabio", "name": "Fabio Rossi", "avatar": None}],
+            "you": True,
+        },
+        {
+            "id": "kerning",
+            "label": "Kerning",
+            "who": "managers",
+            "people": [],
+            "you": True,
+        },
+        {
+            "id": "plugindata",
+            "label": "Plug-in data",
+            "who": "all",
+            "people": [],
+            "you": True,
+        },
+    ],
+    "designers": [
+        {"username": "ana", "name": "Ana López", "avatar": None},
+        {"username": "fabio", "name": "Fabio Rossi", "avatar": None},
+    ],
+    "canChange": True,
+}
+
+
+def test_who_can_change_what_goes_beyond_the_glyph(browser_and_url):  # noqa: F811
+    saved = {
+        **WRITERS,
+        "domains": [
+            {**WRITERS["domains"][0], "people": []},
+            {
+                **WRITERS["domains"][1],
+                "who": "listed",
+                "people": [WRITERS["designers"][0]],
+            },
+            WRITERS["domains"][2],
+        ],
+    }
+    page = open_home(
+        browser_and_url,
+        "#project/uplustype/Mutator",
+        {
+            "GET /api/projects/uplustype/Mutator": [
+                200,
+                {"project": project("uplustype", "Mutator", "admin")},
+            ],
+            "GET /api/hive/projects/uplustype%2FMutator/repository": [
+                200,
+                {"exists": True},
+            ],
+            "GET /api/projects/uplustype/Mutator/writers": [200, WRITERS],
+            "PUT /api/projects/uplustype/Mutator/writers": [200, saved],
+        },
+    )
+    page.wait_for_selector(".writers fieldset")
+    panel = page.query_selector(".writers")
+    assert panel.query_selector("h3").text_content() == (
+        "Who can change what goes beyond the glyph"
+    )
+    legends = page.eval_on_selector_all(
+        ".writers legend", "ls => ls.map(l => l.textContent)"
+    )
+    assert legends == ["Font settings", "Kerning", "Plug-in data"]
+    checked = page.eval_on_selector_all(
+        ".writers input[type=radio]:checked", "rs => rs.map(r => r.value)"
+    )
+    assert checked == ["listed", "managers", "all"]
+    # "These people" shows the designers to tick, only where chosen.
+    shown = page.eval_on_selector_all(
+        ".writers .writers-people", "ps => ps.map(p => !p.hidden)"
+    )
+    assert shown == [True, False, False]
+    ticked = page.eval_on_selector_all(
+        "[data-domain=fontsettings] input[type=checkbox]",
+        "cs => cs.map(c => [c.value, c.checked])",
+    )
+    assert ticked == [["ana", False], ["fabio", True]]
+    # Untick Fabio, keep the kerning to Ana: one PUT with the three domains.
+    page.click("[data-domain=fontsettings] input[value=fabio]")
+    page.click("[data-domain=kerning] input[value=listed]")
+    assert page.evaluate(
+        "!document.querySelector('[data-domain=kerning] .writers-people').hidden"
+    )
+    page.click("[data-domain=kerning] input[value=ana]")
+    page.click(".writers button")
+    page.wait_for_selector(".writers .ok:not(:empty)")
+    put = page.evaluate("calls.filter(c => c.method === 'PUT').map(c => c.body)")
+    assert put == [
+        {
+            "fontsettings": {"who": "listed", "people": []},
+            "kerning": {"who": "listed", "people": ["ana"]},
+            "plugindata": {"who": "all"},
+        }
+    ]
+    assert page.query_selector(".writers .ok").text_content() == "Saved."
+    assert page.errors == []
+    page.close()
+
+
+def test_people_who_are_not_admins_see_the_settings_only(browser_and_url):  # noqa: F811
+    page = open_home(
+        browser_and_url,
+        "#project/uplustype/Mutator",
+        {
+            "GET /api/projects/uplustype/Mutator": [
+                200,
+                {"project": project("uplustype", "Mutator", "observer")},
+            ],
+            "GET /api/hive/projects/uplustype%2FMutator/repository": [
+                200,
+                {"exists": True},
+            ],
+            "GET /api/projects/uplustype/Mutator/writers": [
+                200,
+                {**WRITERS, "canChange": False},
+            ],
+        },
+    )
+    page.wait_for_selector(".writers fieldset")
+    assert page.query_selector(".writers button") is None
+    assert page.eval_on_selector_all(
+        ".writers input", "is => is.every(i => i.disabled)"
+    )
+    assert "Only the project's admins" in page.query_selector(".writers").text_content()
+    assert page.errors == []
+    page.close()
+
+
+def test_an_older_hive_api_shows_no_section(browser_and_url):  # noqa: F811
+    page = open_home(
+        browser_and_url,
+        "#project/uplustype/Mutator",
+        {
+            "GET /api/projects/uplustype/Mutator": [
+                200,
+                {"project": project("uplustype", "Mutator", "admin")},
+            ],
+            "GET /api/hive/projects/uplustype%2FMutator/repository": [
+                200,
+                {"exists": True},
+            ],
+        },
+    )
+    page.wait_for_selector("h2 button")
+    page.wait_for_timeout(100)
+    assert page.query_selector(".writers") is None
+    assert page.errors == []
+    page.close()

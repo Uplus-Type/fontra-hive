@@ -725,3 +725,59 @@ def test_a_commented_version_is_drawn_on_the_comments_source(page):
     page.evaluate("wait(100)")
     page.evaluate("panel.previewPathFor('Bold')")
     assert "no layer" in page.evaluate("panel.pinned.layerNote")
+
+
+def test_the_fonts_snapshot_is_greyed_without_font_settings(page):
+    page.evaluate(SETUP)
+    # The project keeps its font settings to some people: not this designer.
+    page.evaluate("""async () => {
+          const original = window.fetch;
+          window.capabilities = ["comment", "edit", "read", "snapshot"];
+          window.fetch = async (url, options) => {
+            if (new URL(url).pathname.endsWith("/access")) {
+              return new Response(JSON.stringify({ role: "designer", capabilities: window.capabilities }));
+            }
+            return original(url, options);
+          };
+          await panel.loadCapabilities();
+        }""")
+    button = "panel.snapshotButton"
+    # A glyph's snapshot: any designer's.
+    assert page.evaluate(f"{button}.disabled") is False
+    select(page, None)
+    assert page.evaluate(f"{button}.disabled") is True
+    assert page.evaluate(f"{button}.title") == (
+        "A snapshot of the whole font is for the people who change the font settings"
+        " on this project. Ask a manager."
+    )
+    page.evaluate(f"{button}.click()")
+    assert page.evaluate("panel.snapshotForm") is None
+    # With them, it opens again.
+    page.evaluate("""async () => {
+          window.capabilities = [...window.capabilities, "fontsettings"];
+          await panel.loadCapabilities();
+        }""")
+    assert page.evaluate(f"{button}.disabled") is False
+    assert page.evaluate(f"{button}.title").startswith("Name the current state")
+    assert page.errors == []
+
+
+def test_snapshot_refusal_texts(page):
+    page.evaluate(SETUP)
+    result = page.evaluate("""async () => {
+          const m = await import("/init.js");
+          return [
+            m.snapshotRefusal(null, null),
+            m.snapshotRefusal("A", ["read"]),
+            m.snapshotRefusal("A", ["snapshot"]),
+            m.snapshotRefusal(null, ["snapshot", "fontsettings"]),
+            Boolean(m.snapshotRefusal(null, ["snapshot"])),
+          ];
+        }""")
+    assert result == [
+        None,
+        "Your role cannot name versions on this project",
+        None,
+        None,
+        True,
+    ]

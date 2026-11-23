@@ -34,6 +34,14 @@ local development,
 
 A project that is not listed is visible to nobody. The file is re-read when it
 changes, so roles can be edited while the server runs.
+
+A project may keep what goes beyond the glyph to some people, as hive-api's
+project settings do (:mod:`fontra_hive.writedomains`): ``"writers"`` gives,
+for ``fontsettings``, ``kerning`` or ``plugindata``, ``"all"`` (the default:
+every designer), ``"managers"`` (managers and admins only) or a list of
+usernames (these designers, and managers and admins)::
+
+    "MutatorSans": {"owner": "uplustype", "writers": {"fontsettings": ["fabio"]}}
 """
 
 from __future__ import annotations
@@ -45,6 +53,7 @@ import pathlib
 from dataclasses import dataclass, field
 
 from .gitstore import Signature
+from .writedomains import WRITE_DOMAINS
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +64,12 @@ _MINIMUM_ROLE = {
     "read": "observer",
     "comment": "reviewer",
     "edit": "designer",  # edit glyphs, restore a version
+    # Beyond the glyph (fontra_hive.writedomains): each domain can be kept to
+    # some people per project; the role gives them, the project's setting
+    # may take them away from designers (Access.closed below).
+    "fontsettings": "designer",
+    "kerning": "designer",
+    "plugindata": "designer",
     "branch": "designer",
     "snapshot": "designer",
     "merge": "manager",
@@ -126,6 +141,47 @@ class Access:
             "capabilities": sorted(self.capabilities),
             "notice": self.notice,
         }
+
+
+def closedDomains(writers, username: str, role: str) -> frozenset[str]:
+    """The domains beyond the glyph that a project's ``writers`` setting
+    closes to this person: none for managers and admins, nor for anyone when
+    the project says nothing (hive-api's ``billing.closed_domains`` decides in
+    production)."""
+    if role_rank(role) >= role_rank("manager") or not isinstance(writers, dict):
+        return frozenset()
+    closed = set()
+    for domain in WRITE_DOMAINS:
+        setting = writers.get(domain, "all")
+        if setting == "managers":
+            closed.add(domain)
+        elif isinstance(setting, list) and username not in setting:
+            closed.add(domain)
+    return frozenset(closed)
+
+
+# A connection opened read-only (Fontra's ``read-only=true``, which Hive's
+# Font info page asks for when its settings are closed to the person): its
+# token carries this mark, so that the shared font handler answers
+# ``isReadOnly()`` and refuses edits for that connection only.
+READ_ONLY_MARK = " read-only"
+
+
+def markReadOnlyConnection(token: str | None, request) -> str | None:
+    """The token of a websocket request, marked if it asks for read-only."""
+    if (
+        token
+        and getattr(request, "path", None) == "/websocket"
+        and request.query.get("read-only", "").lower() == "true"
+    ):
+        return token + READ_ONLY_MARK
+    return token
+
+
+def splitReadOnlyMark(token: str | None) -> tuple[str | None, bool]:
+    if token and token.endswith(READ_ONLY_MARK):
+        return token[: -len(READ_ONLY_MARK)], True
+    return token, False
 
 
 TOKEN_PREFIX = "hive-user:"
@@ -212,7 +268,12 @@ class DevDirectory:
         role = self.role(user.username, project)
         if role is None:
             return None
-        return Access(user, role, CAPABILITIES[role])
+        closed = closedDomains(
+            self.data.get("projects", {}).get(project, {}).get("writers"),
+            user.username,
+            role,
+        )
+        return Access(user, role, CAPABILITIES[role] - closed)
 
     def members(self, project: str) -> list[dict]:
         """Everyone with a role on the project, highest role first, with where

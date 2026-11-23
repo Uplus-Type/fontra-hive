@@ -1092,3 +1092,155 @@ def test_the_download_notice_texts(browser_and_url):
         "(fontc, then fontmake)",
     ]
     page.close()
+
+
+# --- beyond the glyph ----------------------------------------------------------------
+
+DESIGNER_WITHOUT_FONT_SETTINGS = {
+    "role": "designer",
+    "capabilities": ["branch", "comment", "edit", "plugindata", "read", "snapshot"],
+}
+
+
+def test_font_info_says_its_settings_are_closed(browser_and_url):
+    browser, base = browser_and_url
+    page = browser.new_page()
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    body = PAGE % {
+        "fake": json.dumps({**fake(), "access": DESIGNER_WITHOUT_FONT_SETTINGS})
+    }
+    body = body.replace("window.editorController = {", "window.fontInfoController = {")
+    page.route(
+        "**/fontinfo.html*",
+        lambda route: route.fulfill(content_type="text/html", body=body),
+    )
+    page.goto(f"{base}/fontinfo.html?project=Mutator&read-only=true")
+    start_hive(page)
+    badge = page.query_selector(".hive-badge")
+    assert badge.text_content() == "Font settings · ask a manager"
+    assert "kept to some people" in badge.get_attribute("title")
+    assert errors == []
+    page.close()
+
+
+def test_the_editor_closes_the_kerning_tool(browser_and_url):
+    browser, base = browser_and_url
+    page = browser.new_page()
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    body = PAGE % {
+        "fake": json.dumps({**fake(), "access": DESIGNER_WITHOUT_FONT_SETTINGS})
+    }
+    body = body.replace(
+        "window.editorController = {",
+        """window.selected = [];
+  window.editorController = {
+    tools: { "kerning-tool": {}, "pointer-tool": {} },
+    selectedToolIdentifier: "kerning-tool",
+    setSelectedTool(identifier) { window.selected.push(identifier); this.selectedToolIdentifier = identifier; },""",
+    ).replace(
+        '<div id="fontra-project-name">Mutator</div>',
+        '<div id="fontra-project-name">Mutator</div>'
+        '<div class="tool-button" data-tool="kerning-tool"></div>',
+    )
+    page.route(
+        "**/editor.html*",
+        lambda route: route.fulfill(content_type="text/html", body=body),
+    )
+    page.goto(f"{base}/editor.html?project=Mutator")
+    start_hive(page)
+    page.wait_for_selector(".hive-tool-closed", state="attached")
+    # No badge in the editor: the glyphs stay theirs.
+    assert page.query_selector(".hive-badge") is None
+    tool = page.query_selector("[data-tool='kerning-tool']")
+    assert tool.get_attribute("aria-disabled") == "true"
+    assert tool.get_attribute("title").startswith("Kerning · ask a manager")
+    # The kerning tool was on: back to the pointer; selecting it does nothing.
+    page.evaluate("editorController.setSelectedTool('kerning-tool')")
+    assert page.evaluate("window.selected") == ["pointer-tool"]
+    page.evaluate("editorController.setSelectedTool('pen-tool')")
+    assert page.evaluate("window.selected") == ["pointer-tool", "pen-tool"]
+    assert errors == []
+    page.close()
+
+
+def test_with_kerning_the_tool_stays(browser_and_url):
+    page = open_page(
+        browser_and_url,
+        data={
+            "access": {"role": "designer", "capabilities": ["edit", "kerning", "read"]}
+        },
+    )
+    page.wait_for_timeout(100)
+    assert page.query_selector(".hive-tool-closed") is None
+    assert page.query_selector(".hive-badge") is None
+    page.close()
+
+
+def test_beyond_the_glyph_helpers(browser_and_url):
+    page = open_page(browser_and_url)
+    result = page.evaluate("""() => {
+          const m = window.hiveModule;
+          const domains = [
+            { id: "fontsettings", label: "Font settings", who: "listed", people: [{ username: "fabio" }] },
+            { id: "kerning", label: "Kerning", who: "managers", people: [] },
+            { id: "plugindata", label: "Plug-in data", who: "all", people: [] },
+          ];
+          return {
+            summary: m.writersSummary(domains),
+            two: m.writersSummary([{ label: "Kerning", who: "listed", people: [{}, {}] }]),
+            fontinfo: m.closedDomainBadge("fontinfo", ["edit", "kerning"])?.label,
+            open: m.closedDomainBadge("fontinfo", ["edit", "fontsettings"]),
+            editor: m.closedDomainBadge("editor", ["edit"]),
+            reviewer: m.closedDomainBadge("fontinfo", ["comment", "read"]),
+          };
+        }""")
+    assert result == {
+        "summary": "Font settings: 1 person · Kerning: managers and admins only"
+        " · Plug-in data: all designers",
+        "two": "Kerning: 2 people",
+        "fontinfo": "Font settings · ask a manager",
+        "open": None,
+        "editor": None,
+        "reviewer": None,
+    }
+    page.close()
+
+
+def test_share_says_who_changes_what_goes_beyond_the_glyph(browser_and_url):
+    page = open_page(browser_and_url)
+    page.evaluate("""() => {
+          const original = window.fetch;
+          window.fetch = async (url, options) => {
+            const path = new URL(url, location.href).pathname;
+            if (path.endsWith("/invitations")) {
+              return new Response(JSON.stringify({ invitations: [] }));
+            }
+            if (path.endsWith("/writers")) {
+              return new Response(JSON.stringify({
+                domains: [
+                  { id: "fontsettings", label: "Font settings", who: "managers", people: [] },
+                  { id: "kerning", label: "Kerning", who: "all", people: [] },
+                  { id: "plugindata", label: "Plug-in data", who: "all", people: [] },
+                ],
+                designers: [],
+                canChange: true,
+              }));
+            }
+            return original(url, options);
+          };
+        }""")
+    # hive-api's Share dialog (the one of Hive's home page too).
+    page.evaluate("hiveModule.openShareDialog('uplustype/Mutator')")
+    page.wait_for_selector(".hive-dialog .writers-line")
+    line = page.query_selector(".hive-dialog .writers-line")
+    assert line.text_content() == (
+        "Beyond the glyph: Font settings: managers and admins only · Kerning: all"
+        " designers · Plug-in data: all designers. Change in the project's settings"
+    )
+    assert (
+        line.query_selector("a").get_attribute("href") == "/#project/uplustype/Mutator"
+    )
+    assert page.errors == []
+    page.close()

@@ -34,7 +34,18 @@ USER = HiveUser("ana", "Ana", "", "uid-ana")
 OWNER_READ_ONLY = CAPABILITIES["reviewer"] | {"export", "administer"}
 # A project whose fonts cannot change at the moment: the role's
 # capabilities, without those that write the fonts.
-FONT_WRITE = frozenset({"edit", "branch", "snapshot", "merge", "tag"})
+FONT_WRITE = frozenset(
+    {
+        "edit",
+        "branch",
+        "snapshot",
+        "merge",
+        "tag",
+        "fontsettings",
+        "kerning",
+        "plugindata",
+    }
+)
 READ_ONLY_SPACE = CAPABILITIES["admin"] - FONT_WRITE
 
 # Routes that write nothing into the fonts: presence, comments (open to

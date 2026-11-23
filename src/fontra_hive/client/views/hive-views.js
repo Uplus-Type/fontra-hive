@@ -373,6 +373,8 @@ const STYLE = `
   .hive-chip { cursor: pointer; border: none; padding: 0; background: none; display: flex; }
   .hive-chip .avatar { box-shadow: 0 0 0 2px transparent; }
   .hive-chip:hover .avatar, .hive-chip.open .avatar { box-shadow: 0 0 0 2px #46f; }
+  .hive-tool-closed { opacity: 0.35; pointer-events: none; }
+  .hive-dialog .writers-line { margin-top: 10px; }
   .hive-badge { position: absolute; left: 50%; transform: translateX(-50%); top: 7px;
                 display: flex; align-items: center; gap: 0.35em; font-size: 0.85em; padding: 2px 10px;
                 border-radius: 10px; background: rgba(200, 146, 34, 0.16); border: 1px solid rgba(200, 146, 34, 0.45);
@@ -902,6 +904,11 @@ export class HiveViews {
                 `Read only · ${this.access.role}`,
               ])
         );
+      } else if (this.access?.role) {
+        // Beyond the glyph: what this project keeps to some people.
+        const closed = closedDomainBadge(this.view, this.access.capabilities);
+        if (closed) topBar.append(el("span", { class: "hive-badge", title: closed.title }, [closed.label]));
+        if (this.view === "editor" && !this.access.capabilities.includes("kerning")) this.closeKerningTool();
       }
     } else {
       document.body.append(
@@ -924,6 +931,23 @@ export class HiveViews {
         this.closeMenu();
       }
     });
+  }
+
+  // The editor's kerning tool, for a designer to whom the project keeps the
+  // kerning closed: greyed, and never selected (the server refuses the
+  // edits anyway).
+  async closeKerningTool() {
+    const editor = await waitFor(() => window.editorController?.tools?.["kerning-tool"] && window.editorController);
+    if (!editor) return;
+    const select = editor.setSelectedTool.bind(editor);
+    editor.setSelectedTool = (identifier, ...rest) =>
+      identifier === "kerning-tool" ? undefined : select(identifier, ...rest);
+    if (editor.selectedToolIdentifier === "kerning-tool") select("pointer-tool");
+    for (const button of document.querySelectorAll('[data-tool="kerning-tool"]')) {
+      button.classList.add("hive-tool-closed");
+      button.title = KERNING_CLOSED;
+      button.setAttribute("aria-disabled", "true");
+    }
   }
 
   keepSessionAlive() {
@@ -1616,6 +1640,40 @@ export function inviteLegend(projectName, data, { free = false } = {}) {
 // cancel invitations. Returns the dialog element (closed with Escape, the
 // backdrop or Done; onClose is then called). ``free``: the project is the
 // person's own Free project (its limits are said under the invite line).
+// Beyond the glyph (hive-api's project settings, "Who can change what goes
+// beyond the glyph"): the words of each choice.
+export const WRITERS_WORDS = {
+  all: "all designers",
+  managers: "managers and admins only",
+  listed: "these people",
+};
+export const KERNING_CLOSED = "Kerning · ask a manager: on this project, the kerning is kept to some people";
+
+// The badge of a view whose domain the project keeps closed to this person
+// (null: none). Font info is all font settings.
+export function closedDomainBadge(view, capabilities) {
+  if (!capabilities?.includes("edit")) return null; // "Read only" says it already
+  if (view === "fontinfo" && !capabilities.includes("fontsettings")) {
+    return {
+      label: "Font settings · ask a manager",
+      title: "On this project, the font settings are kept to some people: you can look at them, not change them",
+    };
+  }
+  return null;
+}
+
+// One line for the Share dialog: each domain and who can change it.
+export function writersSummary(domains) {
+  return domains
+    .map((d) => {
+      const who = d.who === "listed"
+        ? `${d.people.length} ${d.people.length === 1 ? "person" : "people"}`
+        : WRITERS_WORDS[d.who] || d.who;
+      return `${d.label}: ${who}`;
+    })
+    .join(" · ");
+}
+
 export function openShareDialog(projectName, { onClose, free = false, billingUrl = null } = {}) {
   ensureStyle();
   const backdrop = el("div", { class: "hive-backdrop", onclick: () => close() });
@@ -1644,6 +1702,11 @@ export function openShareDialog(projectName, { onClose, free = false, billingUrl
   const load = async () => {
     const data = await api(`${base}/members`);
     data.invitations = data.canManage ? (await api(`${base}/invitations`)).invitations : [];
+    try {
+      data.writers = await api(`${base}/writers`);
+    } catch (error) {
+      data.writers = null; // an older hive-api, or a development server
+    }
     return data;
   };
   const act = async (path, options, done) => {
@@ -1750,6 +1813,16 @@ export function openShareDialog(projectName, { onClose, free = false, billingUrl
       ]));
     } else {
       dialog.append(el("p", { class: "note" }, ["Managers and admins can invite people and change roles."]));
+    }
+    if (data.writers) {
+      dialog.append(el("p", { class: "note writers-line" }, [
+        "Beyond the glyph: ",
+        writersSummary(data.writers.domains),
+        ". ",
+        el("a", { href: projectSettingsURL(projectName), target: "_blank" }, [
+          data.writers.canChange ? "Change in the project's settings" : "See the project's settings",
+        ]),
+      ]));
     }
     if (done) dialog.append(el("div", { class: "done" }, [done]));
     if (error) dialog.append(el("div", { class: "error" }, [error]));

@@ -45,7 +45,15 @@ from fontra.core.protocols import ProjectManager
 
 from . import merge as merging
 from . import runner
-from .access import ROLES, Access, DevDirectory, token_for, username_from_token
+from .access import (
+    ROLES,
+    Access,
+    DevDirectory,
+    markReadOnlyConnection,
+    splitReadOnlyMark,
+    token_for,
+    username_from_token,
+)
 from .backend_git import GitFontraBackend
 from .commentroutes import CommentRoutesMixin
 from .environment import markEnvironment
@@ -65,6 +73,7 @@ from .gitstore import (
 
 from .fontracompat import guard_feature_reading
 from .recipe import projectResolverFor
+from .writedomains import WRITE_DOMAINS, refusal
 
 # Fontra reading OpenType features with an outside program (sr-aef): best
 # effort, in Try (no program in the browser) and on the server.
@@ -196,11 +205,18 @@ class DevHiveProjectManager(CommentRoutesMixin):
         if not _sameOrigin(request):
             return None
         if self.directory is None:
-            return "dev"
+            return markReadOnlyConnection("dev", request)
         username = request.cookies.get(DEV_USER_COOKIE)
         if self.directory.user(username) is None:
             return None
-        return token_for(username)
+        return markReadOnlyConnection(token_for(username), request)
+
+    async def _accessForView(self, request: web.Request, name: str) -> Access | None:
+        """The requester's access to a project, for a view page (None: none
+        known)."""
+        if self.directory is None:
+            return None
+        return self.accessFor(await self.authorize(request), name)
 
     def accessFor(self, token: str | None, projectName: str) -> Access | None:
         """What the holder of ``token`` may do on a project (None: nothing).
@@ -220,6 +236,8 @@ class DevHiveProjectManager(CommentRoutesMixin):
         if access is None or not access.can("read"):
             raise web.HTTPNotFound()
         if not access.can(capability):
+            if capability in WRITE_DOMAINS and access.can("edit"):
+                raise web.HTTPForbidden(text=refusal(capability))
             raise web.HTTPForbidden(text=f"{access.role} cannot {capability}")
         return access
 
@@ -269,6 +287,20 @@ class DevHiveProjectManager(CommentRoutesMixin):
         if self.directory is not None and await self.authorize(request) is None:
             ref = quote(str(getattr(request, "path_qs", f"/{view}.html")), safe="")
             raise web.HTTPFound(f"/?ref={ref}")
+        if view == "fontinfo" and request.query.get("read-only", "").lower() != "true":
+            # Its panels are all font settings: opened read-only (Fontra's
+            # own read-only mode) for a designer to whom the project keeps
+            # them closed. The server refuses their edits anyway.
+            name, _ = splitProjectIdentifier(request.query.get("project", ""))
+            access = await self._accessForView(request, name) if name else None
+            if (
+                access is not None
+                and access.can("edit")
+                and not access.can("fontsettings")
+            ):
+                raise web.HTTPFound(
+                    str(request.rel_url.update_query({"read-only": "true"}))
+                )
         try:
             text = self.fontraClientFile(f"{view}.html").read_text(encoding="utf-8")
         except FileNotFoundError:
@@ -503,6 +535,7 @@ class DevHiveProjectManager(CommentRoutesMixin):
 
     async def projectAvailable(self, projectIdentifier: str, token: str) -> bool:
         name, branch = splitProjectIdentifier(projectIdentifier)
+        token, _ = splitReadOnlyMark(token)
         repoPath = self._repoPath(name)
         if repoPath is None:
             return False
@@ -536,6 +569,7 @@ class DevHiveProjectManager(CommentRoutesMixin):
         self, projectIdentifier: str, token: str, readOnly: bool = False
     ) -> FontHandler | None:
         name, branch = splitProjectIdentifier(projectIdentifier)
+        token, _ = splitReadOnlyMark(token)  # the connection keeps its mark
         if self.directory is not None and self.accessFor(token, name) is None:
             return None  # not a member: the connection is refused
         repoPath = self._repoPath(name)
@@ -1649,7 +1683,10 @@ class DevHiveProjectManager(CommentRoutesMixin):
             raise web.HTTPBadRequest(text="name is required")
         if self.readOnly:
             raise web.HTTPForbidden(text="read-only server")
-        access = await self._require(request, name, "snapshot")
+        await self._require(request, name, "snapshot")
+        # The whole font, its settings included: for the people who may
+        # change those (a glyph's snapshot is any designer's).
+        access = await self._require(request, name, "fontsettings")
 
         fontHandler = self.fontHandlers.get(self._handlerKey(repoPath, branch))
         backend = fontHandler.backend if fontHandler is not None else None

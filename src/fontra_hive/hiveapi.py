@@ -24,7 +24,7 @@ from dataclasses import dataclass
 
 import aiohttp
 
-from .access import CAPABILITIES, Access, HiveUser
+from .access import CAPABILITIES, WRITE_DOMAINS, Access, HiveUser
 from .remotesync import RemoteNotUsable
 
 logger = logging.getLogger(__name__)
@@ -46,13 +46,19 @@ class ProjectAccess:
     projectId: str  # "owner/name", as hive-api spells it
 
 
-def allowedCapabilities(role: str, listed) -> frozenset[str]:
+def allowedCapabilities(role: str, listed, decided=None) -> frozenset[str]:
     """The role's capabilities that hive-api also lists (all of them when it
-    lists none: an older hive-api)."""
+    lists none: an older hive-api). ``decided``: the domains beyond the glyph
+    hive-api decides on (``writeDomains``); one it does not know (an older
+    hive-api) follows ``edit``."""
     capabilities = CAPABILITIES[role]
     if not isinstance(listed, list):
         return capabilities
-    return capabilities & frozenset(c for c in listed if isinstance(c, str))
+    allowed = capabilities & frozenset(c for c in listed if isinstance(c, str))
+    known = frozenset(decided) if isinstance(decided, list) else frozenset()
+    if "edit" in allowed:
+        allowed |= capabilities & (frozenset(WRITE_DOMAINS) - known)
+    return allowed
 
 
 def _notice(value) -> dict | None:
@@ -226,7 +232,9 @@ class HiveApi:
                 access=Access(
                     user,
                     role,
-                    allowedCapabilities(role, data.get("capabilities")),
+                    allowedCapabilities(
+                        role, data.get("capabilities"), data.get("writeDomains")
+                    ),
                     notice=_notice(data.get("notice")),
                 ),
                 repo=data["repo"],
