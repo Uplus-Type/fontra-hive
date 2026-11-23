@@ -1847,12 +1847,16 @@ class DevHiveProjectManager(CommentRoutesMixin):
                             store.read_blob(names)
                         )
                     sourceNames = cache[("names", names)]
-                cache[key] = fontdiff.file_changes(
-                    path,
-                    store.read_blob(before) if before else None,
-                    store.read_blob(after) if after else None,
-                    sourceNames,
-                )
+                try:
+                    cache[key] = fontdiff.file_changes(
+                        path,
+                        store.read_blob(before) if before else None,
+                        store.read_blob(after) if after else None,
+                        sourceNames,
+                    )
+                except Exception:  # one change we cannot describe: not the history
+                    logger.exception("could not describe the change of %s", path)
+                    cache[key] = []
             changes += cache[key]
         return fontdiff.sort_changes(changes)
 
