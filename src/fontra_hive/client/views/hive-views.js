@@ -475,7 +475,7 @@ const STYLE = `
     border-bottom: 1px solid rgba(128, 128, 128, 0.18); }
   .hive-merge ul.merge-beyond .domain { flex: none; font-size: 0.85em; opacity: 0.6; }
   .hive-merge ul.merge-beyond li.closed .domain { opacity: 1; color: #c0392b; font-weight: 600; }
-  .hive-merge p.cannot { color: #c0392b; }
+  .hive-merge p.note.cannot { color: #c0392b; opacity: 1; font-size: 0.95em; font-weight: 600; }
   .hive-merge .merge-conflicts { display: flex; flex-direction: column; gap: 10px; }
   .hive-merge .merge-conflict { display: flex; align-items: center; gap: 12px; padding: 8px 0;
                  border-top: 1px solid #8883; }
