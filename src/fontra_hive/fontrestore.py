@@ -96,8 +96,9 @@ PARTS: dict[str, Part] = {
 # Every part is in one domain (checked by the tests): its capability.
 assert all(len({AREAS[a][0] for a in p.areas}) == 1 for p in PARTS.values())
 
-# The parts whose restoration may leave glyphs without their axes or sources.
-GUARDED_PARTS = frozenset({"axesAndSources"})
+# The parts whose restoration may leave glyphs without their axes or sources,
+# or the kerning with values for a source the font doesn't have.
+GUARDED_PARTS = frozenset({"axesAndSources", "kerning"})
 
 # How many glyphs the Hive-Glyphs trailer of a restoration lists at most
 # (more: no trailer, the glyph history reads the trees).
@@ -369,10 +370,16 @@ def coherence_problem(
     changes: dict[str, bytes | None],
     *,
     wholeFont: bool,
+    parts: Iterable[str] | None = None,
 ) -> str | None:
     """Why the font after the restoration would not hold together (None:
     it does): glyph sources naming a font source that this version doesn't
-    have, or locations off its axes."""
+    have, or locations off its axes (the whole font, axes and sources);
+    the kerning with values for a source the font doesn't have (the whole
+    font, axes and sources, kerning). ``parts``: the parts restored (None:
+    axes and sources, or the whole font with ``wholeFont``)."""
+    parts = set(parts) if parts is not None else {"axesAndSources"}
+    checkGlyphs = wholeFont or "axesAndSources" in parts
     def after(path):
         if path in changes:
             return changes[path]
@@ -413,7 +420,7 @@ def coherence_problem(
 
     paths = set(head.files) - {p for p, d in changes.items() if d is None}
     paths |= {p for p, d in changes.items() if d is not None}
-    for path in sorted(p for p in paths if is_glyph_path(p)):
+    for path in sorted(p for p in paths if is_glyph_path(p) and checkGlyphs):
         data = after(path)
         try:
             glyph = json.loads(data)
@@ -428,7 +435,7 @@ def coherence_problem(
             if base and base not in sources:
                 missingSource.setdefault(base, set()).add(name)
             check_location(source.get("location"), name, localAxes)
-    for source in font.sources.values():
+    for source in font.sources.values() if checkGlyphs else ():
         check_location(source.location, f"source:{source.name}")
 
     advice = "" if wholeFont else " Restore the whole font instead."
@@ -459,7 +466,53 @@ def coherence_problem(
             f"{who} outside the {label} axis of this version ({_range_text(axis)})."
             f"{advice}"
         )
-    return None
+    return _kerning_problem(head, changes, font, names, wholeFont, parts)
+
+
+def _kerning_sources(data: bytes | None) -> set[str]:
+    """The sources the kerning has values for (its columns)."""
+    from .merge import _read_kerning
+
+    try:
+        kerning = _read_kerning(data)
+    except Exception:  # unreadable: not ours to judge here
+        return set()
+    return {sid for table in kerning.values() for sid in table["sources"]}
+
+
+def _kerning_problem(head: Tree, changes, font, names, wholeFont, parts) -> str | None:
+    """The kerning after the restoration with values for a source the font
+    doesn't have (Fontra's kern feature and fontc then fail): only what the
+    restoration brings, not what was already so."""
+    kerningPath = KERNING_FILE
+    after = changes[kerningPath] if kerningPath in changes else head.read(kerningPath)
+    orphans = _kerning_sources(after) - set(font.sources)
+    if not orphans:
+        return None
+    try:
+        sourcesNow = set(fontdiff.read_font_data(head.read(FONT_DATA)).sources)
+    except fontdiff.Unreadable:
+        sourcesNow = set()
+    orphans -= _kerning_sources(head.read(kerningPath)) - sourcesNow
+    if not orphans:
+        return None
+    sourceNames = [names.get(sid, sid) for sid in sorted(orphans)]
+    which = "the source" if len(sourceNames) == 1 else "the sources"
+    if wholeFont or {"kerning", "axesAndSources"} <= parts:
+        return (
+            f"The kerning of this version has values for {which} "
+            f"{_names_text(sourceNames)}, which this version doesn't have."
+        )
+    if kerningPath in changes:
+        return (
+            f"The kerning of this version has values for {which} "
+            f"{_names_text(sourceNames)}, which the font doesn't have now. "
+            "Restore Axes and sources too, or the whole font."
+        )
+    return (
+        f"The kerning has values for {which} {_names_text(sourceNames)}, "
+        "which this version doesn't have. Restore Kerning too, or the whole font."
+    )
 
 
 # --- the commit -----------------------------------------------------------------------

@@ -1148,7 +1148,7 @@ class DevHiveProjectManager(CommentRoutesMixin):
                     )
                 if parts is None or fontrestore.GUARDED_PARTS & set(parts):
                     problem = fontrestore.coherence_problem(
-                        headTree, oldTree, changes, wholeFont=parts is None
+                        headTree, oldTree, changes, wholeFont=parts is None, parts=parts
                     )
                     if problem:
                         return web.json_response(
