@@ -589,21 +589,34 @@ async function newProjectSection() {
 
 // The Fontra server's routes answer errors in plain text.
 // The snapshots of the project's branches, newest first, each once.
+// One branch after the other: the server reads at most two histories at
+// once for a person (429 beyond, "Retry-After" seconds).
 export async function loadSnapshots(projectId, branchNames) {
   const found = new Map();
-  await Promise.all(
-    branchNames.map(async (branch) => {
-      try {
-        const data = await hiveCall(
-          `/api/hive/projects/${encodeURIComponent(projectId)}/snapshots?branch=${encodeURIComponent(branch)}`
-        );
-        for (const snapshot of data.snapshots || []) found.set(snapshot.name, snapshot);
-      } catch (error) {
-        // a branch without snapshots to give: the others still count
-      }
-    })
-  );
+  for (const branch of branchNames) {
+    try {
+      const data = await snapshotsCall(
+        `/api/hive/projects/${encodeURIComponent(projectId)}/snapshots?branch=${encodeURIComponent(branch)}`
+      );
+      for (const snapshot of data.snapshots || []) found.set(snapshot.name, snapshot);
+    } catch (error) {
+      // a branch without snapshots to give: the others still count
+    }
+  }
   return [...found.values()].sort((a, b) => b.time - a.time);
+}
+
+async function snapshotsCall(path, tries = 3) {
+  for (let i = 1; ; i++) {
+    const response = await fetch(path, { credentials: "same-origin" });
+    if (response.status === 429 && i < tries) {
+      const seconds = Number(response.headers.get("Retry-After")) || 1;
+      await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+      continue;
+    }
+    if (!response.ok) throw new Error((await response.text()) || `Error ${response.status}`);
+    return response.json();
+  }
 }
 
 function snapshotDate(unixSeconds) {

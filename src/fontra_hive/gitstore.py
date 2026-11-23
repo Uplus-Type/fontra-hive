@@ -909,6 +909,12 @@ class GitRepoStore:
             commit_id = commit.parents[0] if commit.parents else None
         return result
 
+    def snapshot_tag_names(self) -> tuple[str, ...]:
+        """The names of the ``snapshot/…`` tags, sorted: listed, not read
+        (what a cache of the snapshots is keyed on, with the head)."""
+        base = _b("refs/tags/" + SNAPSHOT_TAG_PREFIX.rstrip("/"))
+        return tuple(sorted(_s(name) for name in self.repo.refs.keys(base=base)))
+
     def latest_snapshot(self, ref: str = DEFAULT_BRANCH) -> SnapshotInfo | None:
         """The newest snapshot on the first-parent line of ``ref``."""
         store = self.repo.object_store

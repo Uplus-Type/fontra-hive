@@ -203,6 +203,7 @@ class DevHiveProjectManager(CommentRoutesMixin):
         # domain check: an executor of their own, a limit per person.
         self.historyWork = HistoryWork()
         self._aheadBehindCache = SizedCache(AHEAD_BEHIND_BYTES, AHEAD_BEHIND_ENTRIES)
+        self._snapshotsCache = SizedCache(SNAPSHOTS_BYTES, SNAPSHOTS_ENTRIES)
 
     async def aclose(self) -> None:
         if self._runSweepTask is not None:
@@ -2157,28 +2158,58 @@ class DevHiveProjectManager(CommentRoutesMixin):
 
     async def snapshotsHandler(self, request: web.Request) -> web.Response:
         """The snapshots of a branch, newest first, and how many commits were
-        made since the latest one (what a new snapshot would group)."""
-        repoPath, _ = await self._project(request, request.match_info["name"], "read")
+        made since the latest one (what a new snapshot would group).
+
+        Reading them walks the whole first-parent line: in the history's
+        executor (HistoryWork: its limit per person, identical requests
+        shared), never on the event loop, and kept by head and snapshot
+        tags (the answer for them never changes)."""
+        repoPath, access = await self._project(request, request.match_info["name"], "read")
         branch = request.query.get("branch", DEFAULT_BRANCH)
         store = GitRepoStore.open(repoPath)
         try:
             head = store.head(branch)
             if head is None:
                 raise web.HTTPNotFound()
+            tags = store.snapshot_tag_names()
+        finally:
+            store.close()
+        key = ("snapshots", str(repoPath), head, tags)
+        cache = self._snapshotsCacheFor()
+        body = cache.get(key)
+        if body is None:
+            body = await self.historyWork.run(
+                _person(access), key, self._snapshots, repoPath, head
+            )
+            cache[key] = body
+        return web.json_response({"branch": branch, **body})
+
+    def _snapshotsCacheFor(self) -> "SizedCache":
+        # Made here for a manager built without __init__ too (setdefault is
+        # atomic).
+        cache = self.__dict__.get("_snapshotsCache")
+        if cache is None:
+            cache = self.__dict__.setdefault(
+                "_snapshotsCache", SizedCache(SNAPSHOTS_BYTES, SNAPSHOTS_ENTRIES)
+            )
+        return cache
+
+    @staticmethod
+    def _snapshots(repoPath, head: str) -> dict:
+        """The body of :meth:`snapshotsHandler`, run in a thread."""
+        store = GitRepoStore.open(repoPath)
+        try:
             snapshots = store.snapshots(head)
             base = snapshots[0].sha if snapshots else None
             pending = store.commits_between(base, head)
         finally:
             store.close()
-        return web.json_response(
-            {
-                "branch": branch,
-                "head": head,
-                "snapshots": [_snapshotJSON(s) for s in snapshots],
-                "pending": len(pending),
-                "pendingAuthors": sorted({c.author for c in pending}),
-            }
-        )
+        return {
+            "head": head,
+            "snapshots": [_snapshotJSON(s) for s in snapshots],
+            "pending": len(pending),
+            "pendingAuthors": sorted({c.author for c in pending}),
+        }
 
     async def snapshotHandler(self, request: web.Request) -> web.Response:
         """Name the current state of a branch: groups the commits made since
@@ -2339,6 +2370,9 @@ MAX_CACHE_BYTES = 64 * 1024 * 1024
 MAX_CACHE_ENTRIES = 20000
 # The branches panel's "ahead, behind" per pair of commits.
 AHEAD_BEHIND_ENTRIES = 5000
+# The snapshots of a branch (snapshotsHandler), by head and snapshot tags.
+SNAPSHOTS_BYTES = 8 * 1024 * 1024
+SNAPSHOTS_ENTRIES = 256
 AHEAD_BEHIND_BYTES = 4 * 1024 * 1024
 
 
