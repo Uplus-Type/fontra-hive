@@ -83,6 +83,20 @@ def test_axis_range_default_and_added():
     ]
 
 
+def test_axis_value_labels():
+    """The value labels are Fontra objects inside a list (seen on the dev:
+    the font's history answered 500)."""
+    new = edited(
+        lambda d: d["axes"]["axes"][1].update(
+            valueLabels=[{"name": "Bold", "value": 700}]
+        )
+    )
+    [change] = fontdiff.font_changes({"font-data.json": FONT_DATA}, {"font-data.json": new})
+    assert change.summary == "Axes: wght labels changed"
+    [labels] = [f for f in change.fields if f.label == "wght labels"]
+    assert '"Bold"' in labels.after
+
+
 def test_cross_axis_mapping_has_its_own_area():
     new = edited(
         lambda d: d["axes"].update(

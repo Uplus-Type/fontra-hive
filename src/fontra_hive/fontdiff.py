@@ -169,7 +169,8 @@ def _text(value) -> str | None:
         return _num(value)
     if dataclasses.is_dataclass(value):
         value = _unstructure(value)
-    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    # A list or a dict may hold Fontra objects too (an axis's value labels).
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=_unstructure)
 
 
 def _short(value: str | None) -> bool:
