@@ -351,6 +351,10 @@ function changeSection(change, { other = false } = {}) {
     }
     section.append(lines);
   }
+  if (change.note) {
+    // "Too many lines to show the difference.": the counts only.
+    section.append(el("div", { class: "note" }, [change.note]));
+  }
   if (change.fields?.length) {
     section.append(
       el("table", {}, [

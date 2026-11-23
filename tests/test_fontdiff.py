@@ -156,7 +156,9 @@ def test_font_guidelines_and_italic_angle():
 def test_features_lines_added_and_removed():
     old = b"feature liga {\n  sub f i by fi;\n} liga;\n"
     new = b"feature liga {\n  sub f l by fl;\n  sub f f by ff;\n} liga;\n"
-    [change] = fontdiff.font_changes({"features.txt": old}, {"features.txt": new})
+    [change] = fontdiff.font_changes(
+        {"features.txt": old}, {"features.txt": new}, detail=True
+    )
     assert change.summary == "Features: 2 lines added, 1 removed"
     assert change.area == "features" and change.domain == "fontsettings"
     assert ("-", "  sub f i by fi;") in change.lines

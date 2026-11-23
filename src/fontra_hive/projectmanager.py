@@ -17,6 +17,7 @@ the git side is the same.
 from __future__ import annotations
 
 import argparse
+import collections
 import asyncio
 import dataclasses
 import datetime
@@ -34,6 +35,7 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
 from importlib import resources
 from types import SimpleNamespace
 from typing import Any
@@ -1703,6 +1705,16 @@ class DevHiveProjectManager(CommentRoutesMixin):
                 else fontdiff.BEYOND_THE_GLYPH_FILES
             )
         limit = min(int(request.query.get("limit", "50")), 500)
+        # Reading the history and describing its changes (fontdiff) is
+        # done off the event loop: a large font never stops the server.
+        return web.json_response(
+            await asyncio.to_thread(
+                self._log, repoPath, branch, path, glyphName, kind, areas, limit
+            )
+        )
+
+    def _log(self, repoPath, branch, path, glyphName, kind, areas, limit) -> dict:
+        """The body of :meth:`logHandler`, run in a thread."""
         store = GitRepoStore.open(repoPath)
         try:
             head = store.head(branch)
@@ -1750,25 +1762,23 @@ class DevHiveProjectManager(CommentRoutesMixin):
                 self._addFontChanges(store, commits)
         finally:
             store.close()
-        return web.json_response(
-            {
-                "branch": branch,
-                "head": head,
-                "path": path,
-                "commits": commits,
-                # The snapshots met while walking back to the oldest commit
-                # returned, newest first; each commit names its snapshot.
-                "snapshots": [_snapshotJSON(s) for s in snapshots],
-                "glyphSnapshots": [_snapshotJSON(s) for s in glyphSnapshots or ()],
-                "order": [list(entry) for entry in order],
-            }
-        )
+        return {
+            "branch": branch,
+            "head": head,
+            "path": path,
+            "commits": commits,
+            # The snapshots met while walking back to the oldest commit
+            # returned, newest first; each commit names its snapshot.
+            "snapshots": [_snapshotJSON(s) for s in snapshots],
+            "glyphSnapshots": [_snapshotJSON(s) for s in glyphSnapshots or ()],
+            "order": [list(entry) for entry in order],
+        }
 
-    def _sourcesCache(self) -> dict:
-        cache = self.__dict__.setdefault("_changedSourcesCache", {})
-        if len(cache) > 20000:
-            cache.clear()
-        return cache
+    def _sourcesCache(self) -> "SizedCache":
+        # Set once, before any thread reads it (setdefault is atomic).
+        return self.__dict__.setdefault(
+            "_changedSourcesCache", SizedCache(MAX_CACHE_BYTES, MAX_CACHE_ENTRIES)
+        )
 
     def _fontSources(self, store: GitRepoStore, commits: list[dict]):
         """The font's source names, as of the newest commit listed, and the
@@ -1777,22 +1787,24 @@ class DevHiveProjectManager(CommentRoutesMixin):
         fontData = (
             store.file_sha(commits[0]["sha"], "font-data.json") if commits else None
         )
-        if ("font", fontData) not in cache:
-            cache[("font", fontData)] = font_source_names(
-                store.read_blob(fontData) if fontData else None
-            )
-        return fontData, cache[("font", fontData)]
+        names = cache.get(("font", fontData))
+        if names is None:
+            names = font_source_names(store.read_blob(fontData) if fontData else None)
+            cache[("font", fontData)] = names
+        return fontData, names
 
     def _sourcesBetween(self, store, old, new, fontData, fontSources) -> list[str]:
         if new is None or old is None or new == old:
             return []
         cache = self._sourcesCache()
         key = (old, new, fontData)
-        if key not in cache:
-            cache[key] = changed_sources(
+        sources = cache.get(key)
+        if sources is None:
+            sources = changed_sources(
                 store.read_blob(old), store.read_blob(new), fontSources
             )
-        return cache[key]
+            cache[key] = sources
+        return sources
 
     def _addChangedSources(self, store: GitRepoStore, commits: list[dict], path: str):
         """Each version of a glyph gets ``sources``: the names of the glyph's
@@ -1838,7 +1850,11 @@ class DevHiveProjectManager(CommentRoutesMixin):
             return []
         return self._fontChangesBetween(store, parents[0], sha)
 
-    def _fontChangesBetween(self, store: GitRepoStore, old: str | None, new: str):
+    def _fontChangesBetween(
+        self, store: GitRepoStore, old: str | None, new: str, detail: bool = False
+    ):
+        """Run in a thread, never on the event loop (``detail``: with the
+        features' lines, for the detail view)."""
         cache = self._sourcesCache()
         changes = []
         fontData = store.file_sha(new, fontdiff.FONT_DATA)
@@ -1849,26 +1865,29 @@ class DevHiveProjectManager(CommentRoutesMixin):
                 continue
             # The kerning names its sources: from the font data of "new".
             names = fontData if path == fontdiff.KERNING_FILE else None
-            key = ("fontdiff", path, before, after, names)
-            if key not in cache:
+            withLines = detail and path == fontdiff.FEATURES
+            key = ("fontdiff", path, before, after, names, withLines)
+            described = cache.get(key)
+            if described is None:
                 sourceNames = None
                 if names is not None:
-                    if ("names", names) not in cache:
-                        cache[("names", names)] = fontdiff.source_names(
-                            store.read_blob(names)
-                        )
-                    sourceNames = cache[("names", names)]
+                    sourceNames = cache.get(("names", names))
+                    if sourceNames is None:
+                        sourceNames = fontdiff.source_names(store.read_blob(names))
+                        cache[("names", names)] = sourceNames
                 try:
-                    cache[key] = fontdiff.file_changes(
+                    described = fontdiff.file_changes(
                         path,
                         store.read_blob(before) if before else None,
                         store.read_blob(after) if after else None,
                         sourceNames,
+                        withLines,
                     )
                 except Exception:  # one change we cannot describe: not the history
                     logger.exception("could not describe the change of %s", path)
-                    cache[key] = []
-            changes += cache[key]
+                    described = []
+                cache[key] = described
+            changes += described
         return fontdiff.sort_changes(changes)
 
     def _addFontChanges(self, store: GitRepoStore, commits: list[dict]) -> None:
@@ -1890,12 +1909,30 @@ class DevHiveProjectManager(CommentRoutesMixin):
         changed. For a version, a snapshot, or "Compare with now"."""
         repoPath, _ = await self._project(request, request.match_info["name"], "read")
         branch = request.query.get("branch", DEFAULT_BRANCH)
+        work = asyncio.to_thread(
+            self._fontDiff,
+            repoPath,
+            branch,
+            request.query.get("to"),
+            request.query.get("from"),
+        )
+        try:
+            return web.json_response(
+                await asyncio.wait_for(work, FONT_DIFF_SECONDS)
+            )
+        except asyncio.TimeoutError:
+            raise web.HTTPServiceUnavailable(
+                text="This difference takes too long to describe. Try two closer versions."
+            )
+
+    def _fontDiff(self, repoPath, branch, toRef, fromRef) -> dict:
+        """The body of :meth:`fontDiffHandler`, run in a thread."""
         store = GitRepoStore.open(repoPath)
         try:
             try:
-                to = store.resolve(request.query.get("to") or branch)
+                to = store.resolve(toRef or branch)
                 parents = store.commit_info(to).parents
-                ref = request.query.get("from")
+                ref = fromRef
                 if ref == "first":
                     # The first commit of the line (the import): what a
                     # first snapshot gathered.
@@ -1910,7 +1947,7 @@ class DevHiveProjectManager(CommentRoutesMixin):
                     store.commit_info(old)  # exists
             except (KeyError, ValueError):
                 raise web.HTTPNotFound()
-            changes = self._fontChangesBetween(store, old, to)
+            changes = self._fontChangesBetween(store, old, to, detail=True)
             glyphs = []
             for change in store.diff(old, to) if old != to else ():
                 p = change.path
@@ -1926,16 +1963,14 @@ class DevHiveProjectManager(CommentRoutesMixin):
             glyphs.sort(key=lambda g: g["name"])
         finally:
             store.close()
-        return web.json_response(
-            {
-                "branch": branch,
-                "from": old,
-                "to": to,
-                "changes": [c.to_json() for c in changes],
-                "glyphs": glyphs[:MAX_DIFF_GLYPHS],
-                "glyphsTotal": len(glyphs),
-            }
-        )
+        return {
+            "branch": branch,
+            "from": old,
+            "to": to,
+            "changes": [c.to_json() for c in changes],
+            "glyphs": glyphs[:MAX_DIFF_GLYPHS],
+            "glyphsTotal": len(glyphs),
+        }
 
     async def snapshotsHandler(self, request: web.Request) -> web.Response:
         """The snapshots of a branch, newest first, and how many commits were
@@ -2111,6 +2146,72 @@ CLIENT_CONTENT_TYPES = {
 
 # The glyphs a font-diff lists (an import changes them all).
 MAX_DIFF_GLYPHS = 2000
+# How long a font-diff may take before the answer says so (the features'
+# detail is bounded by fontdiff.MAX_DIFF_CELLS: this is the safety net).
+FONT_DIFF_SECONDS = 20
+# What the history keeps in memory between requests (descriptions of
+# changes, source names): in bytes (an estimate), and in entries.
+MAX_CACHE_BYTES = 64 * 1024 * 1024
+MAX_CACHE_ENTRIES = 20000
+
+
+def approx_size(value, depth: int = 0) -> int:
+    """About how many bytes ``value`` holds (strings, containers,
+    dataclasses such as fontdiff.FontChange): for :class:`SizedCache`."""
+    if isinstance(value, (str, bytes)):
+        return 50 + len(value)
+    if depth > 8:
+        return 64
+    if isinstance(value, dict):
+        return 64 + sum(
+            approx_size(k, depth + 1) + approx_size(v, depth + 1)
+            for k, v in value.items()
+        )
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return 56 + sum(approx_size(v, depth + 1) for v in value)
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return 64 + approx_size(vars(value), depth + 1)
+    return 32
+
+
+class SizedCache:
+    """A cache bounded in bytes and in entries, the oldest entries leaving
+    first; safe for the threads that read the history. A value larger than
+    the whole cache is not kept."""
+
+    def __init__(self, maxBytes: int, maxEntries: int):
+        self.maxBytes = maxBytes
+        self.maxEntries = maxEntries
+        self.size = 0
+        self._data: collections.OrderedDict = collections.OrderedDict()
+        self._lock = threading.Lock()
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def get(self, key, default=None):
+        with self._lock:
+            entry = self._data.get(key)
+            if entry is None:
+                return default
+            self._data.move_to_end(key)
+            return entry[0]
+
+    def __setitem__(self, key, value) -> None:
+        size = approx_size(value) + approx_size(key)
+        with self._lock:
+            old = self._data.pop(key, None)
+            if old is not None:
+                self.size -= old[1]
+            if size > self.maxBytes:
+                return
+            self._data[key] = (value, size)
+            self.size += size
+            while self._data and (
+                self.size > self.maxBytes or len(self._data) > self.maxEntries
+            ):
+                _, (_, dropped) = self._data.popitem(last=False)
+                self.size -= dropped
 
 
 def _snapshotJSON(snapshot: SnapshotInfo | GlyphSnapshotInfo) -> dict[str, Any]:

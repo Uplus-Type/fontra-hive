@@ -38,6 +38,7 @@ from __future__ import annotations
 import csv
 import dataclasses
 import difflib
+from collections import Counter
 import io
 import json
 from dataclasses import dataclass, field
@@ -86,6 +87,11 @@ SHORT = 28
 # The detail view's limits (a font with 40 000 kerning pairs changed).
 MAX_FIELDS = 300
 MAX_LINES = 2000
+# The features' detail is a unified diff (difflib, quadratic in the worst
+# case) only while the two versions' line counts multiplied stay under this:
+# 2 000 × 2 000 lines, about a quarter of a second. Beyond, the counts only.
+MAX_DIFF_CELLS = 4_000_000
+TOO_MANY_LINES = "Too many lines to show the difference."
 
 FONT_INFO_LABELS = {
     "familyName": "family name",
@@ -127,6 +133,8 @@ class FontChange:
     truncated: bool = False
     # Words for a commit title, when not the area's ("line metrics").
     words: str | None = None
+    # Said in the detail view instead of what it cannot show.
+    note: str | None = None
 
     @property
     def domain(self) -> str:
@@ -143,6 +151,8 @@ class FontChange:
             if self.lines is not None:
                 data["lines"] = [list(line) for line in self.lines]
             data["truncated"] = self.truncated or len(self.fields) > MAX_FIELDS
+            if self.note:
+                data["note"] = self.note
         return data
 
 
@@ -731,26 +741,33 @@ def _lines(data: bytes | None) -> list[str]:
     return data.decode("utf-8", errors="replace").splitlines() if data else []
 
 
-def features_changes(old: bytes | None, new: bytes | None) -> list[FontChange]:
-    """What changed in ``features.txt``: lines added and removed, and the
-    lines themselves (a unified diff) for the detail view."""
+def features_changes(
+    old: bytes | None, new: bytes | None, detail: bool = False
+) -> list[FontChange]:
+    """What changed in ``features.txt``: lines added and removed, counted as
+    multisets (linear, whatever the size: the only way a commit and the
+    history describe it), and with ``detail`` the lines themselves (a
+    unified diff) for the detail view, while :data:`MAX_DIFF_CELLS` allows
+    it; beyond, the counts and :data:`TOO_MANY_LINES`."""
     a, b = _lines(old), _lines(new)
     if a == b:
         return []
-    added = removed = 0
-    lines: list[tuple[str, str]] = []
-    for line in difflib.unified_diff(a, b, lineterm="", n=3):
-        if line.startswith(("---", "+++")):
-            continue
-        if line.startswith("@@"):
-            lines.append(("@", line))
-            continue
-        op, text = line[:1], line[1:]
-        if op == "+":
-            added += 1
-        elif op == "-":
-            removed += 1
-        lines.append((op, text))
+    before, after = Counter(a), Counter(b)
+    added = sum((after - before).values())
+    removed = sum((before - after).values())
+    lines: list[tuple[str, str]] | None = None
+    note = None
+    if detail and len(a) * len(b) > MAX_DIFF_CELLS:
+        note = TOO_MANY_LINES
+    elif detail:
+        lines = []
+        for line in difflib.unified_diff(a, b, lineterm="", n=3):
+            if line.startswith(("---", "+++")):
+                continue
+            if line.startswith("@@"):
+                lines.append(("@", line))
+                continue
+            lines.append((line[:1], line[1:]))
     if added and removed:
         summary = f"Features: {_plural(added, 'line')} added, {removed} removed"
     elif added:
@@ -758,7 +775,9 @@ def features_changes(old: bytes | None, new: bytes | None) -> list[FontChange]:
     elif removed:
         summary = f"Features: {_plural(removed, 'line')} removed"
     else:
-        summary = "Features: changed"
+        summary = "Features: lines moved"
+    if lines is None:
+        return [FontChange("features", summary, note=note)]
     truncated = len(lines) > MAX_LINES
     return [FontChange("features", summary, lines=lines[:MAX_LINES], truncated=truncated)]
 
@@ -909,14 +928,16 @@ def file_changes(
     old: bytes | None,
     new: bytes | None,
     sourceNames: Mapping[str, str] | None = None,
+    detail: bool = False,
 ) -> list[FontChange]:
-    """What changed in one of :data:`FONT_FILES`."""
+    """What changed in one of :data:`FONT_FILES` (``detail``: with the
+    features' lines, for the detail view)."""
     if old == new:
         return []
     if path == FONT_DATA:
         return font_data_changes(old, new)
     if path == FEATURES:
-        return features_changes(old, new)
+        return features_changes(old, new, detail)
     if path == KERNING_FILE:
         return kerning_changes(old, new, sourceNames)
     if path == GLYPH_INFO:
@@ -925,15 +946,20 @@ def file_changes(
 
 
 def font_changes(
-    old: Mapping[str, bytes | None], new: Mapping[str, bytes | None]
+    old: Mapping[str, bytes | None],
+    new: Mapping[str, bytes | None],
+    detail: bool = False,
 ) -> list[FontChange]:
     """What changed beyond the glyphs between two versions of a package,
     given ``{file name: contents}`` for :data:`FONT_FILES` (a missing key or
-    None: the file is absent), in the order of :data:`AREAS`."""
+    None: the file is absent), in the order of :data:`AREAS`. ``detail``:
+    with the features' lines (never for a commit message)."""
     sourceNames = source_names(new.get(FONT_DATA) or old.get(FONT_DATA))
     changes: list[FontChange] = []
     for path in FONT_FILES:
-        changes += file_changes(path, old.get(path), new.get(path), sourceNames)
+        changes += file_changes(
+            path, old.get(path), new.get(path), sourceNames, detail
+        )
     return sort_changes(changes)
 
 
