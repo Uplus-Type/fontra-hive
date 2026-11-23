@@ -89,9 +89,11 @@ from .access import Access
 from .backend_git import GitFontraBackend
 from .gitstore import (
     DEFAULT_BRANCH,
+    FOLLOWS_REMOTE,
     SERVER_SIGNATURE,
     GitRepoStore,
     Signature,
+    follows_remote,
     glyphs_trailer,
     one_line,
 )
@@ -508,6 +510,8 @@ class HiveWrite:
         context = currentContext("hive-write")
         hiveProject = await _resolve(context, "hive-write", self.project, "edit")
         branch = self.branchFor(context.recipe)
+        if follows_remote(branch):
+            raise ActionError(f"hive-write: {FOLLOWS_REMOTE}")
         if branch == hiveProject.defaultBranch:
             raise ActionError(
                 f"hive-write: never writes to the default branch ({branch}); "

@@ -67,10 +67,12 @@ from .fonthandler import HiveFontHandler
 from .glyphdiff import changed_sources, font_source_names
 from .gitstore import (
     DEFAULT_BRANCH,
+    FOLLOWS_REMOTE,
     SERVER_SIGNATURE,
     GitRepoStore,
     GlyphSnapshotInfo,
     RefMovedError,
+    follows_remote,
     glyphs_trailer,
     hive_glyphs,
     one_line,
@@ -643,8 +645,12 @@ class DevHiveProjectManager(CommentRoutesMixin):
             projectIdentifier=identifier,
             metaInfoProvider=self,
             # With accounts, read-only is decided per connection by the
-            # role; the handler itself is shared by everyone.
-            readOnly=self.readOnly or (readOnly and accessForToken is None),
+            # role; the handler itself is shared by everyone. A branch that
+            # follows the remote repository is read only for all.
+            readOnly=self.readOnly
+            or follows_remote(branch)
+            or (readOnly and accessForToken is None),
+            followsRemote=follows_remote(branch),
             allConnectionsClosedCallback=closeFontHandler,
             accessForToken=accessForToken,
             # "File › Export as" lists these; Hive's page script turns the
@@ -1031,6 +1037,7 @@ class DevHiveProjectManager(CommentRoutesMixin):
             raise web.HTTPBadRequest(text="glyph and ref are required")
         if self.readOnly:
             raise web.HTTPForbidden(text="read-only server")
+        _refuseFollowsRemote(branch)
         access = await self._require(request, name, "edit")
 
         fontHandler = self.fontHandlers.get(self._handlerKey(repoPath, branch))
@@ -1111,6 +1118,7 @@ class DevHiveProjectManager(CommentRoutesMixin):
             parts = None  # the whole font
         if self.readOnly:
             raise web.HTTPForbidden(text="read-only server")
+        _refuseFollowsRemote(branch)
         if access is not None:
             if parts is None and not access.can(fontrestore.WHOLE_FONT_CAPABILITY):
                 raise web.HTTPForbidden(text=fontrestore.WHOLE_FONT_REFUSAL)
@@ -1393,6 +1401,7 @@ class DevHiveProjectManager(CommentRoutesMixin):
         repoPath, access = await self._project(request, name, "branch")
         if self.readOnly:
             raise web.HTTPForbidden(text="read-only server")
+        _refuseFollowsRemote(branch)
         default = await self._defaultBranch(request, name)
         if branch == default:
             raise web.HTTPConflict(text="The default branch cannot be deleted.")
@@ -1652,6 +1661,7 @@ class DevHiveProjectManager(CommentRoutesMixin):
         default = await self._defaultBranch(request, name)
         source = request.query.get("from") or ""
         target = request.query.get("into") or default
+        _refuseFollowsRemote(target)
         capability = "merge" if target == default else "edit"
         if access is not None and not access.can(capability):
             raise web.HTTPForbidden(
@@ -2176,6 +2186,7 @@ class DevHiveProjectManager(CommentRoutesMixin):
             raise web.HTTPBadRequest(text="name is required")
         if self.readOnly:
             raise web.HTTPForbidden(text="read-only server")
+        _refuseFollowsRemote(branch)
         await self._require(request, name, "snapshot")
         # The whole font, its settings included: for the people who may
         # change those (a glyph's snapshot is any designer's).
@@ -2382,6 +2393,12 @@ class SizedCache:
             ):
                 _, (_, dropped) = self._data.popitem(last=False)
                 self.size -= dropped
+
+
+def _refuseFollowsRemote(branch: str) -> None:
+    """403 for a write to a branch that follows the remote repository."""
+    if follows_remote(branch):
+        raise web.HTTPForbidden(text=FOLLOWS_REMOTE)
 
 
 def _person(access: Access | None) -> str:

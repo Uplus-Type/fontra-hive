@@ -201,6 +201,17 @@ _RESERVED_BRANCH_PREFIXES = (
 )
 
 
+# The branches that mirror a remote repository's (upstream/<branch>): only
+# the pull writes them.
+FOLLOWS_REMOTE = "This branch follows the remote repository: pull to update it."
+
+
+def follows_remote(branch: str | None) -> bool:
+    """Whether ``branch`` mirrors a remote branch (``upstream/…``), which no
+    route writes but the pull."""
+    return isinstance(branch, str) and branch.startswith(UPSTREAM_BRANCH_PREFIX)
+
+
 def branch_name_error(name: str) -> str | None:
     """Why ``name`` is not an acceptable branch name, or None. Letters,
     digits, ``.``, ``_``, ``-`` and ``/``, within git's rules

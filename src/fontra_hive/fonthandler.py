@@ -36,6 +36,7 @@ from fontra.core.fonthandler import FontHandler, funcName, remoteMethod
 
 from .access import Access, splitReadOnlyMark
 from .backend_git import current_author
+from .gitstore import FOLLOWS_REMOTE
 from .writedomains import EDIT, WRITE_DOMAINS, changeDomains, refusal
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,9 @@ class HiveFontHandler(FontHandler):
     # token -> Access for this project (None: no access). Called often: must
     # be cheap (the project manager caches).
     accessForToken: Callable[[str | None], Access | None] | None = None
+    # A branch that mirrors the remote repository (upstream/…): read only
+    # for everyone, only the pull writes it.
+    followsRemote: bool = False
 
     def accessFor(self, connection) -> Access | None:
         if connection is None or self.accessForToken is None:
@@ -66,6 +70,8 @@ class HiveFontHandler(FontHandler):
     def _checkCanEdit(self, connection, *changes) -> None:
         """Refuse unless the connection may edit, and may write every domain
         the ``changes`` touch."""
+        if self.followsRemote:
+            raise ReadOnlyError(FOLLOWS_REMOTE)
         if self._openedReadOnly(connection):
             raise ReadOnlyError("read-only (opened read-only)")
         if self.accessForToken is None:
@@ -86,7 +92,7 @@ class HiveFontHandler(FontHandler):
 
     @remoteMethod
     async def isReadOnly(self, *, connection=None) -> bool:
-        if await super().isReadOnly(connection=connection):
+        if self.followsRemote or await super().isReadOnly(connection=connection):
             return True
         if self._openedReadOnly(connection):
             return True

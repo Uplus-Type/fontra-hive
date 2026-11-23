@@ -796,7 +796,11 @@ as a `.fontra` package or as UFO/designspace sources.
   `upstream/<branch>` records what was sent.
 - Trailers: `Hive-Upstream: <remote sha>` (the remote commit a state of
   `upstream/…` corresponds to), `Hive-Pull`, `Hive-Push`. Branch names
-  starting with `upstream/` are reserved.
+  starting with `upstream/` are reserved, and only the pull (and the push's
+  record) writes these branches: the editor opens them read only, and
+  restore, restore-font, snapshot, a merge into them, deleting them and
+  `hive-write` answer 403 "This branch follows the remote repository: pull
+  to update it." They are read, and merged into other branches, as any.
 - **UFO/designspace remotes: glyphs and kerning only.** Fontra's designspace
   backend writes the changed glyphs into a checkout of the remote; then a
   file whose content did not change keeps its bytes, a changed `.glif` or
