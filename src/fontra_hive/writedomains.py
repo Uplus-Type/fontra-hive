@@ -116,11 +116,59 @@ def _walk(change, prefix: tuple, found: set[str]) -> None:
         _walk(child, path, found)
 
 
+# --- the shape of a change -------------------------------------------------------
+
+# The keys of a change as Fontra makes it (fontra.core.changes, changes.js):
+# a path, a function, its arguments, children.
+CHANGE_KEYS = frozenset({"p", "f", "a", "c"})
+# Deeper than this, no editor made the change.
+MAX_CHANGE_DEPTH = 64
+SHAPE_REFUSAL = "This change is not one the editor makes."
+
+
+def changeShapeError(change, functions, depth: int = 0) -> str | None:
+    """Why ``change`` does not have the shape Fontra gives a change, or None:
+    an object with no key but ``p`` (a list of strings and integers), ``f``
+    (one of ``functions``, Fontra's change functions), ``a`` (a list) and
+    ``c`` (a list of changes of that shape, at every level). Fontra itself
+    would read other shapes (an object as path, an object as arguments):
+    the guards of the domains and of the names would not see them read so."""
+    if not isinstance(change, dict):
+        return "a change is an object"
+    if depth > MAX_CHANGE_DEPTH:
+        return "too deep"
+    unknown = set(change) - CHANGE_KEYS
+    if unknown:
+        return f"unknown key {sorted(map(str, unknown))[0]!r}"
+    path = change.get("p", [])
+    if not isinstance(path, list) or not all(
+        isinstance(e, str) or (isinstance(e, int) and not isinstance(e, bool))
+        for e in path
+    ):
+        return "the path is a list of names and numbers"
+    if "f" in change and (
+        not isinstance(change["f"], str) or change["f"] not in functions
+    ):
+        return "unknown change function"
+    if not isinstance(change.get("a", []), list):
+        return "the arguments are a list"
+    children = change.get("c", [])
+    if not isinstance(children, list):
+        return "the children are a list"
+    for child in children:
+        error = changeShapeError(child, functions, depth + 1)
+        if error:
+            return error
+    return None
+
+
 # --- names ----------------------------------------------------------------------
 
 # The fields whose text is a name (a source's, an axis's tag or label, a
 # component's glyph), and the kerning's groups, whose members are glyph names.
-NAME_FIELDS = frozenset({"name", "tag", "label", "baseGlyph", "glyphName"})
+NAME_FIELDS = frozenset(
+    {"name", "tag", "label", "baseGlyph", "glyphName", "layerName", "elidedFallBackname"}
+)
 GROUP_FIELDS = frozenset({"groupsSide1", "groupsSide2"})
 
 # Every control character (C0, DEL, C1) and the Unicode line and paragraph

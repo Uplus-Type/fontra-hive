@@ -20,6 +20,11 @@ changing Fontra:
 - **names**: a name with a control character or a line break (a glyph, a
   source, an axis, a kerning group, a key of the custom data) is refused
   there too (:func:`fontra_hive.writedomains.nameWithControlCharacter`);
+- **the shape of a change**: before both, a change that does not have the
+  shape Fontra gives its changes (a path that is a list, arguments that are
+  a list, known change functions, no other key, at every level) is refused
+  (:func:`fontra_hive.writedomains.changeShapeError`): the guards read
+  changes as Fontra makes them;
 - **a branch that follows the remote repository** (``upstream/…``) is read
   only for everyone: only the pull writes it.
 
@@ -45,10 +50,21 @@ from .gitstore import FOLLOWS_REMOTE
 from .writedomains import (
     EDIT,
     NAME_REFUSAL,
+    SHAPE_REFUSAL,
     WRITE_DOMAINS,
     changeDomains,
+    changeShapeError,
     nameWithControlCharacter,
     refusal,
+)
+
+import fontra.core.changes as _fontraChanges  # noqa: E402
+
+# Every function Fontra applies a change with (fontra.core.changes).
+CHANGE_FUNCTIONS = frozenset(
+    getattr(_fontraChanges, "changeFunctions", None)
+    or getattr(_fontraChanges, "baseChangeFunctions", None)
+    or ("=", "d", "-", "+", ":")
 )
 
 logger = logging.getLogger(__name__)
@@ -59,9 +75,11 @@ class ReadOnlyError(PermissionError):
 
 
 class InvalidNameError(ValueError):
-    """A name with a control character or a line break: refused at the
-    guard, before it is written or sent to anyone (one_line keeps commit
-    messages safe anyway; this keeps such names out of the font)."""
+    """A name with a control character or a line break, or a change that
+    does not have the shape Fontra gives a change (where a name could hide):
+    refused at the guard, before it is written or sent to anyone (one_line
+    keeps commit messages safe anyway; this keeps such names out of the
+    font)."""
 
 
 @dataclass(kw_only=True)
@@ -120,6 +138,16 @@ class HiveFontHandler(FontHandler):
         return access is None or access.read_only
 
     @staticmethod
+    def _checkShape(*changes) -> None:
+        for change in changes:
+            if change is None:
+                continue
+            error = changeShapeError(change, CHANGE_FUNCTIONS)
+            if error:
+                logger.warning("change refused at the guard: %s", error)
+                raise InvalidNameError(SHAPE_REFUSAL)
+
+    @staticmethod
     def _checkNames(change) -> None:
         name = nameWithControlCharacter(change)
         if name is not None:
@@ -127,6 +155,7 @@ class HiveFontHandler(FontHandler):
 
     @remoteMethod
     async def editIncremental(self, liveChange, *, connection) -> None:
+        self._checkShape(liveChange)
         self._checkCanEdit(connection, liveChange)
         self._checkNames(liveChange)
         await super().editIncremental(liveChange, connection=connection)
@@ -137,6 +166,7 @@ class HiveFontHandler(FontHandler):
     ) -> None:
         # The rollback is checked too: the client sends it back as an edit
         # to undo.
+        self._checkShape(finalChange, rollbackChange)
         self._checkCanEdit(connection, finalChange, rollbackChange)
         # The new names only: the rollback may hold an old name being fixed.
         self._checkNames(finalChange)
