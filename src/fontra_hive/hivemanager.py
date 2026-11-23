@@ -38,7 +38,7 @@ from multidict import CIMultiDict
 from . import importer
 from . import remote as git_remote
 from .access import CAPABILITIES, Access, markReadOnlyConnection, splitReadOnlyMark
-from .gitstore import DEFAULT_BRANCH, SERVER_SIGNATURE, GitRepoStore
+from .gitstore import DEFAULT_BRANCH, SERVER_SIGNATURE, GitRepoStore, one_line
 from .hiveapi import (
     ACCESS_COOKIE,
     HiveApi,
@@ -320,7 +320,7 @@ class HiveProjectManager(DevHiveProjectManager):
                 store.import_directory(
                     font,
                     branch=projectAccess.defaultBranch,
-                    message=message or f"New project {projectAccess.projectId}",
+                    message=one_line(message or f"New project {projectAccess.projectId}"),
                     author=projectAccess.access.user.signature,
                 )
             finally:
@@ -608,7 +608,7 @@ class HiveProjectManager(DevHiveProjectManager):
                     )
             except importer.ImportError_ as error:
                 raise web.HTTPUnprocessableEntity(text=str(error))
-            message = f"Import {filename}"
+            message = one_line(f"Import {filename}")
             author = projectAccess.access.user.signature
             path = self._repoPathFor(projectAccess)
             if not path.is_dir():

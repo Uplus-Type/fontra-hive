@@ -61,7 +61,8 @@ class Signature:
         self.email = email
 
     def encode(self) -> bytes:
-        return f"{self.name} <{self.email}>".encode("utf-8")
+        # A name never ends the line of the commit header it is in.
+        return f"{one_line(self.name)} <{one_line(self.email)}>".encode("utf-8")
 
     def __repr__(self) -> str:
         return f"Signature({self.name!r}, {self.email!r})"
@@ -424,9 +425,9 @@ class GitRepoStore:
             raise KeyError(branch)
         info = self.branch_info().get(branch) or {}
         message = (
-            f"Branch {branch}, deleted before being merged\n\n"
-            f"Hive-Archived-Branch: {branch}\n"
-            f"Hive-Deleted-By: {deleted_by or ''}\n"
+            f"Branch {one_line(branch)}, deleted before being merged\n\n"
+            f"Hive-Archived-Branch: {one_line(branch)}\n"
+            f"Hive-Deleted-By: {one_line(deleted_by or '')}\n"
             f"Hive-Branch-Info: {json.dumps(info, sort_keys=True)}\n"
         )
         existing = set(self.tags())
@@ -857,7 +858,7 @@ class GitRepoStore:
         nothing was committed since the previous snapshot;
         :class:`RefMovedError` when the branch moved (compare-and-swap).
         """
-        title = " ".join(title.split())
+        title = " ".join(one_line(title).split())
         name = snapshot_slug(title)
         if not name:
             raise ValueError("a snapshot needs a name")
@@ -882,8 +883,8 @@ class GitRepoStore:
         authors: list[str] = []
         unknown = 0
         for info in reversed(grouped):  # authors in order of first change
-            if info.author not in authors:
-                authors.append(info.author)
+            if one_line(info.author) not in authors:
+                authors.append(one_line(info.author))
             listed = _hive_glyphs_trailer(_b(info.message))
             if listed is None:
                 unknown += 1
@@ -898,7 +899,7 @@ class GitRepoStore:
         if glyphs:
             shown = sorted(glyphs)
             more = f" (+{len(shown) - 40})" if len(shown) > 40 else ""
-            body.append(f"Glyphs: {' '.join(shown[:40])}{more}")
+            body.append(f"Glyphs: {one_line(' '.join(shown[:40]))}{more}")
         if unknown:
             body.append(f"{unknown} commit(s) without a glyph list (import, external).")
         message = (
@@ -908,7 +909,7 @@ class GitRepoStore:
             + f"Hive-Snapshot: {name}\n"
             + f"Hive-Snapshot-Base: {previous.sha if previous else 'none'}\n"
             + f"Hive-Snapshot-Changes: {count}\n"
-            + f"Hive-Snapshot-Glyphs: {' '.join(sorted(glyphs))}\n"
+            + f"Hive-Snapshot-Glyphs: {one_line(' '.join(sorted(glyphs)))}\n"
             # An empty glyph list: the snapshot changes no glyph, and the
             # per-glyph history skips it without reading any tree.
             + "Hive-Glyphs:\n"
@@ -981,12 +982,14 @@ class GitRepoStore:
         versions of different glyphs. Whether the glyphs changed since their
         previous glyph snapshot is for the caller to check (it knows their
         paths)."""
-        title = " ".join(title.split())
+        title = " ".join(one_line(title).split())
         glyphs = sorted(set(glyphs))
         base = snapshot_slug(title)
         if not base:
             raise ValueError("a snapshot needs a name")
-        if not glyphs or any(not g or any(c.isspace() for c in g) for g in glyphs):
+        if not glyphs or any(
+            not g or g != one_line(g) or any(c.isspace() for c in g) for g in glyphs
+        ):
             raise ValueError("unexpected glyph names")
         sha = self.resolve(ref)
         name, n = base, 1
@@ -1108,11 +1111,57 @@ HIVE_SNAPSHOT_CHANGES_TRAILER = b"Hive-Snapshot-Changes:"
 HIVE_GLYPH_SNAPSHOT_GLYPHS_TRAILER = b"Hive-Glyph-Snapshot-Glyphs:"
 
 
-def _trailer(message: bytes, key: bytes) -> str | None:
-    """The value of the last ``key`` line of a commit message, stripped, or
-    None when there is no such line."""
+# Every control character (C0, DEL, C1: "\r", "\n", "\x0b", "\x0c",
+# "\x1c"–"\x1e", "\x85"…) and the Unicode line and paragraph separators.
+_NOT_IN_A_LINE = {
+    c: " "
+    for c in [*range(0x00, 0x20), *range(0x7F, 0xA0), 0x2028, 0x2029]
+}
+
+
+def one_line(text: object) -> str:
+    """``text`` as it may enter a commit message: every control character
+    and line separator replaced by a space, so that a name taken from the
+    font or from a person (a glyph, a source, an axis, a snapshot title…)
+    can never start a line of its own, and so never forge a trailer."""
+    return str(text).translate(_NOT_IN_A_LINE)
+
+
+def glyphs_trailer(names: Iterable[str]) -> str | None:
+    """The ``Hive-Glyphs:`` trailer line listing ``names``, or None when one
+    of them cannot be listed faithfully (a name with a space, or that a line
+    break made one): the commit then has no glyph list, and the per-glyph
+    history compares its trees instead, which is always right."""
+    names = [one_line(n) for n in names]
+    if any(not n or any(c.isspace() for c in n) for n in names):
+        return None
+    return ("Hive-Glyphs: " + " ".join(names)).rstrip()
+
+
+def trailer_lines(message: bytes | str) -> list[bytes]:
+    """The lines of the trailer block of a commit message: its last
+    paragraph, when it is not the title. Only there are ``Hive-…:`` lines
+    read, so a line in the body (an old commit whose body carries a forged
+    line) is never taken for a trailer. Lines end at "\\n" only, as in git."""
+    if isinstance(message, str):
+        message = _b(message)
+    lines = [line.rstrip(b"\r") for line in message.split(b"\n")]
+    while lines and not lines[-1].strip():
+        lines.pop()
+    block: list[bytes] = []
+    while lines and lines[-1].strip():
+        block.append(lines.pop())
+    if not any(line.strip() for line in lines):
+        return []  # one paragraph: the title, never trailers
+    block.reverse()
+    return block
+
+
+def _trailer(message: bytes | str, key: bytes) -> str | None:
+    """The value of the last ``key`` line of the trailer block of a commit
+    message (:func:`trailer_lines`), stripped, or None when there is none."""
     value = None
-    for line in message.splitlines():
+    for line in trailer_lines(message):
         if line.startswith(key):
             value = _s(line[len(key) :]).strip()
     return value
@@ -1121,10 +1170,8 @@ def _trailer(message: bytes, key: bytes) -> str | None:
 def _hive_glyphs_trailer(message: bytes) -> set[str] | None:
     """The glyph names listed in a commit's ``Hive-Glyphs:`` trailer, or None
     when the commit has no such trailer (an import, an external commit)."""
-    for line in message.splitlines():
-        if line.startswith(HIVE_GLYPHS_TRAILER):
-            return set(_s(line[len(HIVE_GLYPHS_TRAILER) :]).split())
-    return None
+    value = _trailer(message, HIVE_GLYPHS_TRAILER)
+    return None if value is None else set(value.split())
 
 
 def hive_glyphs(message: str) -> set[str] | None:

@@ -68,7 +68,9 @@ from .gitstore import (
     GitRepoStore,
     GlyphSnapshotInfo,
     RefMovedError,
+    glyphs_trailer,
     hive_glyphs,
+    one_line,
     Signature,
     SnapshotInfo,
 )
@@ -1047,8 +1049,11 @@ class DevHiveProjectManager(CommentRoutesMixin):
                     {"branch": branch, "head": head, "restored": sha, "changed": False}
                 )
             message = (
-                f"Restore {glyphName} to {sha[:10]}\n\n"
-                f"Hive-Glyphs: {glyphName}\nHive-Restore: {sha}\n"
+                f"Restore {one_line(glyphName)} to {sha[:10]}\n\n"
+                + "".join(
+                    f"{line}\n" for line in [glyphs_trailer([glyphName])] if line
+                )
+                + f"Hive-Restore: {sha}\n"
             )
             newHead = store.commit(
                 {path: data},
@@ -1569,24 +1574,24 @@ class DevHiveProjectManager(CommentRoutesMixin):
             else:
                 changedPaths = sorted(result.changes)
                 changed = [
-                    fileNameToString(p[len("glyphs/") : -len(".json")])
+                    one_line(fileNameToString(p[len("glyphs/") : -len(".json")]))
                     for p in changedPaths
                     if p.startswith("glyphs/") and p.endswith(".json")
                 ]
                 resolvedNote = ""
                 if result.resolved:
                     resolvedNote = "\nConflicts resolved: " + ", ".join(
-                        f"{c.glyph or c.path} ({resolutions[c.path]})"
+                        one_line(f"{c.glyph or c.path} ({resolutions[c.path]})")
                         for c in result.resolved
                     )
                 message = (
-                    f"Merge {source} into {target}\n\n"
-                    f"{state['ahead']} commits of {source}; "
-                    f"{len(changed)} glyphs changed in {target}.{resolvedNote}\n\n"
-                    f"Hive-Merge: {source}\n"
+                    f"Merge {one_line(source)} into {one_line(target)}\n\n"
+                    f"{state['ahead']} commits of {one_line(source)}; "
+                    f"{len(changed)} glyphs changed in {one_line(target)}.{resolvedNote}\n\n"
+                    f"Hive-Merge: {one_line(source)}\n"
                     f"Hive-Merge-Base: {state['base'] or ''}\n"
                     f"Hive-Merge-Head: {theirs}\n"
-                    f"Hive-Glyphs: {' '.join(changed)}\n"
+                    + "".join(f"{line}\n" for line in [glyphs_trailer(changed)] if line)
                 )
                 try:
                     head = store.commit(

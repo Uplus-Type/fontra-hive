@@ -86,7 +86,14 @@ from fontra.workflow.actions import (
 
 from .access import Access
 from .backend_git import GitFontraBackend
-from .gitstore import DEFAULT_BRANCH, SERVER_SIGNATURE, GitRepoStore, Signature
+from .gitstore import (
+    DEFAULT_BRANCH,
+    SERVER_SIGNATURE,
+    GitRepoStore,
+    Signature,
+    glyphs_trailer,
+    one_line,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -581,15 +588,16 @@ class HiveWrite:
     def _commitMessage(self, recipe: str, changes: Mapping[str, Any]) -> str:
         from fontra.backends.filenames import fileNameToString
 
-        title = (self.message or f"Recipe {recipe}").strip()
-        trailers = [f"{HIVE_RECIPE_TRAILER}: {recipe}"]
+        title = one_line(self.message or f"Recipe {recipe}").strip()
+        trailers = [f"{HIVE_RECIPE_TRAILER}: {one_line(recipe)}"]
         glyphs = sorted(
-            fileNameToString(p[len("glyphs/") : -len(".json")])
+            one_line(fileNameToString(p[len("glyphs/") : -len(".json")]))
             for p in changes
             if p.startswith("glyphs/") and p.endswith(".json")
         )
         if glyphs and len(glyphs) <= MAX_GLYPHS_IN_TRAILER:
-            trailers.insert(0, f"Hive-Glyphs: {' '.join(glyphs)}")
+            if (line := glyphs_trailer(glyphs)) is not None:
+                trailers.insert(0, line)
         return title + "\n\n" + "\n".join(trailers) + "\n"
 
 

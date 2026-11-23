@@ -47,6 +47,7 @@ from .fontdiff import (
     KERNING_FILE,
     STATUS_DEFINITIONS_KEY,
 )
+from .gitstore import glyphs_trailer, one_line
 from .writedomains import EDIT, LABELS, PLUGINDATA, customDataDomain
 
 
@@ -533,7 +534,7 @@ def commit_message(
         summary = fontdiff.font_changes(before, afterFiles)
     except Exception:  # never lose a restoration over its description
         summary = []
-    body = [c.summary for c in summary[:maxBodyLines]]
+    body = [one_line(c.summary) for c in summary[:maxBodyLines]]
     if len(summary) > maxBodyLines:
         body.append(f"… and {len(summary) - maxBodyLines} more")
     glyphPaths = [p for p in changes if is_glyph_path(p)]
@@ -554,9 +555,10 @@ def commit_message(
     if domains:
         trailers.append(f"Hive-Font: {' '.join(domains)}")
     if len(glyphPaths) <= MAX_TRAILER_GLYPHS:
-        names = sorted(glyph_name(p) for p in glyphPaths)
-        trailers.append(("Hive-Glyphs: " + " ".join(names)).rstrip())
-    message = title(parts, label)
+        line = glyphs_trailer(sorted(glyph_name(p) for p in glyphPaths))
+        if line is not None:
+            trailers.append(line)
+    message = one_line(title(parts, label))
     if body:
         message += "\n\n" + "\n".join(body)
     message += "\n\n" + "\n".join(trailers) + "\n"

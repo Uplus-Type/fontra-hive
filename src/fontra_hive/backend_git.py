@@ -32,7 +32,14 @@ from fontra.core.glyphdependencies import GlyphDependencies
 from fontra.core.protocols import WritableFontBackend
 
 from .fontdiff import FONT_FILES, domains_of, font_changes, title_words
-from .gitstore import DEFAULT_BRANCH, GitRepoStore, RefMovedError, Signature
+from .gitstore import (
+    DEFAULT_BRANCH,
+    GitRepoStore,
+    RefMovedError,
+    Signature,
+    glyphs_trailer,
+    one_line,
+)
 from .vfs import GitPath, GitTree
 
 logger = logging.getLogger(__name__)
@@ -343,8 +350,10 @@ def _commit_message(
     are in the parent (absent: compared with nothing, said by file name)."""
     from fontra.backends.filenames import fileNameToString
 
+    # Every text from the font goes through one_line before it enters the
+    # message: a name never starts a line, so never forges a trailer.
     glyphs = sorted(
-        fileNameToString(p[len("glyphs/") : -len(".json")])
+        one_line(fileNameToString(p[len("glyphs/") : -len(".json")]))
         for p in changes
         if p.startswith("glyphs/") and p.endswith(".json")
     )
@@ -363,7 +372,7 @@ def _commit_message(
     )
     described = set(fontFiles) if before is not None and summary else set()
     others = sorted(
-        p for p in changes if not p.startswith("glyphs/") and p not in described
+        one_line(p) for p in changes if not p.startswith("glyphs/") and p not in described
     )
     parts = []
     if words:
@@ -375,13 +384,13 @@ def _commit_message(
         parts.append(f"Edit {shown}")
     if others:
         parts.append("Update " + ", ".join(others))
-    title = "; ".join(parts) or "Update"
-    body = [c.summary for c in summary[:MAX_SUMMARY_LINES]]
+    title = one_line("; ".join(parts) or "Update")
+    body = [one_line(c.summary) for c in summary[:MAX_SUMMARY_LINES]]
     if len(summary) > MAX_SUMMARY_LINES:
         body.append(f"… and {len(summary) - MAX_SUMMARY_LINES} more")
     trailers = []
-    if glyphs:
-        trailers.append(f"Hive-Glyphs: {' '.join(glyphs)}")
+    if glyphs and (line := glyphs_trailer(glyphs)) is not None:
+        trailers.append(line)
     domains = domains_of(summary)
     if domains:
         trailers.append(f"Hive-Font: {' '.join(domains)}")

@@ -59,7 +59,9 @@ from .gitstore import (
     GitRepoStore,
     RefMovedError,
     Signature,
+    one_line,
     swap_ref,
+    trailer_lines,
 )
 
 COMMENTS_REF = b"refs/hive/comments"
@@ -274,7 +276,7 @@ def is_font_topic(issue: dict) -> bool:
 
 def _subject(issue: dict) -> str:
     """What a topic is about, for commit messages."""
-    return "the font" if is_font_topic(issue) else str(issue["glyph"])
+    return "the font" if is_font_topic(issue) else one_line(issue["glyph"])
 
 
 def same_person(a: dict | None, b: dict | None) -> bool:
@@ -555,7 +557,7 @@ class CommentStore:
                 ],
             }
             message = (
-                f"Comment #{number} on {'the font' if glyph is None else glyph}\n\n"
+                f"Comment #{number} on {'the font' if glyph is None else one_line(glyph)}\n\n"
                 f"Hive-Comment: {number}\n"
             )
             return (
@@ -580,7 +582,7 @@ class CommentStore:
             if issue is None:
                 raise CommentNotFound(f"no comment #{number}")
             summary = edit(issue)
-            message = f"{summary}\n\nHive-Comment: {number}\n"
+            message = f"{one_line(summary)}\n\nHive-Comment: {number}\n"
             return {issue_path(number): issue}, message, issue
 
         return self._change(apply, author)
@@ -808,10 +810,10 @@ def _check_sketch_allowed(issue: dict, sketch: dict | None) -> None:
 
 
 def _comment_number(message: str) -> int | None:
-    for line in reversed(message.splitlines()):
-        if line.startswith("Hive-Comment:"):
+    for line in reversed(trailer_lines(message)):
+        if line.startswith(b"Hive-Comment:"):
             try:
-                return int(line.split(":", 1)[1])
+                return int(line.split(b":", 1)[1])
             except ValueError:
                 return None
     return None

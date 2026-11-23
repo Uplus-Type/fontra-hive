@@ -77,6 +77,8 @@ from .gitstore import (
     Signature,
     _is_ignored,
     _trailer,
+    glyphs_trailer,
+    one_line,
 )
 from .merge import GLYPH_INFO_FILE, KERNING_FILE, _read_glyph_info, glyph_name_of
 
@@ -600,9 +602,9 @@ def pull(
     glyphs = _glyph_names(changes, current, files)
     short = remote_sha[:10]
     message = (
-        f"Pull from {_display_url(remote.url)} {remote.branch}@{short}\n\n"
-        + (f"Hive-Glyphs: {' '.join(glyphs)}\n" if glyphs else "")
-        + f"Hive-Pull: {_display_url(remote.url)} {remote.branch}\n"
+        f"Pull from {_display_url(remote.url)} {one_line(remote.branch)}@{short}\n\n"
+        + "".join(f"{line}\n" for line in [glyphs and glyphs_trailer(glyphs)] if line)
+        + f"Hive-Pull: {_display_url(remote.url)} {one_line(remote.branch)}\n"
         + f"Hive-Upstream: {remote_sha}\n"
     )
     sha = store.commit(
@@ -619,7 +621,7 @@ def _display_url(url: str) -> str:
         if parsed.port:
             netloc += f":{parsed.port}"
         parsed = parsed._replace(netloc=netloc)
-    return urllib.parse.urlunsplit(parsed)
+    return one_line(urllib.parse.urlunsplit(parsed))
 
 
 # --- push ---------------------------------------------------------------------
@@ -718,8 +720,8 @@ def push(
         for p in skipped:
             record[p] = old_files.get(p)
     record_message = (
-        f"Push to {_display_url(remote.url)} {remote.branch}@{new_remote[:10]}\n\n"
-        + (f"Hive-Glyphs: {' '.join(glyphs)}\n" if glyphs else "")
+        f"Push to {_display_url(remote.url)} {one_line(remote.branch)}@{new_remote[:10]}\n\n"
+        + "".join(f"{line}\n" for line in [glyphs and glyphs_trailer(glyphs)] if line)
         + f"Hive-Push: {head}\n"
         + f"Hive-Upstream: {new_remote}\n"
     )
@@ -767,7 +769,7 @@ def _remote_commit(
     for co in co_authors:
         if co.email.lower() not in seen:
             seen.add(co.email.lower())
-            trailers.append(f"Co-authored-by: {co.name} <{co.email}>")
+            trailers.append(f"Co-authored-by: {one_line(co.name)} <{one_line(co.email)}>")
     if trailers:
         lines += "\n\n" + "\n".join(trailers)
     commit = Commit()
