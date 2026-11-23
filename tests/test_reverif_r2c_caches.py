@@ -52,3 +52,11 @@ def test_ahead_behind_from_several_threads(tmp_path, fixture_fontra):
         t.join()
     assert errors == []
     assert len(cache) <= 50
+
+
+def test_a_manager_built_without_init_gets_its_cache():
+    from fontra_hive.projectmanager import DevHiveProjectManager
+
+    manager = DevHiveProjectManager.__new__(DevHiveProjectManager)
+    assert manager._aheadBehind(FakeStore(), "aa", "b") == (2, 1)
+    assert isinstance(manager._aheadBehindCache, SizedCache)

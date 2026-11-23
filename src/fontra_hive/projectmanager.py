@@ -1240,7 +1240,13 @@ class DevHiveProjectManager(CommentRoutesMixin):
         """``store.ahead_behind``, cached by pair of commits (the answer for
         two given commits never changes). Read from the event loop and from
         the merge preview's thread: a :class:`SizedCache`, behind its lock."""
-        cache = self._aheadBehindCache
+        # Made with the manager; made here too for a manager built without
+        # __init__ (setdefault is atomic: two threads get the same cache).
+        cache = self.__dict__.get("_aheadBehindCache")
+        if cache is None:
+            cache = self.__dict__.setdefault(
+                "_aheadBehindCache", SizedCache(AHEAD_BEHIND_BYTES, AHEAD_BEHIND_ENTRIES)
+            )
         key = (head, base)
         value = cache.get(key)
         if value is None:
