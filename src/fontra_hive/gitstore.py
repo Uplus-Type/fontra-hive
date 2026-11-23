@@ -1014,6 +1014,30 @@ class GitRepoStore:
             glyphs=tuple(glyphs),
         )
 
+    def snapshot_at(self, sha: str) -> SnapshotInfo | None:
+        """The snapshot a commit is (None: an ordinary commit)."""
+        commit = self.repo[_b(sha)]
+        if not isinstance(commit, Commit):
+            return None
+        if _trailer(commit.message, HIVE_SNAPSHOT_TRAILER) is None:
+            return None
+        return self._snapshot_info(commit)
+
+    def snapshot_commit(self, name: str) -> str | None:
+        """The commit of the snapshot ``name`` (its ``snapshot/<name>`` tag
+        only: never a branch, nor another kind of tag), or None."""
+        try:
+            ref = _tag_ref(SNAPSHOT_TAG_PREFIX + name)
+        except KeyError:
+            return None
+        sha = self.repo.refs.read_ref(ref)
+        if not sha:
+            return None
+        obj = self.repo[sha]
+        if isinstance(obj, Tag):
+            obj = self.repo[obj.object[1]]
+        return _s(obj.id) if isinstance(obj, Commit) else None
+
     def _snapshot_info(self, commit: Commit) -> SnapshotInfo:
         info = self.commit_info(_s(commit.id))
         title = info.message.splitlines()[0]

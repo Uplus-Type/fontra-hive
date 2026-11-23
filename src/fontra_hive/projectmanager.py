@@ -44,6 +44,7 @@ from fontra.core.fonthandler import FontHandler
 from fontra.core.protocols import ProjectManager
 
 from . import fontdiff
+from . import fontrestore
 from . import merge as merging
 from . import runner
 from .access import (
@@ -707,6 +708,9 @@ class DevHiveProjectManager(CommentRoutesMixin):
             web.get("/api/hive/projects/{name}/glyph", self.glyphHandler),
             web.get("/api/hive/projects/{name}/head", self.headHandler),
             web.post("/api/hive/projects/{name}/restore", self.restoreHandler),
+            web.post(
+                "/api/hive/projects/{name}/restore-font", self.restoreFontHandler
+            ),
             web.get("/api/hive/projects/{name}/snapshots", self.snapshotsHandler),
             web.post("/api/hive/projects/{name}/snapshot", self.snapshotHandler),
             web.post(
@@ -739,11 +743,12 @@ class DevHiveProjectManager(CommentRoutesMixin):
         )
 
     async def exportHandler(self, request: web.Request) -> web.StreamResponse:
-        """Download a branch of a project: its sources (.fontra or
+        """Download a branch of a project (``branch``), or one of its
+        snapshots (``ref=snapshot/<name>``): its sources (.fontra or
         .designspace + UFOs, zipped) or, when the server can build them,
         fonts. Needs the "export" capability (managers and admins). Edits not
-        yet committed are committed first; the build is the built-in recipe
-        "download", run by the recipe runner, one at a time."""
+        yet committed to a branch are committed first; the build is the
+        built-in recipe "download", run by the recipe runner, one at a time."""
         from . import export
 
         name = request.match_info["name"]
@@ -751,20 +756,40 @@ class DevHiveProjectManager(CommentRoutesMixin):
         format = request.query.get("format", "fontra")
         if format not in export.supported_formats():
             raise web.HTTPBadRequest(text=f"Cannot export as {format!r} here.")
-        branch = request.query.get("branch", DEFAULT_BRANCH)
-        fontHandler = self.fontHandlers.get(self._handlerKey(repoPath, branch))
-        if fontHandler is not None:
-            fontHandler.backend.flush()
-        store = GitRepoStore.open(repoPath)
-        try:
-            head = store.head(branch)
-        finally:
-            store.close()
-        if head is None:
-            raise web.HTTPNotFound(text=f"No branch {branch!r}.")
-        stem = export.safe_stem(
-            name.split("/")[-1] + ("" if branch == DEFAULT_BRANCH else f"-{branch}")
-        )
+        ref = request.query.get("ref")
+        if ref is not None:
+            # A snapshot, as it was named: what was shown to a client. Only a
+            # snapshot's tag, never another reference.
+            if "branch" in request.query:
+                raise web.HTTPBadRequest(text="Give a branch or a snapshot, not both.")
+            snapshot = ref[len("snapshot/") :] if ref.startswith("snapshot/") else ""
+            if not snapshot:
+                raise web.HTTPBadRequest(
+                    text="Only a snapshot can be downloaded this way (ref=snapshot/<name>)."
+                )
+            store = GitRepoStore.open(repoPath)
+            try:
+                head = store.snapshot_commit(snapshot)
+            finally:
+                store.close()
+            if head is None:
+                raise web.HTTPNotFound(text=f"No snapshot {snapshot!r}.")
+            stem = export.safe_stem(f"{name.split('/')[-1]}-{snapshot}")
+        else:
+            branch = request.query.get("branch", DEFAULT_BRANCH)
+            fontHandler = self.fontHandlers.get(self._handlerKey(repoPath, branch))
+            if fontHandler is not None:
+                fontHandler.backend.flush()
+            store = GitRepoStore.open(repoPath)
+            try:
+                head = store.head(branch)
+            finally:
+                store.close()
+            if head is None:
+                raise web.HTTPNotFound(text=f"No branch {branch!r}.")
+            stem = export.safe_stem(
+                name.split("/")[-1] + ("" if branch == DEFAULT_BRANCH else f"-{branch}")
+            )
         # One export at a time per person, asked before the run is opened.
         # hive-api's stable id; in development (no uid) the username.
         who = (access.user.uid or access.user.username) if access is not None else ""
@@ -1041,6 +1066,115 @@ class DevHiveProjectManager(CommentRoutesMixin):
                 store.close()
         return web.json_response(
             {"branch": branch, "head": newHead, "restored": sha, "changed": True}
+        )
+
+    async def restoreFontHandler(self, request: web.Request) -> web.Response:
+        """Bring the whole font, or some parts of it (``parts``, comma
+        separated: :data:`fontrestore.PARTS`), back to the state they had at
+        ``ref`` (a version or a snapshot), as a new commit.
+
+        The whole font is the managers' (``merge``); a part, of whoever has
+        the capability of its domain. Restoring the axes and sources, or the
+        whole font, is refused when the glyphs would no longer match the
+        font's sources and axes (409, ``{"message", "wholeFont"}``). As for a
+        glyph: pending edits are committed first, the commit is made against
+        the head it was computed on, and every open editor reloads.
+        """
+        name = request.match_info["name"]
+        ref = request.query.get("ref")
+        branch = request.query.get("branch", DEFAULT_BRANCH)
+        repoPath, access = await self._project(request, name, "read")
+        if not ref:
+            raise web.HTTPBadRequest(text="ref is required")
+        if "parts" in request.query:
+            try:
+                parts = fontrestore.parse_parts(request.query["parts"])
+            except fontrestore.UnknownPart as error:
+                raise web.HTTPBadRequest(text=str(error))
+        else:
+            parts = None  # the whole font
+        if self.readOnly:
+            raise web.HTTPForbidden(text="read-only server")
+        if access is not None:
+            if parts is None and not access.can(fontrestore.WHOLE_FONT_CAPABILITY):
+                raise web.HTTPForbidden(text=fontrestore.WHOLE_FONT_REFUSAL)
+            for key in parts or ():
+                if not access.can(fontrestore.PARTS[key].domain):
+                    raise web.HTTPForbidden(text=fontrestore.part_refusal(key))
+
+        fontHandler = self.fontHandlers.get(self._handlerKey(repoPath, branch))
+        backend = fontHandler.backend if fontHandler is not None else None
+        store = backend.store if backend is not None else GitRepoStore.open(repoPath)
+        try:
+            if store.head(branch) is None:
+                raise web.HTTPNotFound(text=f"No branch {branch!r}.")
+            try:
+                sha = store.resolve(ref)
+                store.commit_info(sha)
+            except (KeyError, ValueError, AttributeError):
+                raise web.HTTPNotFound(text=f"No version {ref!r} in this project.")
+            label = fontrestore.ref_label(store, sha)
+            for attempt in range(3):
+                if backend is not None:
+                    backend.flush()  # commit pending edits first, so nothing is lost
+                head = store.head(branch)
+                changes, headTree, oldTree = fontrestore.restore_changes(
+                    store, head, sha, parts
+                )
+                if not changes:
+                    return web.json_response(
+                        {
+                            "branch": branch,
+                            "head": head,
+                            "restored": sha,
+                            "parts": parts,
+                            "changed": False,
+                            "result": fontrestore.result_sentence(parts, label, False),
+                        }
+                    )
+                if parts is None or fontrestore.GUARDED_PARTS & set(parts):
+                    problem = fontrestore.coherence_problem(
+                        headTree, oldTree, changes, wholeFont=parts is None
+                    )
+                    if problem:
+                        return web.json_response(
+                            {"message": problem, "wholeFont": parts is not None},
+                            status=409,
+                        )
+                message, summary = fontrestore.commit_message(
+                    store, headTree, oldTree, parts, changes
+                )
+                try:
+                    newHead = store.commit(
+                        changes,
+                        branch=branch,
+                        message=message,
+                        author=_author(access, self.author),
+                        expected_head=head,
+                    )
+                    break
+                except RefMovedError:
+                    continue  # someone committed meanwhile: compute it again
+            else:
+                raise web.HTTPConflict(text="The branch kept moving. Try again.")
+            if backend is not None:
+                # Same code path as a commit made by someone else: what changed
+                # is reloaded from git and every connected editor is notified.
+                await backend.check_external_changes()
+        finally:
+            if backend is None:
+                store.close()
+        return web.json_response(
+            {
+                "branch": branch,
+                "head": newHead,
+                "restored": sha,
+                "parts": parts,
+                "changed": True,
+                "title": message.split("\n", 1)[0],
+                "summary": [c.summary for c in summary],
+                "result": fontrestore.result_sentence(parts, label, True),
+            }
         )
 
     async def headHandler(self, request: web.Request) -> web.Response:
@@ -1713,16 +1847,12 @@ class DevHiveProjectManager(CommentRoutesMixin):
                             store.read_blob(names)
                         )
                     sourceNames = cache[("names", names)]
-                try:
-                    cache[key] = fontdiff.file_changes(
-                        path,
-                        store.read_blob(before) if before else None,
-                        store.read_blob(after) if after else None,
-                        sourceNames,
-                    )
-                except Exception:  # one change we cannot describe: not the history
-                    logger.exception("could not describe the change of %s", path)
-                    cache[key] = []
+                cache[key] = fontdiff.file_changes(
+                    path,
+                    store.read_blob(before) if before else None,
+                    store.read_blob(after) if after else None,
+                    sourceNames,
+                )
             changes += cache[key]
         return fontdiff.sort_changes(changes)
 

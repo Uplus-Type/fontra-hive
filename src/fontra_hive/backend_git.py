@@ -314,6 +314,14 @@ class GitFontraBackend(FontraBackend):
         self.tree.reset(head)
         self.tree.pending = pending
         self._updateGlyphDependencies(changes)
+        # FontraBackend reads kerning.csv and features.txt again only when
+        # they exist: one deleted (a restoration to a version without
+        # kerning, without features) would stay in memory.
+        for kind, path in changes:
+            if kind == Change.deleted and path == str(self.kerningPath):
+                self.fontData.kerning = {}
+            elif kind == Change.deleted and path == str(self.featureTextPath):
+                self.fontData.features.text = ""
         reloadPattern = await self.fileWatcherProcessChanges(changes)
         if reloadPattern or reloadPattern is None:
             await self.fileWatcherNotifyCallbacks(reloadPattern)
