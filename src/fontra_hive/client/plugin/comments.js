@@ -1733,6 +1733,39 @@ export class HiveComments {
       // an older Fontra: always on at start
     }
     layers.toggle(LAYER_ID, on);
+    this.addToAppearanceMenu(definition.name);
+  }
+
+  // Fontra makes an action for each switchable layer when the editor starts,
+  // before this layer exists: View › Glyph editor appearance would show the
+  // missing action's identifier, greyed. Its item is given a title and its own
+  // switch instead, each time the menu opens.
+  addToAppearanceMenu(title) {
+    const editor = this.editor;
+    if (typeof editor.getViewMenuItems !== "function" || editor.hiveCommentsMenu) {
+      return;
+    }
+    editor.hiveCommentsMenu = true;
+    const actionIdentifier = `actions.glyph-editor-appearance.${LAYER_ID}`;
+    const getViewMenuItems = editor.getViewMenuItems.bind(editor);
+    const ourItem = (item) =>
+      item?.actionIdentifier === actionIdentifier
+        ? {
+            title,
+            checked: item.checked,
+            enabled: () => true,
+            callback: () => {
+              const model = editor.visualizationLayersSettings?.model;
+              if (model) model[LAYER_ID] = !model[LAYER_ID];
+            },
+          }
+        : item;
+    editor.getViewMenuItems = () =>
+      getViewMenuItems().map((item) => {
+        if (typeof item?.getItems !== "function") return item;
+        const getItems = item.getItems;
+        return { ...item, getItems: () => getItems().map(ourItem) };
+      });
   }
 
   drawPins({ context, positionedGlyph, controller }) {
