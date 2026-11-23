@@ -67,6 +67,7 @@ from typing import Any, Protocol
 
 from .access import Access, HiveUser
 from .export import check_feature_includes
+from .gitstore import one_line
 from .hiveapi import HiveApiUnavailable
 from .recipe import (
     HiveProject,
@@ -748,10 +749,46 @@ def _scrub(text: str, paths) -> str:
     return text
 
 
+# Hive's own actions refuse with a sentence of theirs (an ``ActionError``):
+# that one is told, after RUN_FAILED, on one line. Never another action's.
+HIVE_ACTION_PREFIXES = ("hive-read: ", "hive-write: ", "hive-artifact: ")
+
+
+def actionSentence(error: BaseException, depth: int = 0) -> str | None:
+    """The sentence of one of Hive's actions that stopped a run (an
+    ``ActionError`` whose text starts with :data:`HIVE_ACTION_PREFIXES`), on
+    one line, or None."""
+    from fontra.workflow.actions import ActionError
+
+    if isinstance(error, ActionError):
+        text = " ".join(one_line(error).split())
+        if text.startswith(HIVE_ACTION_PREFIXES):
+            return text[:MESSAGE_CHARACTERS]
+        return None
+    if depth > 10:
+        return None
+    if isinstance(error, BaseExceptionGroup):
+        for inner in error.exceptions:
+            found = actionSentence(inner, depth + 1)
+            if found:
+                return found
+        return None
+    cause = error.__cause__ or error.__context__
+    return actionSentence(cause, depth + 1) if cause is not None else None
+
+
+def _isActionSentence(message: str) -> bool:
+    return message.startswith(HIVE_ACTION_PREFIXES) and one_line(message) == message
+
+
 def failedMessage(result: RunResult) -> str:
-    """What people read of a failed run: one of :data:`FAILED_MESSAGES`."""
+    """What people read of a failed run: one of :data:`FAILED_MESSAGES`, or
+    :data:`RUN_FAILED` followed by the sentence of one of Hive's actions
+    (:func:`actionSentence`): what the action says, never a trace."""
     if result.message in FAILED_MESSAGES:
         return result.message  # the server's own
+    if _isActionSentence(result.message):
+        return f"{RUN_FAILED} {result.message}"
     if PANIC in result.log:
         return COMPILER_CRASHED
     if result.reason == STOPPED:
@@ -1046,6 +1083,10 @@ async def _execute(
             from .export import FEATURES_REFUSED
 
             return INVALID, FEATURES_REFUSED, REFUSED_FEATURES
+        sentence = actionSentence(error)
+        if sentence:
+            logger.warning("the run stopped: %s", sentence)  # no trace
+            return FAILED, sentence, ""
         logger.exception("the run failed")
         return FAILED, "", ""
     finally:
