@@ -554,7 +554,10 @@ def _guidelines_change(sourceName: str, old: list, new: list) -> FontChange:
     if changed:
         items.append(f"{changed} changed")
     return FontChange(
-        "sources", _sentence(f"Font guidelines ({sourceName})", items), fields, words="font guidelines"
+        "sources",
+        _sentence(f"Font guidelines ({sourceName})", items),
+        fields,
+        words="font guidelines",
     )
 
 
@@ -567,6 +570,20 @@ def _status_labels(font) -> dict:
         for d in definitions
         if isinstance(d, dict) and d.get("label") is not None
     }
+
+
+def _status_text(definition: dict) -> str:
+    """``Approved · value 4 · #00FF80`` (a status definition in words)."""
+    parts = [str(definition.get("label", "?")), f"value {_text(definition.get('value'))}"]
+    color = definition.get("color")
+    if isinstance(color, list) and len(color) >= 3:
+        try:
+            parts.append("#" + "".join(f"{round(float(c) * 255):02X}" for c in color[:3]))
+        except (TypeError, ValueError):
+            pass
+    if definition.get("isDefault"):
+        parts.append("default")
+    return " · ".join(parts)
 
 
 def _status_definitions_change(old, new) -> FontChange | None:
@@ -582,23 +599,27 @@ def _status_definitions_change(old, new) -> FontChange | None:
         label = str(d.get("label", value))
         if value not in byValueA:
             items.append(f"{label} added")
-            fields.append(Field(label, None, _text(d)))
+            fields.append(Field(label, None, _status_text(d)))
         elif byValueA[value] != d:
             before = str(byValueA[value].get("label", value))
             if before != label:
                 items.append(f"{before} renamed {label}")
             else:
                 items.append(f"{label} changed")
-            fields.append(Field(label, _text(byValueA[value]), _text(d)))
+            fields.append(Field(label, _status_text(byValueA[value]), _status_text(d)))
     for value, d in byValueA.items():
         if value not in byValueB:
             label = str(d.get("label", value))
             items.append(f"{label} removed")
-            fields.append(Field(label, _text(d), None))
+            fields.append(Field(label, _status_text(d), None))
     if not items:
         items.append("order changed")
         fields.append(Field("definitions", _text(a), _text(b)))
     return FontChange("statusDefinitions", _sentence("Development status", items), fields)
+
+
+def _what_happened(f: Field) -> str:
+    return "added" if f.before is None else "removed" if f.after is None else "changed"
 
 
 def _custom_data_changes(old: dict, new: dict) -> list[FontChange]:
@@ -624,10 +645,7 @@ def _custom_data_changes(old: dict, new: dict) -> list[FontChange]:
         items = [_item(f.label, f.before, f.after) for f in settings]
         changes.append(FontChange("customData", _sentence("Font custom data", items), settings))
     if plugins:
-        items = [
-            f"{f.label} {'added' if f.before is None else 'removed' if f.after is None else 'changed'}"
-            for f in plugins
-        ]
+        items = [f"{f.label} {_what_happened(f)}" for f in plugins]
         changes.append(FontChange("pluginData", _sentence("Plug-in data", items), plugins))
     return changes
 

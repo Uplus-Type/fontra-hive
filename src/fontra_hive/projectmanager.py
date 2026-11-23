@@ -1552,7 +1552,11 @@ class DevHiveProjectManager(CommentRoutesMixin):
         if kind == "glyphs" and not path:
             path = ("glyphs", fontdiff.GLYPH_INFO)
         elif (kind == "font" or areas) and not path:
-            path = fontdiff.BEYOND_THE_GLYPH_FILES if not areas & {"glyphInfo"} else fontdiff.FONT_FILES
+            path = (
+                fontdiff.FONT_FILES
+                if "glyphInfo" in areas
+                else fontdiff.BEYOND_THE_GLYPH_FILES
+            )
         limit = min(int(request.query.get("limit", "50")), 500)
         store = GitRepoStore.open(repoPath)
         try:
@@ -1731,7 +1735,8 @@ class DevHiveProjectManager(CommentRoutesMixin):
     async def fontDiffHandler(self, request: web.Request) -> web.Response:
         """What changed between two versions of the font (``from``, ``to``:
         commit shas, branches or tags; ``to`` defaults to the branch head,
-        ``from`` to the first parent of ``to``): every change beyond the
+        ``from`` to the first parent of ``to``, ``first``: the first commit
+        of its line): every change beyond the
         glyph, field by field (the features as lines), and the glyphs
         changed. For a version, a snapshot, or "Compare with now"."""
         repoPath, _ = await self._project(request, request.match_info["name"], "read")
@@ -1742,7 +1747,16 @@ class DevHiveProjectManager(CommentRoutesMixin):
                 to = store.resolve(request.query.get("to") or branch)
                 parents = store.commit_info(to).parents
                 ref = request.query.get("from")
-                old = store.resolve(ref) if ref else (parents[0] if parents else None)
+                if ref == "first":
+                    # The first commit of the line (the import): what a
+                    # first snapshot gathered.
+                    old = to
+                    while store.commit_info(old).parents:
+                        old = store.commit_info(old).parents[0]
+                else:
+                    old = (
+                        store.resolve(ref) if ref else (parents[0] if parents else None)
+                    )
                 if old is not None:
                     store.commit_info(old)  # exists
             except (KeyError, ValueError):

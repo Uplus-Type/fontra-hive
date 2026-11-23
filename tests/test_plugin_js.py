@@ -781,3 +781,138 @@ def test_snapshot_refusal_texts(page):
         None,
         True,
     ]
+
+
+# The font's history beyond the glyph: what each change did, in words, the
+# filter, and the detail of a change or of a snapshot (fonthistory.js).
+FONT_SERVER = """async () => {
+  const original = window.fetch;
+  const json = (data) => new Response(JSON.stringify(data));
+  const font = (area, summary, domain = "fontsettings") => ({ area, domain, summary });
+  window.fetch = async (url, options = {}) => {
+    const u = new URL(url);
+    const route = u.pathname.split("/").pop();
+    const q = Object.fromEntries(u.searchParams);
+    if (route === "font-diff") {
+      state.requests.push({ route, ...q });
+      return json({
+        from: q.from || null, to: q.to || sha("3"),
+        changes: [
+          { area: "axes", domain: "fontsettings", summary: "Axes: wght 100–900 → 200–900",
+            fields: [{ label: "wght range", before: "100–900", after: "200–900" }] },
+          { area: "features", domain: "fontsettings", summary: "Features: 1 line added",
+            fields: [],
+            lines: [["@", "@@ -1 +1,2 @@"], [" ", "feature kern {"], ["+", "  pos A V -50;"]] },
+        ],
+        glyphs: [{ name: "A", kind: "changed" }, { name: "Z", kind: "removed" }],
+      });
+    }
+    const response = await original(url, options);
+    if (route !== "log" || q.glyph) return response;
+    const data = await response.json();
+    for (const commit of data.commits) {
+      if (commit.sha === sha("4")) {
+        commit.font = [font("axes", "Axes: wght 100–900 → 200–900"),
+                       font("sources", "Sources: Black added"),
+                       font("kerning", "Kerning: 3 pairs changed (Bold)", "kerning"),
+                       font("glyphInfo", "Glyph info: Z added", "edit")];
+      } else {
+        commit.font = [];
+      }
+    }
+    return json(data);
+  };
+  await panel.refresh(true);
+}"""
+
+
+def test_font_history_says_what_changed_beyond_the_glyph(page):
+    page.evaluate(SETUP)
+    # A detail left open by an earlier test of this page.
+    page.evaluate(
+        "document.querySelectorAll('.hive-fontdiff, .hive-fontdiff-backdrop')"
+        ".forEach((e) => e.remove())"
+    )
+    select(page, None)
+    page.evaluate(FONT_SERVER)
+    root = "panel.shadowRoot"
+    # Two sentences under the change, the third behind "▸ 1 more"; the
+    # glyph info is the glyphs', not said here.
+    lines = f"[...rowFor('4').querySelectorAll('.font-summary-line')].map(e => e.textContent)"
+    assert page.evaluate(lines) == [
+        "Axes: wght 100–900 → 200–900",
+        "Sources: Black added",
+    ]
+    assert page.evaluate("rowFor('4').querySelector('.font-summary-more').textContent") == (
+        "▸ 1 more"
+    )
+    page.evaluate("rowFor('4').querySelector('.font-summary-more').click()")
+    assert page.evaluate(lines)[-1] == "Kerning: 3 pairs changed (Bold)"
+    assert page.evaluate("rowFor('2').querySelector('.font-summary')") is None
+    # The filter: All changes / Glyphs / Beyond the glyph, asked of the server.
+    buttons = f"[...{root}.querySelectorAll('.filter button')]"
+    assert page.evaluate(f"{buttons}.map(b => b.textContent)") == [
+        "All changes",
+        "Glyphs",
+        "Beyond the glyph",
+    ]
+    page.evaluate(f"{buttons}[2].click()")
+    page.evaluate("wait(50)")
+    assert page.evaluate("state.requests.filter(r => r.route === 'log').at(-1).kind") == "font"
+    assert page.evaluate(f"{root}.querySelector('.summary-line').textContent").startswith(
+        "Beyond the glyph — "
+    )
+    assert page.evaluate("localStorage.getItem('hive.fontHistoryFilter')") == "font"
+    # A glyph's history has no filter.
+    select(page, "A")
+    assert page.evaluate(f"{root}.querySelector('.filter').hidden") is True
+    assert page.evaluate("state.requests.filter(r => r.route === 'log').at(-1).kind") is None
+    select(page, None)
+    page.evaluate(f"{buttons}[0].click()")
+    page.evaluate("wait(50)")
+    assert page.evaluate("localStorage.getItem('hive.fontHistoryFilter')") == "all"
+
+    # A click on a change: its detail, field by field, the features as lines.
+    page.evaluate("rowFor('4').click()")
+    page.wait_for_selector(".hive-fontdiff h4")
+    dialog = "document.querySelector('.hive-fontdiff')"
+    assert page.evaluate("state.requests.filter(r => r.route === 'font-diff').at(-1).to") == (
+        "4" * 40
+    )
+    assert page.evaluate(f"[...{dialog}.querySelectorAll('h4')].map(e => e.textContent)") == [
+        "Axes: wght 100–900 → 200–900",
+        "Features: 1 line added",
+    ]
+    assert page.evaluate(f"[...{dialog}.querySelectorAll('td')].map(e => e.textContent)") == [
+        "wght range",
+        "100–900",
+        "200–900",
+    ]
+    kinds = f"[...{dialog}.querySelectorAll('pre.lines div')].map(e => e.className)"
+    assert page.evaluate(kinds) == [
+        "hunk",
+        "same",
+        "add",
+    ]
+    # Each glyph changed is a link to it.
+    page.evaluate("panel.goToGlyph = (name) => (window.wentTo = name)")
+    page.evaluate(f"{dialog}.querySelector('.glyphs button.changed').click()")
+    assert page.evaluate("window.wentTo") == "A"
+    assert page.evaluate(dialog) is None  # closed on the way
+
+    # A snapshot: what it gathered (since the first commit: no snapshot
+    # before it), and "Compare with now".
+    page.evaluate(f"{root}.querySelector('.snapshot').click()")
+    page.wait_for_selector(".hive-fontdiff .modes button")
+    last = "state.requests.filter(r => r.route === 'font-diff').at(-1)"
+    assert page.evaluate(f"[{last}.from, {last}.to]") == ["first", "5" * 40]
+    page.evaluate(f"[...{dialog}.querySelectorAll('.modes button')][1].click()")
+    page.evaluate("wait(50)")
+    assert page.evaluate(f"[{last}.from, {last}.to ?? null]") == ["5" * 40, None]
+    assert page.evaluate(
+        f"[...{dialog}.querySelectorAll('.modes button')]"
+        ".map(b => b.textContent + ':' + b.className)"
+    ) == ["This snapshot:", "Compare with now:selected"]
+    page.keyboard.press("Escape")
+    assert page.evaluate(dialog) is None
+    assert page.errors == []

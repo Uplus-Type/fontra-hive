@@ -17,7 +17,13 @@
 //     how each compares with the default branch; switch branch (the same
 //     view on the other branch), make a new branch, delete one, bring back
 //     a deleted one; merge a branch into the default one, or bring it up to
-//     date from it (a dialog with the conflicts drawn side by side).
+//     date from it (a dialog with the conflicts drawn side by side);
+//   - in Font info, a History section: the changes of the panel open, in
+//     words, each with its detail (fonthistory.js);
+//   - an edit the server refuses (a domain the project keeps to some people)
+//     is said in one sentence and the page goes back to the server's state
+//     (installEditGuard); the project's glyph sets are greyed without
+//     "plugindata".
 //
 // It only uses what Fontra exposes publicly: the top bar element, the
 // #fontra-project-name element Fontra adds to it, and the view controller
@@ -909,6 +915,7 @@ export class HiveViews {
         const closed = closedDomainBadge(this.view, this.access.capabilities);
         if (closed) topBar.append(el("span", { class: "hive-badge", title: closed.title }, [closed.label]));
         if (this.view === "editor" && !this.access.capabilities.includes("kerning")) this.closeKerningTool();
+        if (!this.access.capabilities.includes("plugindata")) closeProjectGlyphSets();
       }
     } else {
       document.body.append(
@@ -1648,6 +1655,8 @@ export const WRITERS_WORDS = {
   listed: "these people",
 };
 export const KERNING_CLOSED = "Kerning · ask a manager: on this project, the kerning is kept to some people";
+export const GLYPH_SETS_CLOSED =
+  "Plug-in data · ask a manager: on this project, the project's glyph sets are kept to some people";
 
 // The badge of a view whose domain the project keeps closed to this person
 // (null: none). Font info is all font settings.
@@ -1835,6 +1844,377 @@ export function openShareDialog(projectName, { onClose, free = false, billingUrl
   return dialog;
 }
 
+// --- edits the server refuses ---------------------------------------------------------
+//
+// Fontra applies an edit on the page before the server answers, and does not
+// handle the server's refusal yet (font-controller.js: "TODO handle error"
+// after editFinal): the refused change stayed on screen until the page was
+// reloaded. Hive's server refuses an edit with a ReadOnlyError whose message
+// names the domain ("Kerning is kept to some people on this project. Ask a
+// manager."); Fontra's remote call rejects with RemoteError("ReadOnlyError('…')").
+//
+// The net: editFinal returns the error instead of throwing it (what its
+// callers expect: `const error = await editFinal(…)`, so they finish as
+// Fontra wrote them), the page says the server's sentence, and the change is
+// taken back with its own rollback, the way a collaborator's edit arrives
+// (viewController.externalChange(rollbackChange): the panels, the canvas and
+// the glyph sets follow). Without a rollback, or if that fails, the view
+// reloads from the server (reloadData(null), Fontra's "reload everything").
+// A refused editIncremental (a drag) is a rejection nobody awaits: said
+// once; its editFinal, refused too, takes the whole gesture back (else the
+// view reloads after a moment).
+
+// The server's sentence in a refusal (null: not a refusal).
+export function readOnlyReason(error) {
+  const text = String(error?.message ?? error ?? "");
+  const match = text.match(/ReadOnlyError\((['"])([\s\S]*)\1\)/);
+  if (!match) return null;
+  return match[2].replace(/\\(['"\\])/g, "$1");
+}
+
+// "Not saved: Kerning is kept to some people on this project. Ask a manager."
+export function refusalText(reason) {
+  if (/^read-only \(/.test(reason)) return "Not saved: your role cannot change this font.";
+  return `Not saved: ${reason}`;
+}
+
+const REFUSAL_NOTICE_MS = 9000;
+
+export function showRefusal(text) {
+  ensureStyle();
+  const existing = document.querySelector(".hive-notice.hive-refusal");
+  if (existing?.dataset.text === text) {
+    clearTimeout(existing.timer);
+    existing.timer = setTimeout(() => existing.remove(), REFUSAL_NOTICE_MS);
+    return existing;
+  }
+  existing?.remove();
+  const notice = el("div", { class: "hive-notice error hive-refusal", role: "alert" }, [
+    el("span", { class: "message" }, [text]),
+    el("button", { class: "close", type: "button", title: "Close", "aria-label": "Close", onclick: () => notice.remove() }, ["×"]),
+  ]);
+  notice.dataset.text = text;
+  notice.timer = setTimeout(() => notice.remove(), REFUSAL_NOTICE_MS);
+  document.body.append(notice);
+  return notice;
+}
+
+// Install the net on a view controller (editor, font overview, font info).
+// Returns false when there is nothing to guard or it is already there.
+export function installEditGuard(controller, { say = showRefusal, incrementalGraceMs = 2000 } = {}) {
+  const fontController = controller?.fontController;
+  if (!fontController?.editFinal || fontController.__hiveEditGuard) return false;
+  fontController.__hiveEditGuard = true;
+  let reloadTimer = null;
+  const reload = async () => {
+    try {
+      if (controller.reloadData) await controller.reloadData(null);
+      else await fontController.reloadEverything?.();
+    } catch (error) {
+      console.error("Hive: could not reload after a refused edit", error);
+    }
+  };
+  const takeBack = async (rollbackChange) => {
+    clearTimeout(reloadTimer);
+    reloadTimer = null;
+    // After the caller has finished with the edit it thinks was made.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    if (rollbackChange && controller.externalChange) {
+      try {
+        await controller.externalChange(rollbackChange, false);
+        return;
+      } catch (error) {
+        console.error("Hive: could not take a refused edit back", error);
+      }
+    }
+    await reload();
+  };
+  const editFinal = fontController.editFinal.bind(fontController);
+  fontController.editFinal = async (finalChange, rollbackChange, ...rest) => {
+    try {
+      return await editFinal(finalChange, rollbackChange, ...rest);
+    } catch (error) {
+      const reason = readOnlyReason(error);
+      if (reason === null) throw error;
+      say(refusalText(reason));
+      takeBack(rollbackChange); // once the caller is done
+      return error;
+    }
+  };
+  window.addEventListener("unhandledrejection", (event) => {
+    const reason = readOnlyReason(event.reason);
+    if (reason === null) return;
+    event.preventDefault();
+    say(refusalText(reason));
+    if (!reloadTimer) reloadTimer = setTimeout(() => ((reloadTimer = null), reload()), incrementalGraceMs);
+  });
+  return true;
+}
+
+// The project's glyph sets (Fontra's font overview and the editor's glyph
+// search) are plug-in data: for a designer to whom the project keeps them
+// closed, their "+" and pencil buttons are greyed and say why. "My glyph
+// sets" stays open (it lives in the browser); its "Copy to project glyph
+// sets" is refused by the server, and the net above says so.
+export async function closeProjectGlyphSets({ timeout = WAIT_TIMEOUT_MS } = {}) {
+  const css = `
+    #project-glyph-sets .ui-accordion-item-header icon-button,
+    #project-glyph-sets .glyphset-button-group icon-button:not(.glyphset-error-button) {
+      opacity: 0.35; cursor: not-allowed;
+    }`;
+  const closeIn = (accordion) => {
+    if (!accordion?.shadowRoot || accordion.__hiveGlyphSetsClosed) return;
+    accordion.__hiveGlyphSetsClosed = true;
+    accordion.shadowRoot.append(el("style", {}, [css]));
+    const item = (accordion.items || []).find((i) => i.id === "project-glyph-sets");
+    if (item?.auxiliaryHeaderElement) item.auxiliaryHeaderElement.title = GLYPH_SETS_CLOSED;
+    accordion.shadowRoot.addEventListener(
+      "click",
+      (event) => {
+        const button = event.composedPath().find((n) => n.tagName === "ICON-BUTTON");
+        if (!button || button.classList.contains("glyphset-error-button")) return;
+        if (!event.composedPath().some((n) => n.id === "project-glyph-sets")) return;
+        event.stopPropagation();
+        event.preventDefault();
+        showRefusal(GLYPH_SETS_CLOSED.replace(" · ask a manager:", ":") + ". Ask a manager.");
+      },
+      true
+    );
+  };
+  const find = () => {
+    const found = [];
+    const overview = document.getElementById("panel-navigation-accordion");
+    if (overview) found.push(overview);
+    const search = window.editorController?.getSidebarPanel?.("glyph-search");
+    const inSearch = search?.shadowRoot?.querySelector("#panel-glyph-search-accordion");
+    if (inSearch) found.push(inSearch);
+    return found.length ? found : null;
+  };
+  const accordions = await waitFor(find, timeout);
+  for (const accordion of accordions || []) closeIn(accordion);
+  return (accordions || []).length;
+}
+
+// --- Font info: History ------------------------------------------------------------------
+
+// What the History section says when a panel has no change yet.
+export const PANEL_WORDS = {
+  "font-info-panel": "the font info",
+  "axes-panel": "the axes",
+  "sources-panel": "the sources",
+  "opentype-feature-code-panel": "the features",
+  "conditional-substitutions-panel": "the conditional substitutions",
+  "cross-axis-mapping-panel": "the cross-axis mapping",
+  "development-status-definitions-panel": "the development status definitions",
+};
+
+const HISTORY_POLL_MS = 3000;
+const HISTORY_LIMIT = 30;
+
+const HISTORY_STYLE = `
+  :host { display: block; width: 17em; margin-top: 1.4em; font-family: fontra-ui-regular, sans-serif;
+          color: var(--ui-element-foreground-color, inherit); }
+  h3 { font-size: 1.15em; margin: 0 0 0.2em; }
+  .scope { font-size: 0.85em; opacity: 0.6; margin-bottom: 0.6em; }
+  .list { display: flex; flex-direction: column; gap: 3px; max-height: calc(100vh - 22em); overflow: auto; }
+  .change { padding: 0.35em 0.5em 0.15em; border-radius: 0.35em; cursor: pointer;
+            background: var(--text-input-background-color, rgba(128,128,128,0.1)); font-size: 0.9em; }
+  .change:hover { background: var(--text-input-background-color-hover, rgba(128,128,128,0.2)); }
+  .line { display: flex; gap: 0.4em; align-items: baseline; white-space: nowrap; }
+  .who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .when { flex: none; opacity: 0.6; font-size: 0.92em; font-variant-numeric: tabular-nums; }
+  .empty, .error { font-size: 0.88em; opacity: 0.65; }
+  .error { color: var(--fontra-red-color, #d33); opacity: 1; }
+  /* A narrow column: the sentences wrap. */
+  .font-summary { white-space: normal; }
+  .font-summary-line { overflow: visible; padding-left: 0.9em; text-indent: -0.9em; }
+`;
+
+function shortDate(unixSeconds) {
+  const date = new Date(unixSeconds * 1000);
+  const now = new Date();
+  if (date.toDateString() === now.toDateString()) {
+    return date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  }
+  return date.toLocaleDateString(undefined, { day: "numeric", month: "short", year: date.getFullYear() === now.getFullYear() ? undefined : "numeric" });
+}
+
+// The History section, under the panel list of Font info. Shows the
+// changes of the open panel (the log route's "area"), newest first, for
+// whoever may read the project (Font info read-only included).
+export class FontInfoHistory {
+  constructor(project, history, { pollMs = HISTORY_POLL_MS } = {}) {
+    this.project = project;
+    this.history = history; // the fonthistory.js module
+    this.pollMs = pollMs;
+    this.head = null;
+    this.panelId = null;
+    this.open = new Set(); // changes whose sentences are all shown
+    this.host = el("div", { class: "hive-fontinfo-history" });
+    const shadow = this.host.attachShadow({ mode: "open" });
+    shadow.append(el("style", {}, [HISTORY_STYLE + history.SUMMARY_STYLES]));
+    this.scope = el("div", { class: "scope" });
+    this.list = el("div", { class: "list" });
+    shadow.append(el("h3", {}, ["History"]), this.scope, this.list);
+    this.commits = [];
+  }
+
+  url(route, params = {}) {
+    const url = new URL(`/api/hive/projects/${encodeURIComponent(this.project.name)}/${route}`, location.origin);
+    url.searchParams.set("branch", this.project.branch);
+    for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+    return url;
+  }
+
+  areas() {
+    return this.history.PANEL_AREAS[this.panelId] || null;
+  }
+
+  async show(panelId) {
+    this.panelId = panelId;
+    const areas = this.areas();
+    this.host.hidden = !areas;
+    if (!areas) return;
+    this.scope.textContent = `Changes to ${PANEL_WORDS[panelId] || "this panel"}`;
+    await this.load();
+  }
+
+  async load() {
+    const areas = this.areas();
+    if (!areas) return;
+    const panelId = this.panelId;
+    try {
+      const response = await fetch(this.url("log", { area: areas.join(","), limit: HISTORY_LIMIT }), {
+        credentials: "same-origin",
+      });
+      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+      const data = await response.json();
+      if (panelId !== this.panelId) return; // another panel meanwhile
+      this.head = data.head;
+      const snapshots = new Set((data.snapshots || []).map((s) => s.sha));
+      this.commits = data.commits.filter((c) => !snapshots.has(c.sha));
+      this.render();
+    } catch (error) {
+      this.list.replaceChildren(el("div", { class: "error" }, [`Could not load the history (${error.message}).`]));
+    }
+  }
+
+  render() {
+    const areas = this.areas();
+    const rows = [];
+    for (const commit of this.commits) {
+      const lines = this.history.summaryLines(commit, areas);
+      if (!lines.length) continue;
+      const row = el(
+        "div",
+        {
+          class: "change",
+          title: `${commit.author} — ${new Date(commit.time * 1000).toLocaleString()}\n${lines.join("\n")}\n\nClick to see what it changed`,
+          onclick: (event) => {
+            if (!event.target.closest("button")) this.openDetail(commit);
+          },
+        },
+        [
+          el("div", { class: "line" }, [
+            el("span", { class: "who" }, [commit.author || "?"]),
+            el("span", { class: "when" }, [shortDate(commit.time)]),
+          ]),
+        ]
+      );
+      row.dataset.sha = commit.sha;
+      row.append(
+        this.history.summaryBlock(lines, {
+          isOpen: this.open.has(commit.sha),
+          onToggle: (isOpen) => {
+            if (isOpen) this.open.add(commit.sha);
+            else this.open.delete(commit.sha);
+            this.render();
+          },
+        })
+      );
+      rows.push(row);
+    }
+    this.list.replaceChildren(
+      ...(rows.length ? rows : [el("div", { class: "empty" }, [`No change to ${PANEL_WORDS[this.panelId] || "this panel"} yet.`])])
+    );
+  }
+
+  openDetail(commit) {
+    return this.history.openFontDiff({
+      projectName: this.project.name,
+      branch: this.project.branch,
+      title: (commit.message || "").split("\n")[0],
+      who: `${commit.author || "?"} · ${new Date(commit.time * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`,
+      modes: [{ label: "This change", to: commit.sha }],
+      areas: this.areas(),
+      onGlyph: (name) => {
+        const url = new URL("/editor.html", location.origin);
+        url.searchParams.set("project", this.project.identifier);
+        url.searchParams.set("text", `/${name}`);
+        window.open(url.toString(), "_blank");
+      },
+    });
+  }
+
+  async poll() {
+    try {
+      const response = await fetch(this.url("head"), { credentials: "same-origin" });
+      if (!response.ok) return;
+      const { head } = await response.json();
+      if (head !== this.head) await this.load();
+    } catch (error) {
+      // next time
+    }
+  }
+
+  start() {
+    this.timer = setInterval(() => document.visibilityState === "visible" && this.poll(), this.pollMs);
+  }
+}
+
+// Mount the History section in Font info (any project of this server; not
+// a font kept in the browser by Try Fontra).
+export async function mountFontInfoHistory(project = currentProject(), { timeout = WAIT_TIMEOUT_MS } = {}) {
+  if (!project || /^(local|demo):/.test(project.name)) return null;
+  const controller = await waitFor(() => window.fontInfoController?.multiPanelController && window.fontInfoController, timeout);
+  const container = document.querySelector("#multi-panel-header-container");
+  if (!controller || !container) return null;
+  let history;
+  try {
+    history = await import(new URL("../plugin/fonthistory.js", import.meta.url).href);
+  } catch (error) {
+    return null;
+  }
+  const panels = controller.multiPanelController;
+  const section = new FontInfoHistory(project, history);
+  // Fontra's panel list fills the column's height: History goes under it.
+  ensureStyle();
+  document.head.append(
+    el("style", {}, [
+      "#multi-panel-header-container { display: flex; flex-direction: column; overflow: auto; }" +
+        " #multi-panel-header-container > ui-accordion { flex: none; height: auto; }",
+    ])
+  );
+  container.append(section.host);
+  // Fontra's panel list calls selectPanel(): follow it.
+  const selectPanel = panels.selectPanel.bind(panels);
+  panels.selectPanel = (...args) => {
+    const result = selectPanel(...args);
+    if (panels.selectedPanelIdentifier !== section.panelId) section.show(panels.selectedPanelIdentifier);
+    return result;
+  };
+  await section.show(panels.selectedPanelIdentifier);
+  section.start();
+  window.hiveFontInfoHistory = section;
+  return section;
+}
+
+// The net, on any view with a font (whether or not the server has accounts).
+export async function guardEdits({ timeout = WAIT_TIMEOUT_MS } = {}) {
+  const controller = await waitFor(() => (viewController()?.fontController?.editFinal ? viewController() : null), timeout);
+  return controller ? installEditGuard(controller) : false;
+}
+
 // The File menu Fontra shows when a view has no getFileMenuItems (copied from
 // fontra-menus.js, which a page script cannot import): "Export as" when the
 // project manager offers formats, else disabled New / Open.
@@ -1914,4 +2294,8 @@ export async function start() {
 
 if (!window.__hiveViewsNoAutoStart) {
   start();
+  if (currentProject()) {
+    guardEdits();
+    if (currentView() === "fontinfo") mountFontInfoHistory();
+  }
 }

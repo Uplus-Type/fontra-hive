@@ -340,6 +340,32 @@ and is served by the Fontra server itself under `/hive/plugin/`.
   references and per-commit authorship are unaffected, and the history of
   every edit stays available. (Compacting old history into one commit per
   snapshot, on a separate branch or by rewriting, is left for later.)
+- **Beyond the glyph.** In the font history, each change says in words what
+  it did to the font settings, the kerning and the plug-ins' data ("Axes:
+  wght 100–900 → 200–900", "Line metrics (Regular): xHeight 500 → 510",
+  "Features: 12 lines added, 3 removed", "Kerning: 34 pairs changed
+  (Bold)"): two lines under the change, the rest behind a ▸. A filter
+  shows *All changes*, *Glyphs* or *Beyond the glyph*. A click on a change
+  opens its detail: before and after, field by field, the features as
+  lines, and the glyphs changed (a click goes to the glyph); on a
+  snapshot, what it gathered, and *Compare with now*. The words come from
+  `fontdiff.py`, which reads `font-data.json`, `features.txt`,
+  `kerning.csv` and `glyph-info.csv` with Fontra's own functions. New
+  commits carry them (title "Edit axes, features; Edit A, B", one sentence
+  per line, and a `Hive-Font: fontsettings kerning` trailer naming the
+  domains touched); older ones are described when the history is read
+  (cached per pair of file versions). Route: `GET
+  /api/hive/projects/<name>/font-diff?from=&to=` (read).
+- **History in Font info.** Under the panel list of Font info, *History*
+  shows the changes of the panel open (font info, axes, sources, features,
+  cross-axis mapping, development status…), with the same detail. Anyone
+  who may read the project sees it, Font info read-only included.
+- **An edit the server refuses** (a domain the project keeps to some
+  people) is said in one sentence, the server's, and taken back on the
+  page with its own rollback, as a collaborator's edit would be; nothing
+  stays on screen that the server did not keep. Without "plugindata", the
+  project's glyph sets are greyed in the font overview and the glyph
+  search.
 
 The panel registers itself when the editor is served by Hive (it appears as
 a clock icon in the right sidebar). Otherwise, once per browser: *Application

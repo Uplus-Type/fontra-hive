@@ -24,11 +24,17 @@
 //     since the previous snapshot are grouped under it in the list (an empty
 //     commit plus a snapshot/<name> tag on the server; nothing is rewritten).
 //
+//   - in the font history, what each change did beyond the glyph, in words
+//     (two lines, the rest behind a ▸), a filter (All changes / Glyphs /
+//     Beyond the glyph), and a click on a change or a snapshot opens its
+//     detail, field by field, with "Compare with now" for a snapshot
+//     (fonthistory.js);
 //   - comments on glyphs, in comments.js.
 //
 // Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
 
 import { initComments } from "./comments.js";
+import { FILTERS, SUMMARY_STYLES, openFontDiff, summaryBlock, summaryLines } from "./fonthistory.js";
 
 const POLL_INTERVAL_MS = 1500; // how often the branch head is checked (a tiny request)
 const CONFIRM_TIMEOUT_MS = 5000; // how long "Confirm restore?" stays armed
@@ -39,6 +45,7 @@ const HOVER_ALPHA = 0.45; // a hovered version is drawn like a pinned one, paler
 const PRELOAD_COUNT = 8; // versions loaded in the background after the list is shown
 const MAX_CACHED_PREVIEWS = 60;
 const MAX_CACHED_GLYPHS = 600;
+const FILTER_KEY = "hive.fontHistoryFilter"; // the font history's filter, per browser
 
 const STYLES = `
   /* Soft amber for everything "history": kept away from Fontra's red
@@ -358,6 +365,17 @@ const STYLES = `
     border: none;
     padding: 0 0.3em;
   }
+  /* A change of the font history that went beyond the glyph: its sentences
+     under its line. */
+  .commit.has-summary {
+    flex-wrap: wrap;
+    row-gap: 0;
+    height: auto;
+  }
+  .filter[hidden] {
+    display: none;
+  }
+${SUMMARY_STYLES}
 `;
 
 function parseProjectIdentifier(identifier) {
@@ -370,6 +388,23 @@ function parseProjectIdentifier(identifier) {
 function previewKey(sha, glyphName) {
   return `${sha}\n${glyphName}`;
 }
+
+// The font history's filter, as left in this browser.
+function readFilter() {
+  try {
+    const key = localStorage.getItem(FILTER_KEY);
+    return FILTERS.some((f) => f.key === key) ? key : "all";
+  } catch (error) {
+    return "all";
+  }
+}
+
+// The list's first line, by filter.
+const FILTER_WORDS = {
+  all: "The whole font",
+  glyphs: "The glyphs",
+  font: "Beyond the glyph",
+};
 
 // Short date for the rows: the time today, the day this year, else the year.
 function formatDate(unixSeconds) {
@@ -636,6 +671,11 @@ class HiveHistoryPanel extends HTMLElement {
     // What the person may do here (/access), once known: a snapshot of the
     // whole font takes "fontsettings", one of a glyph "snapshot".
     this.capabilities = null;
+    // The font history's filter (FILTERS) and the changes whose sentences
+    // are shown whole (▸ opened).
+    this.filter = readFilter();
+    this.openSummaries = new Set();
+    this.detail = null; // the detail dialog open, if any
 
     const shadow = this.attachShadow({ mode: "open" });
     const style = document.createElement("style");
@@ -653,6 +693,7 @@ class HiveHistoryPanel extends HTMLElement {
       onmouseleave: () => this.unhover(null),
     });
     this.titleElement = el("span", { class: "title" }, ["Font history"]);
+    this.filterElement = el("div", { class: "filter", role: "group" });
     this.snapshotButton = el(
       "button",
       {
@@ -668,7 +709,7 @@ class HiveHistoryPanel extends HTMLElement {
         // A click on empty space (between or below the rows, the labels, the
         // panel margins) deselects, like in a file list.
         onclick: (event) => {
-          const interactive = ".commit, .snapshot, button, input, .snapshot-form, .status";
+          const interactive = ".commit, .snapshot, button, input, .snapshot-form, .status, .filter";
           if (!event.target.closest(interactive)) this.clearPreview();
         },
       }, [
@@ -680,6 +721,7 @@ class HiveHistoryPanel extends HTMLElement {
             el("button", { class: "refresh", title: "Refresh", onclick: () => this.refresh(true) }, ["↻"]),
           ]),
         ]),
+        this.filterElement,
         this.formElement,
         this.listElement,
         this.statusElement,
@@ -689,6 +731,8 @@ class HiveHistoryPanel extends HTMLElement {
     const { name, branch } = parseProjectIdentifier(editor.projectIdentifier || "");
     this.projectName = name;
     this.branch = branch;
+    // Try Fontra (a font kept in the browser) has no font-diff route.
+    this.hasFontDetail = !/^(local|demo):/.test(name);
     // The project's label from the server when it is not its identifier
     // (a font kept in the browser by "Try Fontra" is "local:<id>").
     const label = editor.fontController?.metaInfo?.projectName || "";
@@ -794,6 +838,7 @@ class HiveHistoryPanel extends HTMLElement {
   // of the whole font.
   updateHeader(glyphName) {
     this.titleElement.textContent = glyphName ? "Glyph history" : "Font history";
+    this.renderFilter(glyphName);
     const refusal = snapshotRefusal(glyphName, this.capabilities);
     this.snapshotButton.disabled = Boolean(refusal);
     this.snapshotButton.title =
@@ -813,8 +858,10 @@ class HiveHistoryPanel extends HTMLElement {
     if (glyphName === this.lastGlyph && !force) return;
     this.loading = true;
     let data;
+    const filter = this.activeFilter(glyphName);
     try {
       const params = glyphName ? { glyph: glyphName, limit: 100 } : { limit: 100 };
+      if (filter !== "all") params.kind = filter;
       const response = await fetch(this.apiURL("log", params));
       if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
       data = await response.json();
@@ -830,6 +877,7 @@ class HiveHistoryPanel extends HTMLElement {
       this.loading = false;
     }
     if (glyphName !== this.selectedGlyphName) return; // the user moved on meanwhile
+    if (filter !== this.activeFilter(glyphName)) return; // the filter changed meanwhile
     if (glyphName !== this.lastGlyph) this.expanded.clear();
     this.lastGlyph = glyphName;
     this.head = data.head;
@@ -869,7 +917,7 @@ class HiveHistoryPanel extends HTMLElement {
         el("div", { class: "summary-line" }, [
           glyphName
             ? `${glyphName} — ${n} version${n === 1 ? "" : "s"}`
-            : `The whole font — ${n >= 100 ? "the last " : ""}${n} change${n === 1 ? "" : "s"}`,
+            : `${FILTER_WORDS[this.activeFilter(null)]} — ${n >= 100 ? "the last " : ""}${n} change${n === 1 ? "" : "s"}`,
         ])
       );
     }
@@ -1063,7 +1111,17 @@ class HiveHistoryPanel extends HTMLElement {
   // Hover and click behaviour shared by commit and snapshot rows.
   attachPreviewHandlers(row, sha, glyphName, isCurrent) {
     row.dataset.sha = sha;
-    if (isCurrent || !glyphName) {
+    if (!glyphName) {
+      // A version of the whole font has no glyph to preview: a click opens
+      // what it changed.
+      row.addEventListener("click", (event) => {
+        if (event.target.closest("button")) return;
+        this.clearPreview();
+        this.openDetail(sha);
+      });
+      return;
+    }
+    if (isCurrent) {
       // The current version is what the canvas shows already, and a version
       // of the whole font has no glyph to preview: clicking deselects.
       row.addEventListener("click", (event) => {
@@ -1111,6 +1169,22 @@ class HiveHistoryPanel extends HTMLElement {
         el("span", { class: "when" }, [formatDate(commit.time)]),
       ]
     );
+    // In the font's history: what it changed beyond the glyph, in words.
+    const lines = glyphName ? [] : summaryLines(commit);
+    if (lines.length) {
+      row.classList.add("has-summary");
+      row.append(
+        summaryBlock(lines, {
+          isOpen: this.openSummaries.has(commit.sha),
+          onToggle: (open) => {
+            if (open) this.openSummaries.add(commit.sha);
+            else this.openSummaries.delete(commit.sha);
+            this.render(this.lastGlyph, null);
+          },
+        })
+      );
+    }
+    if (!glyphName && this.hasFontDetail) row.title += "\n\nClick to see what it changed";
     this.attachPreviewHandlers(row, commit.sha, glyphName, isCurrent);
     return row;
   }
@@ -1175,10 +1249,13 @@ class HiveHistoryPanel extends HTMLElement {
                 .map((issue) => `#${issue.number}`)
                 .join(", ")}`
             : "") +
-          (isCurrent
-            ? " (current)"
-            : glyphName
-              ? "\n\nHover to preview the glyph at this snapshot, click to keep it"
+          (isCurrent ? " (current)" : "") +
+          (glyphName
+            ? isCurrent
+              ? ""
+              : "\n\nHover to preview the glyph at this snapshot, click to keep it"
+            : this.hasFontDetail
+              ? "\n\nClick to see what it gathered, or compare it with now"
               : ""),
       },
       [
@@ -1220,7 +1297,9 @@ class HiveHistoryPanel extends HTMLElement {
         el("span", { class: "text hint" }, [
           this.lastGlyph
             ? "Hover a version to preview it, click to keep it"
-            : "Select a glyph to preview and restore its versions",
+            : this.hasFontDetail
+              ? "Click a change to see it in detail. Select a glyph to preview and restore its versions"
+              : "Select a glyph to preview and restore its versions",
         ])
       );
       return;
@@ -1252,6 +1331,101 @@ class HiveHistoryPanel extends HTMLElement {
     if (glyphSnapshot) return `snapshot “${glyphSnapshot.title}”`;
     const snapshot = this.snapshots.find((s) => s.sha === sha);
     return snapshot ? `font snapshot “${snapshot.title}”` : sha.slice(0, 10);
+  }
+
+  // --- the font history, beyond the glyph -----------------------------------
+
+  // The filter of the font history ("all" in a glyph's history).
+  activeFilter(glyphName) {
+    return glyphName || !this.hasFontDetail ? "all" : this.filter;
+  }
+
+  renderFilter(glyphName) {
+    this.filterElement.hidden = !!glyphName || !this.hasFontDetail;
+    this.filterElement.replaceChildren(
+      ...FILTERS.map((f) =>
+        el(
+          "button",
+          {
+            class: f.key === this.filter ? "selected" : "",
+            title: f.title,
+            "aria-pressed": f.key === this.filter ? "true" : "false",
+            onclick: () => this.setFilter(f.key),
+          },
+          [f.label]
+        )
+      )
+    );
+  }
+
+  setFilter(key) {
+    if (key === this.filter) return;
+    this.filter = key;
+    try {
+      localStorage.setItem(FILTER_KEY, key);
+    } catch (error) {
+      // private mode: for this page only
+    }
+    this.renderFilter(this.selectedGlyphName);
+    this.refresh(true);
+  }
+
+  // The detail of a change or of a snapshot of the whole font, over the page.
+  openDetail(sha) {
+    if (!this.hasFontDetail) return null;
+    this.detail?.close();
+    const snapshot = this.snapshots.find((s) => s.sha === sha);
+    const commit = this.commits.find((c) => c.sha === sha);
+    let options;
+    if (snapshot) {
+      options = {
+        title: `Snapshot “${snapshot.title}”`,
+        who: `${snapshot.author} · ${formatFullDate(snapshot.time)}`,
+        modes: [
+          {
+            label: "This snapshot",
+            title: "What changed since the previous snapshot",
+            from: snapshot.base || "first",
+            to: snapshot.sha,
+            otherLabel: "Also in this snapshot",
+          },
+          {
+            label: "Compare with now",
+            title: `From this snapshot to the font as it is now on ${this.branch}`,
+            from: snapshot.sha,
+            otherLabel: "Also changed since",
+          },
+        ],
+      };
+    } else if (commit) {
+      options = {
+        title: (commit.message || "").split("\n")[0] || commit.sha.slice(0, 10),
+        who: `${commit.author || "?"} · ${formatFullDate(commit.time)}`,
+        modes: [{ label: "This change", to: commit.sha }],
+      };
+    } else {
+      return null;
+    }
+    this.detail = openFontDiff({
+      projectName: this.projectName,
+      branch: this.branch,
+      ...options,
+      onGlyph: (name) => this.goToGlyph(name),
+    });
+    return this.detail;
+  }
+
+  // Show a glyph on the canvas: selected if it is there, else added at the
+  // end of the text (as a comment's "Show" does).
+  async goToGlyph(glyphName) {
+    const sceneSettings = this.editor.sceneController?.sceneSettings;
+    const comments = this.comments;
+    if (!sceneSettings || !comments?.findOnCanvas) return;
+    let found = comments.findOnCanvas(glyphName);
+    if (!found && (await comments.appendToText?.(glyphName))) {
+      found = comments.findOnCanvas(glyphName);
+    }
+    if (found) sceneSettings.selectedGlyph = { ...found, isEditing: true };
   }
 
   // --- snapshots -----------------------------------------------------------
