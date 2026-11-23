@@ -1036,9 +1036,9 @@ class DevHiveProjectManager(CommentRoutesMixin):
             if head is None:
                 raise web.HTTPNotFound(text=f"no branch {branch}")
             try:
-                sha = store.resolve(ref)
+                sha = store.resolve_commit(ref)
                 data = store.read_file(sha, path)
-            except KeyError:
+            except (KeyError, ValueError):
                 raise web.HTTPNotFound(text=f"{glyphName} does not exist at {ref}")
             if backend is not None:
                 backend.flush()  # commit pending edits first, so nothing is lost
@@ -1119,9 +1119,8 @@ class DevHiveProjectManager(CommentRoutesMixin):
             if store.head(branch) is None:
                 raise web.HTTPNotFound(text=f"No branch {branch!r}.")
             try:
-                sha = store.resolve(ref)
-                store.commit_info(sha)
-            except (KeyError, ValueError, AttributeError):
+                sha = store.resolve_commit(ref)
+            except (KeyError, ValueError):
                 raise web.HTTPNotFound(text=f"No version {ref!r} in this project.")
             label = fontrestore.ref_label(store, sha)  # the commit: UTC
             # The sentence the person reads: in their time.
@@ -1350,8 +1349,8 @@ class DevHiveProjectManager(CommentRoutesMixin):
             if backend is not None:
                 backend.flush()
             try:
-                sha = store.resolve(fromRef)
-            except KeyError:
+                sha = store.resolve_commit(fromRef)
+            except (KeyError, ValueError):
                 raise web.HTTPNotFound(
                     text=f"Nothing called {fromRef!r} to start from."
                 )
@@ -1996,21 +1995,24 @@ class DevHiveProjectManager(CommentRoutesMixin):
         store = GitRepoStore.open(repoPath)
         try:
             try:
-                to = store.resolve(toRef or branch)
+                to = store.resolve_commit(toRef or branch)
                 parents = store.commit_info(to).parents
                 ref = fromRef
                 if ref == "first":
                     # The first commit of the line (the import): what a
-                    # first snapshot gathered.
-                    old = to
-                    while store.commit_info(old).parents:
-                        old = store.commit_info(old).parents[0]
+                    # first snapshot gathered. The line of a commit never
+                    # changes: cached by commit (the branch's head).
+                    cache = self._sourcesCache()
+                    old = cache.get(("first", repoPath, to))
+                    if old is None:
+                        old = store.first_commit(to)
+                        cache[("first", repoPath, to)] = old
                 else:
                     old = (
-                        store.resolve(ref) if ref else (parents[0] if parents else None)
+                        store.resolve_commit(ref)
+                        if ref
+                        else (parents[0] if parents else None)
                     )
-                if old is not None:
-                    store.commit_info(old)  # exists
             except (KeyError, ValueError):
                 raise web.HTTPNotFound()
             changes = self._fontChangesBetween(store, old, to, detail=True)
@@ -2172,8 +2174,8 @@ class DevHiveProjectManager(CommentRoutesMixin):
         store = GitRepoStore.open(repoPath)
         try:
             try:
-                data = store.read_file(store.resolve(ref), glyphPath(glyphName))
-            except KeyError:
+                data = store.read_file(store.resolve_commit(ref), glyphPath(glyphName))
+            except (KeyError, ValueError):
                 raise web.HTTPNotFound()
         finally:
             store.close()

@@ -385,8 +385,7 @@ async def _resolve(context, actionName, ref: HiveProjectRef, capability) -> Hive
 
 def _resolveCommit(store: GitRepoStore, ref: str, project: str) -> str:
     try:
-        sha = store.resolve(ref)
-        store.commit_info(sha)  # a full sha is not checked by resolve()
+        sha = store.resolve_commit(ref)
     except Exception:
         raise ActionError(
             f"hive-read: nothing called {ref!r} in {project!r} "

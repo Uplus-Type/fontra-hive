@@ -492,6 +492,30 @@ class GitRepoStore:
                 return _s(obj.id)
         raise KeyError(f"unknown ref {ref!r}")
 
+    def resolve_commit(self, ref: str) -> str:
+        """:meth:`resolve`, for a ref that must name a commit: a full id of
+        a tree, a blob or nothing raises KeyError (a 404 for the routes),
+        never an AttributeError further on."""
+        sha = self.resolve(ref)
+        try:
+            obj = self.repo[_b(sha)]
+        except (KeyError, ValueError):
+            raise KeyError(f"unknown ref {ref!r}")
+        if not isinstance(obj, Commit):
+            raise KeyError(f"{ref!r} is not a commit")
+        return sha
+
+    def first_commit(self, sha: str) -> str:
+        """The first commit (the import) of the first-parent line of
+        ``sha``: commit objects only."""
+        store = self.repo.object_store
+        commit_id = _b(sha)
+        while True:
+            parents = store[commit_id].parents
+            if not parents:
+                return _s(commit_id)
+            commit_id = parents[0]
+
     # --- reading -----------------------------------------------------------
 
     def tree_sha(self, commit_sha: str) -> str:

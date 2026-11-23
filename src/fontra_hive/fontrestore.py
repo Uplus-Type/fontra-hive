@@ -420,6 +420,7 @@ def coherence_problem(
     axes and sources, or the whole font with ``wholeFont``)."""
     parts = set(parts) if parts is not None else {"axesAndSources"}
     checkGlyphs = wholeFont or "axesAndSources" in parts
+
     def after(path):
         if path in changes:
             return changes[path]
