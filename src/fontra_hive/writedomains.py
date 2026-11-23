@@ -116,6 +116,83 @@ def _walk(change, prefix: tuple, found: set[str]) -> None:
         _walk(child, path, found)
 
 
+# --- names ----------------------------------------------------------------------
+
+# The fields whose text is a name (a source's, an axis's tag or label, a
+# component's glyph), and the kerning's groups, whose members are glyph names.
+NAME_FIELDS = frozenset({"name", "tag", "label", "baseGlyph", "glyphName"})
+GROUP_FIELDS = frozenset({"groupsSide1", "groupsSide2"})
+
+# Every control character (C0, DEL, C1) and the Unicode line and paragraph
+# separators: never in a name.
+_CONTROL = frozenset(chr(c) for c in [*range(0x00, 0x20), *range(0x7F, 0xA0), 0x2028, 0x2029])
+
+NAME_REFUSAL = "A name cannot contain a line break or a control character"
+
+
+def hasControlCharacter(text: str) -> bool:
+    return any(c in _CONTROL for c in text)
+
+
+def nameWithControlCharacter(change) -> str | None:
+    """The first name the change writes that holds a control character or a
+    line separator (a glyph, a source, an axis, a kerning group, a layer, a
+    key of the custom data…), or None. Names are the keys written (of a
+    ``=``, of every mapping written), the text of :data:`NAME_FIELDS`, and
+    the kerning groups' members. Other texts (font info, features, notes)
+    may hold line breaks; the path and what is deleted are not looked at."""
+    found: list[str] = []
+    _walkNames(change, (), found)
+    return found[0] if found else None
+
+
+def _walkNames(change, prefix: tuple, found: list) -> None:
+    if found or not isinstance(change, dict):
+        return
+    path = change.get("p") or []
+    if not isinstance(path, list):
+        return
+    # The path names what exists already: only what is written is checked
+    # (a name made before can still be fixed, or deleted).
+    path = prefix + tuple(path)
+    function = change.get("f")
+    args = change.get("a") or []
+    if isinstance(args, list) and args:
+        if function == "=":
+            key = args[0]
+            if isinstance(key, str) and hasControlCharacter(key):
+                found.append(key)
+                return
+            for value in args[1:]:
+                _walkValue(value, key, path + (key,), found)
+        elif function == "+":
+            for value in args[1:]:
+                _walkValue(value, None, path, found)
+        elif function == ":":
+            for value in args[2:]:
+                _walkValue(value, None, path, found)
+    for child in change.get("c") or []:
+        _walkNames(child, path, found)
+
+
+def _walkValue(value, key, path: tuple, found: list) -> None:
+    if found:
+        return
+    if isinstance(value, str):
+        inGroup = any(p in GROUP_FIELDS for p in path)
+        if (key in NAME_FIELDS or inGroup) and hasControlCharacter(value):
+            found.append(value)
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            if isinstance(k, str) and hasControlCharacter(k):
+                found.append(k)
+                return
+            _walkValue(v, k, path + (k,), found)
+    elif isinstance(value, list):
+        for v in value:
+            _walkValue(v, key, path, found)
+
+
 def refusal(domain: str) -> str:
     """Why a change in ``domain`` is refused, in the person's words."""
     if domain == EDIT:

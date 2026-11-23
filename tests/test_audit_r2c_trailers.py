@@ -85,6 +85,17 @@ from conftest import run  # noqa: E402
 from r2c_bench import body, connection, make_manager, request, store_of  # noqa: E402
 
 
+@pytest.fixture
+def without_the_name_guard(monkeypatch):
+    """Since the re-check of the audit, the editor refuses a name with a
+    line break before it is written (HiveFontHandler._checkNames). These
+    tests check the second line of defence, one_line in the commit
+    message, as if a name had come through: the guard is set aside."""
+    from fontra_hive.fonthandler import HiveFontHandler
+
+    monkeypatch.setattr(HiveFontHandler, "_checkNames", staticmethod(lambda change: None))
+
+
 def first_source_id(manager):
     store = store_of(manager)
     try:
@@ -110,7 +121,7 @@ def no_forged_line(message):
     assert sum(line.startswith("Hive-Glyphs:") for line in lines) <= 1
 
 
-def test_a_source_name_forges_no_snapshot(tmp_path, fixture_fontra):
+def test_a_source_name_forges_no_snapshot(tmp_path, fixture_fontra, without_the_name_guard):
     """Ana renames a source with a line break: the rename is listed beyond
     the glyph and in Sources, and no snapshot appears."""
     manager = make_manager(tmp_path, fixture_fontra)
@@ -166,7 +177,7 @@ def new_glyph_change(glyph, newName, advance):
     }
 
 
-def test_a_glyph_name_forges_no_hive_glyphs(tmp_path, fixture_fontra):
+def test_a_glyph_name_forges_no_hive_glyphs(tmp_path, fixture_fontra, without_the_name_guard):
     """Fabio (edit only) edits A and makes a glyph named with a line break
     and 'Hive-Glyphs: B': A's history lists his edit."""
     manager = make_manager(tmp_path, fixture_fontra)
@@ -194,7 +205,7 @@ def test_a_glyph_name_forges_no_hive_glyphs(tmp_path, fixture_fontra):
     run(go())
 
 
-def test_a_designer_with_edit_only_makes_no_snapshot(tmp_path, fixture_fontra):
+def test_a_designer_with_edit_only_makes_no_snapshot(tmp_path, fixture_fontra, without_the_name_guard):
     """Fabio (edit only) edits A and makes a glyph named with a line break
     and 'Hive-Snapshot:': his commit stays in A's history and in Glyphs, and
     no snapshot appears."""

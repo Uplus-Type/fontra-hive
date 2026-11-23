@@ -16,7 +16,12 @@ changing Fontra:
   one part falls in a domain (font settings, kerning, plug-in data) the
   person may not write. The check is in ``editIncremental`` and
   ``editFinal``, not in ``scheduleDataWrite``: by then Fontra has already
-  applied the change in memory and sent it to the others.
+  applied the change in memory and sent it to the others;
+- **names**: a name with a control character or a line break (a glyph, a
+  source, an axis, a kerning group, a key of the custom data) is refused
+  there too (:func:`fontra_hive.writedomains.nameWithControlCharacter`);
+- **a branch that follows the remote repository** (``upstream/…``) is read
+  only for everyone: only the pull writes it.
 
 Who is on a connection comes from ``connection.authorizationToken``, the
 value the project manager's ``authorize()`` returned for that websocket.
@@ -37,13 +42,26 @@ from fontra.core.fonthandler import FontHandler, funcName, remoteMethod
 from .access import Access, splitReadOnlyMark
 from .backend_git import current_author
 from .gitstore import FOLLOWS_REMOTE
-from .writedomains import EDIT, WRITE_DOMAINS, changeDomains, refusal
+from .writedomains import (
+    EDIT,
+    NAME_REFUSAL,
+    WRITE_DOMAINS,
+    changeDomains,
+    nameWithControlCharacter,
+    refusal,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class ReadOnlyError(PermissionError):
     pass
+
+
+class InvalidNameError(ValueError):
+    """A name with a control character or a line break: refused at the
+    guard, before it is written or sent to anyone (one_line keeps commit
+    messages safe anyway; this keeps such names out of the font)."""
 
 
 @dataclass(kw_only=True)
@@ -101,9 +119,16 @@ class HiveFontHandler(FontHandler):
         access = self.accessFor(connection)
         return access is None or access.read_only
 
+    @staticmethod
+    def _checkNames(change) -> None:
+        name = nameWithControlCharacter(change)
+        if name is not None:
+            raise InvalidNameError(f"{NAME_REFUSAL}: {name!r}.")
+
     @remoteMethod
     async def editIncremental(self, liveChange, *, connection) -> None:
         self._checkCanEdit(connection, liveChange)
+        self._checkNames(liveChange)
         await super().editIncremental(liveChange, connection=connection)
 
     @remoteMethod
@@ -113,6 +138,8 @@ class HiveFontHandler(FontHandler):
         # The rollback is checked too: the client sends it back as an edit
         # to undo.
         self._checkCanEdit(connection, finalChange, rollbackChange)
+        # The new names only: the rollback may hold an old name being fixed.
+        self._checkNames(finalChange)
         await super().editFinal(
             finalChange, rollbackChange, editLabel, broadcast, connection=connection
         )

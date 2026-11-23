@@ -160,6 +160,11 @@ fontra --launch hive-dev repos
   font settings. Font info opens in Fontra's read-only mode for them (for
   that connection only), the editor's kerning tool is greyed, and the
   font's snapshot ("Snapshot…" with no glyph selected) takes `fontsettings`.
+- A name written with a control character or a line break (a glyph, a
+  source, an axis, a kerning group, a layer, a key of the custom data) is
+  refused the same way, for everyone: "A name cannot contain a line break
+  or a control character". Other texts (font info, features, notes) may
+  hold line breaks, and a name made before can still be fixed or deleted.
 - With hive-api, the capabilities are those of the role that hive-api also
   lists for that person and project (`/api/internal/access`): the accounts
   service can take some away, never add one, and its `notice` (why) is
