@@ -2282,3 +2282,39 @@ def test_an_older_hive_api_shows_no_section(browser_and_url):  # noqa: F811
     assert page.query_selector(".writers") is None
     assert page.errors == []
     page.close()
+
+
+# --- the Download panel: a snapshot -----------------------------------------------------
+
+
+def test_download_a_snapshot(browser_and_url):  # noqa: F811
+    hive = "/api/hive/projects/uplustype%2FMutator"
+    snapshot = {"name": "round-1", "title": "Round 1", "sha": "5" * 40, "author": "Mei",
+                "time": 1795000000, "base": None, "changes": 3, "glyphs": []}
+    page = open_home(
+        browser_and_url,
+        "#project/uplustype/Mutator",
+        {
+            "GET /api/projects/uplustype/Mutator": [
+                200, {"project": project("uplustype", "Mutator", "admin")}],
+            f"GET {hive}/repository": [200, {"exists": True}],
+            f"GET {hive}/snapshots?branch=main": [
+                200, {"branch": "main", "head": "6" * 40, "snapshots": [snapshot],
+                      "pending": 0, "pendingAuthors": []}],
+            "GET /api/hive/export-formats": [
+                200, {"formats": [{"format": "fontra", "label": "Fontra package"}]}],
+            f"GET {hive}/export": [200, {"zip": 1}],
+        },
+    )
+    choice = "select[aria-label='Snapshot to download']"
+    page.wait_for_selector(choice)
+    assert page.eval_on_selector_all(
+        choice + " option", "os => os.map(o => [o.value, o.textContent.split(' · ')[0]])"
+    ) == [["", "None: the latest version"], ["round-1", "Round 1"]]
+    page.select_option(choice, "round-1")
+    page.click("text=Fontra package")
+    page.wait_for_function("calls.some(c => c.path.endsWith('/export'))")
+    export = page.evaluate("calls.find(c => c.path.endsWith('/export'))")
+    assert export["query"].startswith("?format=fontra&ref=snapshot%2Fround-1&run=")
+    assert page.errors == []
+    page.close()

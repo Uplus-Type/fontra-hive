@@ -11,7 +11,11 @@
 //   - openFontDiff() asks the server for the detail of a version, of a
 //     snapshot or of a snapshot compared with now (GET …/font-diff): before
 //     and after, field by field; the features as lines; the glyphs changed,
-//     each a link to the glyph.
+//     each a link to the glyph;
+//   - from that detail, the font or some parts of it can be brought back
+//     as they were (POST …/restore-font): "Restore whole font…" for the
+//     managers, "Restore…" for the parts, each greyed without the right
+//     to change it, and "Restore this panel" in Font info.
 //
 // Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
 
@@ -37,6 +41,71 @@ export const PANEL_AREAS = {
   "cross-axis-mapping-panel": ["mappings"],
   "development-status-definitions-panel": ["statusDefinitions"],
 };
+
+// What can be restored alone (the server's fontrestore.PARTS): the areas
+// each part brings back and the capability it takes.
+export const RESTORE_PARTS = [
+  { key: "fontInfo", label: "Font info", areas: ["fontInfo"], capability: "fontsettings" },
+  {
+    key: "axesAndSources",
+    label: "Axes and sources",
+    areas: ["axes", "mappings", "sources"],
+    capability: "fontsettings",
+  },
+  {
+    key: "features",
+    label: "Features",
+    areas: ["features", "conditionalSubstitutions"],
+    capability: "fontsettings",
+  },
+  {
+    key: "statusDefinitions",
+    label: "Development status",
+    areas: ["statusDefinitions"],
+    capability: "fontsettings",
+  },
+  { key: "kerning", label: "Kerning", areas: ["kerning"], capability: "kerning" },
+  { key: "pluginData", label: "Plug-in data", areas: ["pluginData"], capability: "plugindata" },
+  { key: "glyphInfo", label: "Glyph info", areas: ["glyphInfo"], capability: "edit" },
+];
+
+// The part each panel of Font info sets ("Restore this panel").
+export const PANEL_PARTS = {
+  "font-info-panel": "fontInfo",
+  "axes-panel": "axesAndSources",
+  "sources-panel": "axesAndSources",
+  "cross-axis-mapping-panel": "axesAndSources",
+  "opentype-feature-code-panel": "features",
+  "conditional-substitutions-panel": "features",
+  "development-status-definitions-panel": "statusDefinitions",
+};
+
+export const WHOLE_FONT_CAPABILITY = "merge";
+
+const DOMAIN_WORDS = {
+  fontsettings: "Font settings are",
+  kerning: "Kerning is",
+  plugindata: "Plug-in data is",
+};
+
+// Why a part is greyed (null: it is not). Unknown capabilities (null): open,
+// the server decides.
+export function partRefusal(part, capabilities) {
+  if (!capabilities || capabilities.includes(part.capability)) return null;
+  if (part.capability === "edit") return "Your role cannot change this font.";
+  return `${DOMAIN_WORDS[part.capability]} kept to some people on this project. Ask a manager.`;
+}
+
+// Whether "Restore whole font…" is offered: to the managers.
+export function mayRestoreWholeFont(capabilities) {
+  return !capabilities || capabilities.includes(WHOLE_FONT_CAPABILITY);
+}
+
+// The parts whose areas a font-diff answer shows changed.
+export function partsChanged(data) {
+  const areas = new Set((data?.changes || []).map((c) => c.area));
+  return RESTORE_PARTS.filter((part) => part.areas.some((a) => areas.has(a))).map((p) => p.key);
+}
 
 // How many sentences show before the ▸.
 export const SHOWN_LINES = 2;
@@ -234,6 +303,22 @@ const DIALOG_STYLES = `
   .hive-fontdiff .glyphs button { padding: 1px 8px; border-radius: 1em; }
   .hive-fontdiff .glyphs button.added { border-color: rgba(60, 160, 90, 0.8); }
   .hive-fontdiff .glyphs button.removed { opacity: 0.6; text-decoration: line-through; cursor: default; }
+  .hive-fontdiff footer.restore { flex: none; display: flex; flex-direction: column; gap: 8px;
+    padding: 10px 20px 14px; border-top: 1px solid rgba(128,128,128,0.25); }
+  .hive-fontdiff footer.restore .actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .hive-fontdiff footer.restore .actions .spacer { flex: 1; }
+  .hive-fontdiff footer.restore button.armed { background: rgb(200, 146, 34); border-color: rgb(200, 146, 34);
+    color: #1b1300; }
+  .hive-fontdiff footer.restore button:disabled { opacity: 0.45; cursor: default; }
+  .hive-fontdiff footer.restore button:disabled:hover { border-color: rgba(128,128,128,0.5); }
+  .hive-fontdiff footer.restore .parts { display: grid; grid-template-columns: repeat(auto-fill, minmax(11em, 1fr));
+    gap: 4px 12px; }
+  .hive-fontdiff footer.restore label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+  .hive-fontdiff footer.restore label.refused { opacity: 0.45; cursor: default; }
+  .hive-fontdiff footer.restore .said { line-height: 1.4; }
+  .hive-fontdiff footer.restore .said.done { color: var(--fontra-green-color, rgb(40, 140, 70)); }
+  .hive-fontdiff footer.restore .said.error { color: var(--fontra-red-color, #d33); }
+  .hive-fontdiff footer.restore .note { margin: 0; }
 `;
 
 function ensureDialogStyle() {
@@ -341,11 +426,254 @@ export function renderFontDiff(data, { areas = null, onGlyph = null, otherLabel 
   return content;
 }
 
+// --- restoring ----------------------------------------------------------------------
+
+// How long a "Confirm?" stays armed (as for a glyph).
+export const CONFIRM_TIMEOUT_MS = 5000;
+
+// Ask the server to bring the font, or ``parts`` of it, back as at ``ref``.
+// Returns {ok, status, data} (data: the server's JSON, or {message}).
+export async function requestRestore({ projectName, branch, ref, parts = null }) {
+  const url = new URL(
+    `/api/hive/projects/${encodeURIComponent(projectName)}/restore-font`,
+    window.location.origin
+  );
+  url.searchParams.set("branch", branch);
+  url.searchParams.set("ref", ref);
+  if (parts) url.searchParams.set("parts", parts.join(","));
+  const response = await fetch(url, { method: "POST", credentials: "same-origin" });
+  const text = await response.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (error) {
+    data = { message: text || response.statusText };
+  }
+  return { ok: response.ok, status: response.status, data };
+}
+
+// The bar under the detail of a version or a snapshot: "Restore this panel"
+// (Font info), "Restore…" (some parts) and "Restore whole font…" (the
+// managers). Each asks "Confirm?" before it acts, then says what happened.
+// ``label``: how the version is named ("“Round 1”", "this version").
+// Returns {element, update(data)}: ``data``, the font-diff shown, ticks the
+// parts it changed when the parts are chosen.
+export function restoreBar({
+  projectName,
+  branch,
+  ref,
+  label,
+  capabilities = null,
+  panelPart = null,
+  onRestored = null,
+}) {
+  const element = el("footer", { class: "restore" });
+  const state = {
+    choosing: false,
+    chosen: new Set(),
+    armed: null, // "panel" | "parts" | "whole"
+    timer: null,
+    busy: false,
+    said: null, // {text, kind: "done" | "error"}
+    offerWhole: false, // after a refusal of coherence
+  };
+  const whole = mayRestoreWholeFont(capabilities);
+  const panel = panelPart ? RESTORE_PARTS.find((p) => p.key === panelPart) : null;
+
+  const disarm = () => {
+    clearTimeout(state.timer);
+    state.armed = null;
+  };
+  const arm = (which) => {
+    disarm();
+    state.armed = which;
+    state.said = null;
+    state.timer = setTimeout(() => {
+      state.armed = null;
+      render();
+    }, CONFIRM_TIMEOUT_MS);
+    render();
+  };
+
+  const go = async (parts) => {
+    disarm();
+    state.busy = true;
+    state.said = null;
+    render();
+    let result;
+    try {
+      result = await requestRestore({ projectName, branch, ref, parts });
+    } catch (error) {
+      result = { ok: false, status: 0, data: { message: error.message } };
+    }
+    state.busy = false;
+    if (result.ok) {
+      state.choosing = false;
+      state.offerWhole = false;
+      state.said = { text: result.data.result || "Restored.", kind: "done" };
+      render();
+      if (result.data.changed) onRestored?.(result.data);
+      return;
+    }
+    // A refusal of coherence comes as the server says it, with the whole
+    // font when the person may restore it.
+    state.offerWhole = result.status === 409 && !!result.data.wholeFont && whole;
+    state.said = { text: result.data.message || `Error ${result.status}`, kind: "error" };
+    render();
+  };
+
+  const confirmButton = (which, text, title, parts, disabled = false) => {
+    const armed = state.armed === which;
+    return el(
+      "button",
+      {
+        class: `restore-${which}${armed ? " armed" : ""}`,
+        title: armed ? `Click again to confirm. ${title}` : title,
+        onclick: () => (state.armed === which ? go(parts) : arm(which)),
+        ...(disabled || state.busy ? { disabled: "" } : {}),
+      },
+      [state.busy && armed ? "Restoring…" : armed ? "Confirm?" : text]
+    );
+  };
+
+  const wholeTitle =
+    `Bring the whole font back as at ${label}: the glyphs made since go, the ones deleted since come back. ` +
+    "A new version; nothing is deleted from the history.";
+
+  function render() {
+    const rows = [];
+    if (state.choosing) {
+      rows.push(el("div", { class: "note" }, [`Bring back as at ${label}:`]));
+      rows.push(
+        el(
+          "div",
+          { class: "parts" },
+          RESTORE_PARTS.map((part) => {
+            const refusal = partRefusal(part, capabilities);
+            const box = el("input", {
+              type: "checkbox",
+              value: part.key,
+              ...(refusal ? { disabled: "" } : {}),
+              onchange: (event) => {
+                if (event.target.checked) state.chosen.add(part.key);
+                else state.chosen.delete(part.key);
+                disarm();
+                render();
+              },
+            });
+            box.checked = !refusal && state.chosen.has(part.key);
+            return el(
+              "label",
+              { class: refusal ? "part refused" : "part", title: refusal || `Restore ${part.label.toLowerCase()} only` },
+              [box, part.label]
+            );
+          })
+        )
+      );
+      const chosen = RESTORE_PARTS.filter(
+        (part) => state.chosen.has(part.key) && !partRefusal(part, capabilities)
+      ).map((p) => p.key);
+      rows.push(
+        el("div", { class: "actions" }, [
+          confirmButton(
+            "parts",
+            "Restore",
+            "Only these parts come back; the rest of the font stays as it is now. A new version; nothing is deleted from the history.",
+            chosen,
+            !chosen.length
+          ),
+          el(
+            "button",
+            {
+              class: "cancel",
+              onclick: () => {
+                disarm();
+                state.choosing = false;
+                render();
+              },
+            },
+            ["Cancel"]
+          ),
+        ])
+      );
+    } else {
+      const actions = [];
+      if (panel) {
+        const refusal = partRefusal(panel, capabilities);
+        actions.push(
+          confirmButton(
+            "panel",
+            "Restore this panel",
+            refusal || `Bring ${panel.label.toLowerCase()} back as at ${label}; the rest stays as it is now.`,
+            [panel.key],
+            !!refusal
+          )
+        );
+      }
+      actions.push(
+        el(
+          "button",
+          {
+            class: "restore-choose",
+            title: "Choose the parts of the font to bring back",
+            onclick: () => {
+              disarm();
+              state.choosing = true;
+              state.said = null;
+              render();
+            },
+            ...(state.busy ? { disabled: "" } : {}),
+          },
+          ["Restore…"]
+        )
+      );
+      actions.push(el("span", { class: "spacer" }));
+      if (whole) actions.push(confirmButton("whole", "Restore whole font…", wholeTitle, null));
+      rows.push(el("div", { class: "actions" }, actions));
+    }
+    if (state.said) {
+      rows.push(el("div", { class: `said ${state.said.kind}` }, [state.said.text]));
+      // A refusal of coherence offers the whole font (outside the parts,
+      // the button is in the row above already).
+      if (state.offerWhole && state.choosing) {
+        rows.push(
+          el("div", { class: "actions" }, [confirmButton("whole", "Restore whole font…", wholeTitle, null)])
+        );
+      }
+    }
+    if (state.armed === "whole") {
+      rows.push(el("div", { class: "note" }, [wholeTitle]));
+    }
+    element.replaceChildren(...rows);
+  }
+
+  render();
+  return {
+    element,
+    state,
+    update(data) {
+      if (!state.choosing) {
+        state.chosen = new Set(partsChanged(data));
+      }
+    },
+  };
+}
+
 // The detail in a dialog over the page. ``modes``: [{label, from, to,
 // otherLabel}] — a version has one, a snapshot two ("This snapshot",
 // "Compare with now"). Returns {element, close, ready, show(index)}
-// (ready: the first one loaded).
-export function openFontDiff({ projectName, branch, title, who = "", modes, areas = null, onGlyph = null }) {
+// (ready: the first one loaded). ``restore``: {ref, label, capabilities,
+// panelPart, onRestored} — the restore bar under the detail (null: none).
+export function openFontDiff({
+  projectName,
+  branch,
+  title,
+  who = "",
+  modes,
+  areas = null,
+  onGlyph = null,
+  restore = null,
+}) {
   ensureDialogStyle();
   const backdrop = el("div", { class: "hive-fontdiff-backdrop", onclick: () => close() });
   let content = el("div", { class: "content" });
@@ -359,6 +687,8 @@ export function openFontDiff({ projectName, branch, title, who = "", modes, area
     modes.length > 1 ? modeBar : null,
     content,
   ]);
+  const bar = restore ? restoreBar({ projectName, branch, ...restore }) : null;
+  if (bar) dialog.append(bar.element);
   // Keys typed here must not reach the editor's shortcuts.
   for (const type of ["keydown", "keyup", "keypress"]) {
     dialog.addEventListener(type, (event) => event.stopPropagation());
@@ -405,7 +735,9 @@ export function openFontDiff({ projectName, branch, title, who = "", modes, area
       if (!response.ok) {
         throw new Error(`${response.status} ${(await response.text()) || response.statusText}`);
       }
-      node = renderFontDiff(await response.json(), {
+      const data = await response.json();
+      bar?.update(data);
+      node = renderFontDiff(data, {
         areas,
         otherLabel: mode.otherLabel,
         onGlyph: onGlyph
@@ -424,5 +756,5 @@ export function openFontDiff({ projectName, branch, title, who = "", modes, area
   };
   document.body.append(backdrop, dialog);
   const ready = show(modes[0]);
-  return { element: dialog, close, ready, show: (index) => show(modes[index]) };
+  return { element: dialog, close, ready, show: (index) => show(modes[index]), restoreBar: bar };
 }

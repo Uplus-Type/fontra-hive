@@ -19,7 +19,7 @@
 //     a deleted one; merge a branch into the default one, or bring it up to
 //     date from it (a dialog with the conflicts drawn side by side);
 //   - in Font info, a History section: the changes of the panel open, in
-//     words, each with its detail (fonthistory.js);
+//     words, each with its detail (fonthistory.js) and "Restore this panel";
 //   - an edit the server refuses (a domain the project keeps to some people)
 //     is said in one sentence and the page goes back to the server's state
 //     (installEditGuard); the project's glyph sets are greyed without
@@ -230,11 +230,16 @@ export function exportEnginesText(progress) {
 // download. A notice says what the server is doing (which compiler works,
 // and when fontmake takes over from fontc): it asks every two seconds under
 // an identifier of its own. The notice of a failure stays until closed.
-export async function exportDownload(project, format) {
+// ``snapshot``: a snapshot's name, downloaded as it was (instead of the
+// latest version of the branch).
+export async function exportDownload(project, format, { snapshot = null } = {}) {
   const run = newRunId();
+  const which = snapshot
+    ? `ref=${encodeURIComponent(`snapshot/${snapshot}`)}`
+    : `branch=${encodeURIComponent(project.branch || "main")}`;
   const url =
     `/api/hive/projects/${encodeURIComponent(project.name)}/export` +
-    `?format=${encodeURIComponent(format || "fontra")}&branch=${encodeURIComponent(project.branch || "main")}` +
+    `?format=${encodeURIComponent(format || "fontra")}&${which}` +
     `&run=${run}`;
   const progressURL = `/api/hive/recipe-runs/${run}/progress`;
   const message = el("span", { class: "message" }, [`Preparing ${format}…`]);
@@ -2061,6 +2066,20 @@ export class FontInfoHistory {
     this.list = el("div", { class: "list" });
     shadow.append(el("h3", {}, ["History"]), this.scope, this.list);
     this.commits = [];
+    // What the person may restore (/access); null: unknown or no accounts,
+    // the server decides.
+    this.capabilities = null;
+  }
+
+  async loadCapabilities() {
+    try {
+      const response = await fetch(this.url("access"), { credentials: "same-origin" });
+      if (!response.ok) return;
+      const { capabilities } = await response.json();
+      if (Array.isArray(capabilities) && !capabilities.includes("*")) this.capabilities = capabilities;
+    } catch (error) {
+      // unknown: the server still says no if it must
+    }
   }
 
   url(route, params = {}) {
@@ -2151,6 +2170,17 @@ export class FontInfoHistory {
       who: `${commit.author || "?"} · ${new Date(commit.time * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`,
       modes: [{ label: "This change", to: commit.sha }],
       areas: this.areas(),
+      // "Restore this panel": the panel's part as it was after this change.
+      restore:
+        commit.sha === this.head
+          ? null
+          : {
+              ref: commit.sha,
+              label: "this version",
+              capabilities: this.capabilities,
+              panelPart: this.history.PANEL_PARTS?.[this.panelId] || null,
+              onRestored: () => this.load(),
+            },
       onGlyph: (name) => {
         const url = new URL("/editor.html", location.origin);
         url.searchParams.set("project", this.project.identifier);
@@ -2200,6 +2230,7 @@ export async function mountFontInfoHistory(project = currentProject(), { timeout
     ])
   );
   container.append(section.host);
+  await section.loadCapabilities();
   // Fontra's panel list calls selectPanel(): follow it.
   const selectPanel = panels.selectPanel.bind(panels);
   panels.selectPanel = (...args) => {

@@ -28,7 +28,8 @@
 //     (two lines, the rest behind a ▸), a filter (All changes / Glyphs /
 //     Beyond the glyph), and a click on a change or a snapshot opens its
 //     detail, field by field, with "Compare with now" for a snapshot
-//     (fonthistory.js);
+//     (fonthistory.js), from where the whole font, or some parts of it, can
+//     be restored as they were then;
 //   - comments on glyphs, in comments.js.
 //
 // Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
@@ -1305,7 +1306,7 @@ class HiveHistoryPanel extends HTMLElement {
           this.lastGlyph
             ? "Hover a version to preview it, click to keep it"
             : this.hasFontDetail
-              ? "Click a change to see it in detail. Select a glyph to preview and restore its versions"
+              ? "Click a change to see it in detail or restore it. Select a glyph to preview its versions"
               : "Select a glyph to preview and restore its versions",
         ])
       );
@@ -1418,6 +1419,20 @@ class HiveHistoryPanel extends HTMLElement {
       branch: this.branch,
       ...options,
       onGlyph: (name) => this.goToGlyph(name),
+      // The font, or parts of it, as they were then (not the version
+      // the branch is at).
+      restore:
+        sha === this.head
+          ? null
+          : {
+              ref: sha,
+              label: snapshot ? `“${snapshot.title}”` : "this version",
+              capabilities: this.capabilities,
+              onRestored: (data) => {
+                this.head = data.head;
+                this.refresh(true);
+              },
+            },
     });
     return this.detail;
   }

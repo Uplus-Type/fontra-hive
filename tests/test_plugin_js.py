@@ -921,3 +921,38 @@ def test_font_history_says_what_changed_beyond_the_glyph(page):
     page.keyboard.press("Escape")
     assert page.evaluate(dialog) is None
     assert page.errors == []
+
+
+def test_the_detail_offers_to_restore_but_not_the_current_version(page):
+    page.evaluate(SETUP)
+    page.evaluate(
+        "document.querySelectorAll('.hive-fontdiff, .hive-fontdiff-backdrop')"
+        ".forEach((e) => e.remove())"
+    )
+    select(page, None)
+    page.evaluate(FONT_SERVER)
+    footer = "document.querySelector('.hive-fontdiff footer.restore')"
+    labels = f"[...{footer}.querySelectorAll('button')].map(b => b.textContent)"
+    # The version the branch is at (c3): nothing to bring back.
+    page.evaluate("panel.openDetail(sha('3'))")
+    page.wait_for_selector(".hive-fontdiff h4")
+    assert page.evaluate(footer) is None
+    page.keyboard.press("Escape")
+    # An older version, for a designer: the parts, not the whole font.
+    page.evaluate("panel.capabilities = ['read', 'edit', 'fontsettings', 'kerning']")
+    page.evaluate("panel.openDetail(sha('4'))")
+    page.wait_for_selector(".hive-fontdiff footer.restore")
+    assert page.evaluate(labels) == ["Restore…"]
+    page.keyboard.press("Escape")
+    # A snapshot, for a manager: named in the bar.
+    page.evaluate("panel.capabilities = ['read', 'edit', 'fontsettings', 'kerning', 'merge']")
+    page.evaluate("panel.openDetail(sha('5'))")
+    page.wait_for_selector(".hive-fontdiff footer.restore")
+    assert page.evaluate(labels) == ["Restore…", "Restore whole font…"]
+    page.evaluate(f"{footer}.querySelector('.restore-whole').click()")
+    assert page.evaluate(f"{footer}.querySelector('.note').textContent").startswith(
+        "Bring the whole font back as at “V1”"
+    )
+    page.keyboard.press("Escape")
+    page.evaluate("panel.capabilities = null")
+    assert page.errors == []

@@ -199,7 +199,8 @@ list), which Hive serves with its own script added (Fontra is not modified):
   when; *Restore* brings it back, under its name or another one (managers
   and admins, whoever deleted it, or whoever made it). The project page of
   the home page lists the branches too (open, delete, new branch, deleted
-  branches, *Merge…*) and downloads from any of them;
+  branches, *Merge…*) and downloads from any of them, or from a snapshot
+  as it was named (`export?ref=snapshot/<name>`: a snapshot's tag only);
 - **merging**: off the default branch, the pill's menu has *Merge into
   main…* (managers and admins) and *Update from main…* (anyone who can
   edit). The dialog says what the merge brings (glyphs changed on each
@@ -360,6 +361,26 @@ and is served by the Fontra server itself under `/hive/plugin/`.
   shows the changes of the panel open (font info, axes, sources, features,
   cross-axis mapping, development status…), with the same detail. Anyone
   who may read the project sees it, Font info read-only included.
+- **Restore the font, or a part of it.** Under the detail of a version or
+  a snapshot, *Restore whole font…* (managers and admins: `merge`) brings
+  the whole `.fontra` package back as it was: the glyphs made since go, the
+  ones deleted since come back; the other files of the repository stay.
+  *Restore…* brings back some parts only — *Font info*, *Axes and sources*
+  (together, or the sources' locations would no longer match the axes),
+  *Features* (conditional substitutions included), *Development status*,
+  *Kerning*, *Plug-in data*, *Glyph info* — each greyed, with why, without
+  the capability of its domain; the rest stays as it is now. In Font info,
+  *Restore this panel* does it for the panel open. Each asks "Confirm?",
+  then says what happened. Restoring the axes and sources is refused, in
+  words, when glyphs would be left with layers for a source the version
+  doesn't have, or off its axes ("14 glyphs have layers for the source
+  Black, which this version doesn't have. Restore the whole font
+  instead."); a sparse source is fine. As for a glyph, a restoration is a
+  new commit (`Hive-Restore: <sha>`, `Hive-Font`, `Hive-Glyphs` up to 200
+  glyphs), pending edits are committed first, and every open editor
+  reloads. Route: `POST
+  /api/hive/projects/<name>/restore-font?ref=&parts=&branch=`
+  (`fontrestore.py`).
 - **An edit the server refuses** (a domain the project keeps to some
   people) is said in one sentence, the server's, and taken back on the
   page with its own rollback, as a collaborator's edit would be; nothing
@@ -390,6 +411,7 @@ GET    /api/hive/projects/<name>/merge-preview?from=bold[&into=main]
 POST   /api/hive/projects/<name>/merge?from=bold[&into=main][&fromHead=…&intoHead=…]
        {"resolutions": {"glyphs/A^1.json": "theirs", "font-data.json": "ours"}}
 POST /api/hive/projects/<name>/restore?branch=main&glyph=A&ref=<sha|tag>
+POST /api/hive/projects/<name>/restore-font?branch=main&ref=<sha|tag>[&parts=features,kerning]
 GET  /api/hive/projects/<name>/snapshots?branch=main
 POST /api/hive/projects/<name>/snapshot?branch=main&name=Proofs%20sent
 ```

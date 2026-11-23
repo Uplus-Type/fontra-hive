@@ -588,6 +588,32 @@ async function newProjectSection() {
 }
 
 // The Fontra server's routes answer errors in plain text.
+// The snapshots of the project's branches, newest first, each once.
+export async function loadSnapshots(projectId, branchNames) {
+  const found = new Map();
+  await Promise.all(
+    branchNames.map(async (branch) => {
+      try {
+        const data = await hiveCall(
+          `/api/hive/projects/${encodeURIComponent(projectId)}/snapshots?branch=${encodeURIComponent(branch)}`
+        );
+        for (const snapshot of data.snapshots || []) found.set(snapshot.name, snapshot);
+      } catch (error) {
+        // a branch without snapshots to give: the others still count
+      }
+    })
+  );
+  return [...found.values()].sort((a, b) => b.time - a.time);
+}
+
+function snapshotDate(unixSeconds) {
+  return new Date(unixSeconds * 1000).toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
 async function hiveCall(path, method = "GET") {
   const response = await fetch(path, { method, credentials: "same-origin" });
   if (!response.ok) throw new Error((await response.text()) || `Error ${response.status}`);
@@ -1521,6 +1547,19 @@ async function projectSection(projectId) {
       ? el("select", { "aria-label": "Branch to download" }, branches.branches.map((b) =>
           el("option", { value: b.name }, [b.name])))
       : null;
+    // Or a snapshot, as it was named: what was shown to a client.
+    const snapshots = formats.length
+      ? await loadSnapshots(project.id, branches ? branches.branches.map((b) => b.name) : [defaultBranch])
+      : [];
+    const snapshotChoice = snapshots.length
+      ? el("select", { "aria-label": "Snapshot to download" }, [
+          el("option", { value: "" }, ["None: the latest version"]),
+          ...snapshots.map((s) => el("option", { value: s.name }, [`${s.title} · ${snapshotDate(s.time)}`])),
+        ])
+      : null;
+    if (snapshotChoice && branchChoice) {
+      snapshotChoice.addEventListener("change", () => (branchChoice.disabled = !!snapshotChoice.value));
+    }
     if (formats.length) {
       content.push(
         el("div", { class: "panel" }, [
@@ -1528,6 +1567,9 @@ async function projectSection(projectId) {
           branchChoice
             ? el("div", { class: "row" }, [el("span", {}, ["The latest version of the branch"]), branchChoice])
             : el("p", { class: "note" }, [`The latest version of the ${defaultBranch} branch.`]),
+          snapshotChoice
+            ? el("div", { class: "row" }, [el("span", {}, ["Or a snapshot"]), snapshotChoice])
+            : null,
           el("div", { class: "row downloads" }, formats.map(({ format, label }) =>
             el("button", {
               class: "secondary",
@@ -1535,14 +1577,15 @@ async function projectSection(projectId) {
                 event.target.disabled = true;
                 try {
                   const branch = branchChoice ? branchChoice.value : defaultBranch;
-                  await exportDownload({ name: project.id, branch }, format);
+                  const snapshot = snapshotChoice?.value || null;
+                  await exportDownload({ name: project.id, branch }, format, { snapshot });
                 } finally {
                   event.target.disabled = false;
                 }
               },
             }, [label])
           )),
-        ])
+        ].filter(Boolean))
       );
     }
   }
