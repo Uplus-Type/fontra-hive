@@ -17,7 +17,7 @@
 
 // The font's history, filtered (the log route's "kind").
 export const FILTERS = [
-  { key: "all", label: "All changes", title: "Every change of the font" },
+  { key: "all", label: "All changes", short: "All", title: "Every change of the font" },
   { key: "glyphs", label: "Glyphs", title: "The changes to the glyphs and their info" },
   {
     key: "font",
@@ -40,6 +40,18 @@ export const PANEL_AREAS = {
 
 // How many sentences show before the ▸.
 export const SHOWN_LINES = 2;
+
+// A filter's label: the long one, and its short form for a narrow sidebar.
+export function filterLabel(filter) {
+  const long = document.createElement("span");
+  long.className = filter.short ? "long has-short" : "long";
+  long.textContent = filter.label;
+  if (!filter.short) return [long];
+  const short = document.createElement("span");
+  short.className = "short";
+  short.textContent = filter.short;
+  return [long, short];
+}
 
 // What a commit changed beyond the glyph (the glyph info is the glyphs').
 export function beyondTheGlyph(commit) {
@@ -130,6 +142,7 @@ export const SUMMARY_STYLES = `
     opacity: 1;
   }
   .filter {
+    container-type: inline-size;
     display: flex;
     gap: 0;
     border: 1px solid rgba(128, 128, 128, 0.45);
@@ -138,11 +151,28 @@ export const SUMMARY_STYLES = `
     flex: none;
   }
   .filter button {
-    flex: 1;
+    /* A narrow sidebar: the longer label keeps more room, none overflows. */
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
     border: none;
     border-radius: 0;
-    padding: 0.2em 0.5em;
+    padding: 0.2em 0.35em;
+    font-size: 0.8em;
     opacity: 0.75;
+  }
+  /* Where even that is too narrow, "All changes" says "All". */
+  .filter .short {
+    display: none;
+  }
+  @container (max-width: 230px) {
+    .filter .long.has-short {
+      display: none;
+    }
+    .filter .short {
+      display: inline;
+    }
   }
   .filter button + button {
     border-left: 1px solid rgba(128, 128, 128, 0.45);

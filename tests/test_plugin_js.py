@@ -851,11 +851,16 @@ def test_font_history_says_what_changed_beyond_the_glyph(page):
     assert page.evaluate("rowFor('2').querySelector('.font-summary')") is None
     # The filter: All changes / Glyphs / Beyond the glyph, asked of the server.
     buttons = f"[...{root}.querySelectorAll('.filter button')]"
-    assert page.evaluate(f"{buttons}.map(b => b.textContent)") == [
+    assert page.evaluate(f"{buttons}.map(b => b.querySelector('.long').textContent)") == [
         "All changes",
         "Glyphs",
         "Beyond the glyph",
     ]
+    # A narrow sidebar: "All changes" says "All", nothing is cut.
+    page.evaluate(f"{root}.querySelector('.panel').style.width = '200px'")
+    shown = f"{buttons}.map(b => [...b.children].find(s => s.offsetWidth)?.textContent)"
+    assert page.evaluate(shown) == ["All", "Glyphs", "Beyond the glyph"]
+    page.evaluate(f"{root}.querySelector('.panel').style.width = ''")
     page.evaluate(f"{buttons}[2].click()")
     page.evaluate("wait(50)")
     assert page.evaluate("state.requests.filter(r => r.route === 'log').at(-1).kind") == "font"

@@ -2027,7 +2027,10 @@ const HISTORY_STYLE = `
   .error { color: var(--fontra-red-color, #d33); opacity: 1; }
   /* A narrow column: the sentences wrap. */
   .font-summary { white-space: normal; }
-  .font-summary-line { overflow: visible; padding-left: 0.9em; text-indent: -0.9em; }
+  .font-summary { padding-left: 0; }
+  .font-summary-line { overflow: visible; margin-top: 0.15em; }
+  .font-summary-line::before { content: none; }
+  button.font-summary-more { padding-left: 0; }
 `;
 
 function shortDate(unixSeconds) {
@@ -2052,7 +2055,8 @@ export class FontInfoHistory {
     this.open = new Set(); // changes whose sentences are all shown
     this.host = el("div", { class: "hive-fontinfo-history" });
     const shadow = this.host.attachShadow({ mode: "open" });
-    shadow.append(el("style", {}, [HISTORY_STYLE + history.SUMMARY_STYLES]));
+    // Ours after the shared ones: the sentences wrap in this narrow column.
+    shadow.append(el("style", {}, [history.SUMMARY_STYLES + HISTORY_STYLE]));
     this.scope = el("div", { class: "scope" });
     this.list = el("div", { class: "list" });
     shadow.append(el("h3", {}, ["History"]), this.scope, this.list);

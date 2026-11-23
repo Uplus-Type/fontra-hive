@@ -34,7 +34,14 @@
 // Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
 
 import { initComments } from "./comments.js";
-import { FILTERS, SUMMARY_STYLES, openFontDiff, summaryBlock, summaryLines } from "./fonthistory.js";
+import {
+  FILTERS,
+  SUMMARY_STYLES,
+  filterLabel,
+  openFontDiff,
+  summaryBlock,
+  summaryLines,
+} from "./fonthistory.js";
 
 const POLL_INTERVAL_MS = 1500; // how often the branch head is checked (a tiny request)
 const CONFIRM_TIMEOUT_MS = 5000; // how long "Confirm restore?" stays armed
@@ -1352,7 +1359,7 @@ class HiveHistoryPanel extends HTMLElement {
             "aria-pressed": f.key === this.filter ? "true" : "false",
             onclick: () => this.setFilter(f.key),
           },
-          [f.label]
+          filterLabel(f)
         )
       )
     );
