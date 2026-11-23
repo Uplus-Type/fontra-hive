@@ -361,6 +361,14 @@ and is served by the Fontra server itself under `/hive/plugin/`.
   domains touched); older ones are described when the history is read
   (cached per pair of file versions). Route: `GET
   /api/hive/projects/<name>/font-diff?from=&to=` (read).
+- **The history's own threads.** The history, the font diff, the merge
+  preview and a merge's domain check run in a small executor of their own
+  (two threads, `historywork.py`): push, pull, import and Try keep the
+  default pool. One person has at most two of these going at once; beyond,
+  429 "Hive is still working on your last request. Try again in a moment."
+  Identical requests in progress share one computation. The font diff's
+  limit (20 s, then 503) counts from the start of the computation, never
+  from the time spent waiting for a thread.
 - **History in Font info.** Under the panel list of Font info, *History*
   shows the changes of the panel open (font info, axes, sources, features,
   cross-axis mapping, development status…), with the same detail. Anyone

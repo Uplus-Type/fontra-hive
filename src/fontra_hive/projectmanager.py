@@ -62,6 +62,7 @@ from .backend_git import GitFontraBackend
 from .commentroutes import CommentRoutesMixin
 from .environment import markEnvironment
 from .hiveapi import HiveApiUnavailable
+from .historywork import HistoryWork, TooLong
 from .fonthandler import HiveFontHandler
 from .glyphdiff import changed_sources, font_source_names
 from .gitstore import (
@@ -196,10 +197,14 @@ class DevHiveProjectManager(CommentRoutesMixin):
         # Who has a Download going on (waiting for the runner or running).
         self.exportsInProgress: set[str] = set()
         self._runSweepTask: asyncio.Task | None = None
+        # The history, the font diff, the merge preview and the merge's
+        # domain check: an executor of their own, a limit per person.
+        self.historyWork = HistoryWork()
 
     async def aclose(self) -> None:
         if self._runSweepTask is not None:
             self._runSweepTask.cancel()
+        self.historyWork.shutdown()
         for fontHandler in list(self.fontHandlers.values()):
             await fontHandler.aclose()
 
@@ -1510,7 +1515,9 @@ class DevHiveProjectManager(CommentRoutesMixin):
                 store.close()
             return state, changes, domains, broughtBack
 
-        state, changes, domains, broughtBack = await asyncio.to_thread(work)
+        state, changes, domains, broughtBack = await self.historyWork.run(
+            _person(access), ("merge-preview", str(repoPath), source, target, default), work
+        )
         capability = "merge" if target == default else "edit"
         state["default"] = default
         # What the merge changes beyond the glyph, each change with its
@@ -1779,7 +1786,7 @@ class DevHiveProjectManager(CommentRoutesMixin):
         and ``area`` (comma separated, :data:`fontdiff.AREAS`: the changes of
         one panel of Font info). Each commit of the font's history says what
         it changed beyond the glyph (``font``: area, domain, summary)."""
-        repoPath, _ = await self._project(request, request.match_info["name"], "read")
+        repoPath, access = await self._project(request, request.match_info["name"], "read")
         branch = request.query.get("branch", DEFAULT_BRANCH)
         path: str | tuple[str, ...] | None = request.query.get("path")
         glyphName = request.query.get("glyph")
@@ -1797,10 +1804,21 @@ class DevHiveProjectManager(CommentRoutesMixin):
             )
         limit = min(int(request.query.get("limit", "50")), 500)
         # Reading the history and describing its changes (fontdiff) is
-        # done off the event loop: a large font never stops the server.
+        # done off the event loop, in the history's executor: a large font
+        # never stops the server, nor holds up push and pull.
+        key = ("log", str(repoPath), branch, path, glyphName, kind, tuple(sorted(areas)), limit)
         return web.json_response(
-            await asyncio.to_thread(
-                self._log, repoPath, branch, path, glyphName, kind, areas, limit
+            await self.historyWork.run(
+                _person(access),
+                key,
+                self._log,
+                repoPath,
+                branch,
+                path,
+                glyphName,
+                kind,
+                areas,
+                limit,
             )
         )
 
@@ -1998,20 +2016,25 @@ class DevHiveProjectManager(CommentRoutesMixin):
         of its line): every change beyond the
         glyph, field by field (the features as lines), and the glyphs
         changed. For a version, a snapshot, or "Compare with now"."""
-        repoPath, _ = await self._project(request, request.match_info["name"], "read")
+        repoPath, access = await self._project(request, request.match_info["name"], "read")
         branch = request.query.get("branch", DEFAULT_BRANCH)
-        work = asyncio.to_thread(
-            self._fontDiff,
-            repoPath,
-            branch,
-            request.query.get("to"),
-            request.query.get("from"),
-        )
+        toRef, fromRef = request.query.get("to"), request.query.get("from")
         try:
+            # The time limit counts from the start of the computation:
+            # waiting for a thread is never "too long".
             return web.json_response(
-                await asyncio.wait_for(work, FONT_DIFF_SECONDS)
+                await self.historyWork.run(
+                    _person(access),
+                    ("font-diff", str(repoPath), branch, toRef, fromRef),
+                    self._fontDiff,
+                    repoPath,
+                    branch,
+                    toRef,
+                    fromRef,
+                    timeout=FONT_DIFF_SECONDS,
+                )
             )
-        except asyncio.TimeoutError:
+        except TooLong:
             raise web.HTTPServiceUnavailable(
                 text="This difference takes too long to describe. Try two closer versions."
             )
@@ -2306,6 +2329,12 @@ class SizedCache:
             ):
                 _, (_, dropped) = self._data.popitem(last=False)
                 self.size -= dropped
+
+
+def _person(access: Access | None) -> str:
+    """Who a request is for, for the limit per person (no accounts: one
+    person)."""
+    return access.user.username if access is not None else ""
 
 
 def brought_back(domain: str, source: str, target: str) -> str:
