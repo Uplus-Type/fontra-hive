@@ -882,7 +882,9 @@ capability of each domain beyond the glyph the result changes (`kerning.csv`:
 kerning; `features.txt`: font settings; `font-data.json`: the domains of
 its areas), on any branch: what the default branch already holds excepted,
 for a domain the branch never changed itself (the merge base's state, or one
-the default branch had since; see *Merging*). A runner calls
+the default branch had since; see *Merging*). When what goes beyond the
+glyph has changed 200 times or more on the default branch since the branch
+last copied it, the copy counts as a write of the domain. A runner calls
 `requireRecipeAccess()` first: every cited project is checked on its own and
 every ref resolved, before anything is read; the actions refuse to run
 without that check, and check again when they run. `hive-read` exposes the

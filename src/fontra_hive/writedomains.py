@@ -250,3 +250,14 @@ def refusal(domain: str) -> str:
         if domain == FONTSETTINGS
         else f"{LABELS[domain]} is kept to some people on this project. Ask a manager."
     )
+
+
+def too_far_behind(domain: str, default: str = "main") -> str:
+    """:func:`refusal`, when the write copies the default branch but the
+    default branch has changed too much since the branch last copied it
+    (``fontdiff.ORIGIN_STATES``): the copy counts as a write."""
+    verb = "are" if domain == FONTSETTINGS else "is"
+    return (
+        f"{LABELS[domain]} {verb} kept to some people on this project, and {default} "
+        "has changed too much since this branch last copied it. Ask a manager."
+    )

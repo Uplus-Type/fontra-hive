@@ -97,7 +97,7 @@ from .gitstore import (
     glyphs_trailer,
     one_line,
 )
-from .writedomains import refusal
+from .writedomains import refusal, too_far_behind
 
 logger = logging.getLogger(__name__)
 
@@ -475,6 +475,12 @@ class HiveWrite:
         branch: The branch to write to, created from the default branch when
           it does not exist; workflow/<recipe name> when not given.
         message: The commit message; "Recipe <recipe name>" when not given.
+
+    Beyond the glyph, it writes only what the person may write: what the
+    default branch already holds excepted. When what goes beyond the glyph
+    has changed 200 times or more on the default branch since the branch
+    last copied it, the copy counts as a write (font settings, kerning or
+    plug-in data): ask a manager.
     """
 
     project: HiveProjectRef
@@ -597,6 +603,12 @@ class HiveWrite:
         _, domains = fontdiff.domains_written(before, after, reference, origins)
         closed = [d for d in domains if not hiveProject.can(d)]
         if closed:
+            if origins.cut and closed[0] in fontdiff.copies_reference(after, reference):
+                # A copy of the default branch, which has changed too much
+                # since the branch last copied it to tell (VF-4).
+                raise ActionError(
+                    f"hive-write: {too_far_behind(closed[0], hiveProject.defaultBranch)}"
+                )
             raise ActionError(f"hive-write: {refusal(closed[0])}")
 
     async def _fontFiles(self, continueOnError: bool) -> dict[str, bytes]:
