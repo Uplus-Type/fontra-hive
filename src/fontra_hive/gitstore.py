@@ -61,8 +61,9 @@ class Signature:
         self.email = email
 
     def encode(self) -> bytes:
-        # A name never ends the line of the commit header it is in.
-        return f"{one_line(self.name)} <{one_line(self.email)}>".encode("utf-8")
+        # A name never ends the line of the commit header it is in, nor
+        # holds an address of its own (person_name).
+        return f"{person_name(self.name)} <{person_name(self.email)}>".encode("utf-8")
 
     def __repr__(self) -> str:
         return f"Signature({self.name!r}, {self.email!r})"
@@ -1168,6 +1169,15 @@ def one_line(text: object) -> str:
     font or from a person (a glyph, a source, an axis, a snapshot title…)
     can never start a line of its own, and so never forge a trailer."""
     return str(text).translate(_NOT_IN_A_LINE)
+
+
+def person_name(text: object) -> str:
+    """A person's name (or address) as it may enter a commit's author,
+    committer or ``Co-authored-by``: on one line (:func:`one_line`), and with
+    ``<`` and ``>`` replaced by ``‹`` and ``›``. Git and GitHub read the first
+    ``<…>`` of the line as the address: a display name "X <someone@studio>"
+    would otherwise give a pushed commit to someone else's address."""
+    return one_line(text).replace("<", "\u2039").replace(">", "\u203a")
 
 
 def glyphs_trailer(names: Iterable[str]) -> str | None:

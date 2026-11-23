@@ -79,6 +79,7 @@ from .gitstore import (
     _trailer,
     glyphs_trailer,
     one_line,
+    person_name,
 )
 from .merge import GLYPH_INFO_FILE, KERNING_FILE, _read_glyph_info, glyph_name_of
 
@@ -769,7 +770,9 @@ def _remote_commit(
     for co in co_authors:
         if co.email.lower() not in seen:
             seen.add(co.email.lower())
-            trailers.append(f"Co-authored-by: {one_line(co.name)} <{one_line(co.email)}>")
+            trailers.append(
+                f"Co-authored-by: {person_name(co.name)} <{person_name(co.email)}>"
+            )
     if trailers:
         lines += "\n\n" + "\n".join(trailers)
     commit = Commit()
