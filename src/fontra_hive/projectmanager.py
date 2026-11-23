@@ -1135,6 +1135,12 @@ class DevHiveProjectManager(CommentRoutesMixin):
                 changes, headTree, oldTree = fontrestore.restore_changes(
                     store, head, sha, parts
                 )
+                # "U+0061 stays with a.": no code point gets two glyphs.
+                kept = ""
+                if parts is not None and "glyphInfo" in parts:
+                    kept = fontrestore.kept_sentence(
+                        fontrestore.code_points_kept(headTree, oldTree)
+                    )
                 if not changes:
                     return web.json_response(
                         {
@@ -1143,7 +1149,12 @@ class DevHiveProjectManager(CommentRoutesMixin):
                             "restored": sha,
                             "parts": parts,
                             "changed": False,
-                            "result": fontrestore.result_sentence(parts, said, False),
+                            "result": " ".join(
+                                filter(
+                                    None,
+                                    [fontrestore.result_sentence(parts, said, False), kept],
+                                )
+                            ),
                         }
                     )
                 if parts is None or fontrestore.GUARDED_PARTS & set(parts):
@@ -1187,7 +1198,9 @@ class DevHiveProjectManager(CommentRoutesMixin):
                 "changed": True,
                 "title": message.split("\n", 1)[0],
                 "summary": [c.summary for c in summary],
-                "result": fontrestore.result_sentence(parts, said, True),
+                "result": " ".join(
+                    filter(None, [fontrestore.result_sentence(parts, said, True), kept])
+                ),
             }
         )
 

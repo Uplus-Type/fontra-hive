@@ -23,7 +23,11 @@ are those the editor would write.
 the restoration every glyph source must still name a font source that
 exists (``locationBase``), and every location must stay on the axes, within
 their bounds. A font source without a drawing in a glyph is normal (sparse
-sources): it is never refused.
+sources): it is never refused. It guards the kerning too (restoring the
+kerning, the axes and sources, or the whole font): every column of the
+kerning must be a source of the font. And restoring the glyph info never
+gives a code point to two glyphs: one that another glyph holds now stays
+with it.
 
 Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
 """
@@ -259,17 +263,53 @@ def _font_data_changes(head: Tree, old: Tree, parts: set[str]) -> bytes | None:
     return write_font_data(font)
 
 
+def code_points_kept(head: Tree, old: Tree) -> dict[int, str]:
+    """The code points a restoration of the glyph info leaves where they
+    are: those a glyph made since (which keeps its row) holds now, and
+    that a restored row had then. ``{code point: the glyph keeping it}``."""
+    headMap, _ = fontdiff.read_glyph_info(head.read(GLYPH_INFO))
+    oldMap, _ = fontdiff.read_glyph_info(old.read(GLYPH_INFO))
+    heldSince = {
+        cp: name
+        for name, codePoints in headMap.items()
+        if name not in oldMap
+        for cp in codePoints
+    }
+    return {
+        cp: heldSince[cp]
+        for name in headMap
+        if name in oldMap
+        for cp in oldMap[name]
+        if cp in heldSince
+    }
+
+
+def kept_sentence(kept: dict[int, str]) -> str:
+    """``U+0061 stays with a.``: what a restoration of the glyph info left
+    where it is, so that no code point has two glyphs."""
+    items = [f"U+{cp:04X} stays with {name}" for cp, name in sorted(kept.items())]
+    if len(items) > MAX_KEPT_SAID:
+        items = items[:MAX_KEPT_SAID] + [f"and {len(kept) - MAX_KEPT_SAID} more"]
+    return "; ".join(items) + "." if items else ""
+
+
+MAX_KEPT_SAID = 3
+
+
 def _glyph_info_changes(head: Tree, old: Tree) -> bytes | None:
     """The new ``glyph-info.csv``: the code points and the infos of the
     glyphs that exist now, as they were at ``old``. A glyph deleted since is
-    not brought back (it would have no drawing); one made since keeps its row."""
+    not brought back (it would have no drawing); one made since keeps its
+    row, and the code points it holds (:func:`code_points_kept`): no code
+    point ever has two glyphs."""
     headMap, headInfos = fontdiff.read_glyph_info(head.read(GLYPH_INFO))
     oldMap, oldInfos = fontdiff.read_glyph_info(old.read(GLYPH_INFO))
+    kept = code_points_kept(head, old)
     glyphMap: dict[str, list[int]] = {}
     glyphInfos: dict[str, dict] = {}
     for name, codePoints in headMap.items():
         if name in oldMap:
-            glyphMap[name] = oldMap[name]
+            glyphMap[name] = [cp for cp in oldMap[name] if cp not in kept]
             info = oldInfos.get(name)
         else:
             glyphMap[name] = codePoints
