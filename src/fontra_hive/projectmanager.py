@@ -1564,6 +1564,49 @@ class DevHiveProjectManager(CommentRoutesMixin):
         origins = fontdiff.default_branch_origins(store, state["intoHead"], defaultHead)
         return fontdiff.domains_written(before, after, reference, origins)
 
+    def _mergeWork(self, repoPath, source, target, default, resolutions, access):
+        """For :meth:`mergeHandler`, in the history's executor (its own
+        store: the font handlers' stay on the event loop). Beyond the glyph,
+        on any branch, only the domains the person may write (managers and
+        admins have them all): checked on the three files beyond the glyph,
+        before the trees are merged, so that a refusal costs little."""
+        store = GitRepoStore.open(repoPath)
+        try:
+            if access is not None:
+                _, domains = self._mergeDomainsEarly(
+                    store, source, target, default, resolutions
+                )
+                closed = [d for d in domains if not access.can(d)]
+                if closed:
+                    raise web.HTTPForbidden(text=refusal(closed[0]))
+            return self._mergeState(store, source, target, resolutions)
+        finally:
+            store.close()
+
+    def _mergeDomainsEarly(self, store, source, target, default, resolutions):
+        """:meth:`_mergeDomains` without merging the whole trees: each path
+        merges on its own (merge.merge_trees), so the files beyond the glyph
+        merged alone give the same result for them."""
+        if source == target:
+            return [], []
+        theirs, ours = store.head(source), store.head(target)
+        if theirs is None or ours is None:
+            return [], []  # _mergeState answers 404
+        base = store.merge_base(ours, theirs)
+
+        def files(sha):
+            found = {}
+            for path in fontdiff.BEYOND_THE_GLYPH_FILES:
+                blob = store.file_sha(sha, path)
+                if blob is not None:
+                    found[path] = blob
+            return found
+
+        result = merging.merge_trees(
+            files(base) if base else {}, files(ours), files(theirs), store.read_blob, resolutions
+        )
+        return self._mergeDomains(store, {"intoHead": ours}, result, default)
+
     @staticmethod
     def _broughtBack(store: GitRepoStore, state: dict, result, default: str, domains):
         """Into the default branch: the domains the merge changes whose state
@@ -1640,7 +1683,19 @@ class DevHiveProjectManager(CommentRoutesMixin):
         try:
             for backend in backends.values():
                 backend.flush()  # what people see is what gets merged
-            state, result = self._mergeState(store, source, target, resolutions)
+            # Off the event loop, in the history's executor: the domains
+            # first (three files: a refusal costs little), then the merge.
+            state, result = await self.historyWork.run(
+                _person(access),
+                None,
+                self._mergeWork,
+                repoPath,
+                source,
+                target,
+                default,
+                resolutions,
+                access,
+            )
             for key, stateKey in (("fromHead", "fromHead"), ("intoHead", "intoHead")):
                 expected = request.query.get(key)
                 if expected and expected != state[stateKey]:
@@ -1656,13 +1711,6 @@ class DevHiveProjectManager(CommentRoutesMixin):
                     text=json.dumps({"conflicts": state["conflicts"]}),
                     content_type="application/json",
                 )
-            # Beyond the glyph, on any branch: only the domains the person
-            # may write (managers and admins have them all).
-            if access is not None:
-                _, domains = self._mergeDomains(store, state, result, default)
-                closed = [d for d in domains if not access.can(d)]
-                if closed:
-                    raise web.HTTPForbidden(text=refusal(closed[0]))
             author = _author(access, self.author)
             ours, theirs = state["intoHead"], state["fromHead"]
             if state["fastForward"] and target != default:

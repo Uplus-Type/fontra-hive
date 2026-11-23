@@ -1,4 +1,10 @@
-"""RV-4 (re-check of the R2c audit, 23 Nov 2026): the history, the font diff, the merge preview and the merge's domain
+"""RV-2 and RV-4 (re-check of the R2c audit, 23 Nov 2026).
+
+RV-2: a refused merge (403) no longer describes the domains on the event
+loop: the domains are checked in the history's executor, on the three files
+beyond the glyph, before the trees are merged.
+
+RV-4: the history, the font diff, the merge preview and the merge's domain
 check run in a small executor of their own (historywork.HistoryWork), at
 most two at once per person (429 beyond, with a sentence), identical
 requests in progress share one computation, and the font diff's time limit
@@ -214,6 +220,69 @@ def test_a_reader_who_floods_the_font_diff_holds_up_nobody(tmp_path, fixture_fon
     assert timings["history"] < 0.5
     assert timings["font-diff"] < 1.0
     assert stall < 0.2
+
+
+def test_a_refused_merge_leaves_the_loop_free(tmp_path, fixture_fontra):
+    """The re-check's RV-2 proof, inverted: Fabio (designer, no font
+    settings) asks five times to merge exp, whose features changed (50,000
+    lines), into his branch. Five 403s; the event loop is never held more
+    than 0.05 s; the trees are never merged for a refusal."""
+    n = 50_000
+
+    def lines(step):
+        return "".join(
+            f"  sub g{i} by g{i}.alt;{' # m' if step and i % step == 0 else ''}\n"
+            for i in range(n)
+        ).encode()
+
+    manager = make_manager(tmp_path, fixture_fontra)
+    store = store_of(manager)
+    try:
+        store.commit({"features.txt": lines(0)}, message="features", author=MEI)
+        head = store.head()
+        store.create_branch("exp", head)
+        store.create_branch("fabio", head)
+        store.commit({"features.txt": lines(2)}, branch="exp", message="exp", author=MEI)
+        store.commit({"features.txt": lines(3)}, message="main", author=MEI)
+    finally:
+        store.close()
+    merged = []
+    original = manager._mergeState
+
+    def spy(*args, **kwargs):
+        merged.append(1)
+        return original(*args, **kwargs)
+
+    manager._mergeState = spy
+
+    async def go():
+        ticker = Ticker()
+        tick = asyncio.create_task(ticker.run())
+        await asyncio.sleep(0.02)
+        refused = 0
+        for _ in range(5):
+            try:
+                await manager.mergeHandler(
+                    request(
+                        "Mutator",
+                        "fabio",
+                        method="POST",
+                        body={},
+                        **{"from": "exp", "into": "fabio"},
+                    )
+                )
+            except web.HTTPForbidden as error:
+                assert error.text.startswith("Font settings are kept")
+                refused += 1
+        ticker.done = True
+        await tick
+        return refused, ticker.stall
+
+    refused, stall = run(go())
+    print(f"5 refusals, the loop held at most {stall:.3f} s")
+    assert refused == 5
+    assert stall < 0.05
+    assert merged == []
 
 
 def test_the_history_and_the_preview_go_through_the_history_executor(
