@@ -26,7 +26,7 @@ import stat
 import time
 import unicodedata
 from dataclasses import dataclass, replace
-from typing import Iterable, Iterator, Mapping
+from typing import Callable, Iterable, Iterator, Mapping
 
 from dulwich import diff_tree
 from dulwich.index import commit_tree
@@ -645,15 +645,20 @@ class GitRepoStore:
         self,
         ref: str = DEFAULT_BRANCH,
         *,
-        path: str | None = None,
+        path: str | tuple[str, ...] | None = None,
         glyph: str | None = None,
         limit: int | None = None,
         snapshots: list[SnapshotInfo] | None = None,
         glyph_snapshots: list[GlyphSnapshotInfo] | None = None,
         order: list[tuple[str, str]] | None = None,
+        keep: Callable[[CommitInfo], bool] | None = None,
     ) -> list[CommitInfo]:
         """Commits reachable from ``ref``, newest first, optionally only those
-        that changed ``path`` (a file, or a directory: its subtree).
+        that changed ``path`` (a file, or a directory: its subtree; several
+        paths as a tuple: any of them).
+
+        ``keep``: a further test on each commit found (the font's history
+        filtered on what changed); ``limit`` counts the commits kept.
 
         ``glyph`` is the glyph name stored at ``path``: commits written by
         Fontra Hive carry a ``Hive-Glyphs:`` trailer listing the glyphs they
@@ -673,28 +678,34 @@ class GitRepoStore:
         sha)``, ``("snapshot", name)``, ``("glyph-snapshot", name)``.
         """
         sha = self.resolve(ref)
-        if path is None and snapshots is None and glyph_snapshots is None:
+        if path is None and snapshots is None and glyph_snapshots is None and keep is None:
             walker = self.repo.get_walker(include=[_b(sha)], max_entries=limit)
             return [self.commit_info(_s(entry.commit.id)) for entry in walker]
+        if isinstance(path, tuple):
+            paths = tuple(_normalize_path(p) for p in path)
+        else:
+            paths = (_normalize_path(path),) if path is not None else None
         return self._log_first_parent(
             sha,
-            _normalize_path(path) if path is not None else None,
+            paths,
             glyph,
             limit,
             snapshots,
             glyph_snapshots,
             order,
+            keep,
         )
 
     def _log_first_parent(
         self,
         sha: str,
-        path: str | None,
+        paths: tuple[str, ...] | None,
         glyph: str | None,
         limit: int | None,
         snapshots: list[SnapshotInfo] | None,
         glyph_snapshots: list[GlyphSnapshotInfo] | None = None,
         order: list[tuple[str, str]] | None = None,
+        keep: Callable[[CommitInfo], bool] | None = None,
     ) -> list[CommitInfo]:
         """History along the first-parent line, of one path (or of everything
         when ``path`` is None), optionally annotated with snapshots.
@@ -706,17 +717,21 @@ class GitRepoStore:
         this usable on repositories with tens of thousands of glyph files.
         """
         store = self.repo.object_store
-        parts = _b(path) if path is not None else b""
-        cache: dict[bytes, bytes | None] = {}
+        path = paths[0] if paths is not None and len(paths) == 1 else None
+        cache: dict[bytes, tuple] = {}
 
-        def object_at(commit_id: bytes) -> bytes | None:
+        def object_at(commit_id: bytes) -> tuple:
+            """The objects at ``paths`` in a commit (None: absent)."""
             if commit_id not in cache:
                 tree = store[store[commit_id].tree]
-                try:
-                    _mode, obj = tree.lookup_path(store.__getitem__, parts)
-                except KeyError:
-                    obj = None
-                cache[commit_id] = obj
+                objects = []
+                for p in paths or ():
+                    try:
+                        _mode, obj = tree.lookup_path(store.__getitem__, _b(p))
+                    except KeyError:
+                        obj = None
+                    objects.append(obj)
+                cache[commit_id] = tuple(objects)
             return cache[commit_id]
 
         result: list[CommitInfo] = []
@@ -744,23 +759,27 @@ class GitRepoStore:
                     current_snapshot = snapshot_name
                     if order is not None:
                         order.append(("snapshot", snapshot_name))
-                    if path is not None:
+                    if paths is not None:
                         commit_id = parent
                         continue
-            if path is None:
+            if paths is None:
                 touched = True
             else:
                 glyphs = (
-                    _hive_glyphs_trailer(commit.message) if glyph is not None else None
+                    _hive_glyphs_trailer(commit.message)
+                    if glyph is not None and path is not None
+                    else None
                 )
                 if glyphs is not None:
                     touched = glyph in glyphs
                 else:
                     touched = object_at(commit_id) != (
-                        object_at(parent) if parent else None
+                        object_at(parent) if parent else (None,) * len(paths)
                     )
-            if touched:
-                info = self.commit_info(_s(commit_id))
+            info = self.commit_info(_s(commit_id)) if touched else None
+            if info is not None and keep is not None and not keep(info):
+                info = None
+            if info is not None:
                 if snapshots is not None:
                     info = replace(info, snapshot=current_snapshot)
                 if glyph_snapshots is not None:

@@ -43,6 +43,7 @@ from fontra.backends.filenames import fileNameToString, stringToFileName
 from fontra.core.fonthandler import FontHandler
 from fontra.core.protocols import ProjectManager
 
+from . import fontdiff
 from . import merge as merging
 from . import runner
 from .access import (
@@ -702,6 +703,7 @@ class DevHiveProjectManager(CommentRoutesMixin):
             ),
             web.post("/api/hive/projects/{name}/merge", self.mergeHandler),
             web.get("/api/hive/projects/{name}/log", self.logHandler),
+            web.get("/api/hive/projects/{name}/font-diff", self.fontDiffHandler),
             web.get("/api/hive/projects/{name}/glyph", self.glyphHandler),
             web.get("/api/hive/projects/{name}/head", self.headHandler),
             web.post("/api/hive/projects/{name}/restore", self.restoreHandler),
@@ -1533,12 +1535,24 @@ class DevHiveProjectManager(CommentRoutesMixin):
         return web.json_response({"branch": data})
 
     async def logHandler(self, request: web.Request) -> web.Response:
+        """The history of a branch: of one glyph (``glyph``), or of the whole
+        font. The font's history can be filtered: ``kind=glyphs`` (the
+        glyphs and their info), ``kind=font`` (what goes beyond the glyph),
+        and ``area`` (comma separated, :data:`fontdiff.AREAS`: the changes of
+        one panel of Font info). Each commit of the font's history says what
+        it changed beyond the glyph (``font``: area, domain, summary)."""
         repoPath, _ = await self._project(request, request.match_info["name"], "read")
         branch = request.query.get("branch", DEFAULT_BRANCH)
-        path = request.query.get("path")
+        path: str | tuple[str, ...] | None = request.query.get("path")
         glyphName = request.query.get("glyph")
         if glyphName and not path:
             path = glyphPath(glyphName)
+        kind = request.query.get("kind") if not glyphName else None
+        areas = {a for a in request.query.get("area", "").split(",") if a}
+        if kind == "glyphs" and not path:
+            path = ("glyphs", fontdiff.GLYPH_INFO)
+        elif (kind == "font" or areas) and not path:
+            path = fontdiff.BEYOND_THE_GLYPH_FILES if not areas & {"glyphInfo"} else fontdiff.FONT_FILES
         limit = min(int(request.query.get("limit", "50")), 500)
         store = GitRepoStore.open(repoPath)
         try:
@@ -1550,6 +1564,23 @@ class DevHiveProjectManager(CommentRoutesMixin):
             # snapshots are then landmarks between them ("order").
             glyphSnapshots = store.glyph_snapshots(glyphName) if glyphName else None
             order: list[tuple[str, str]] = []
+            keep = None
+            if areas:
+
+                def keep(info):
+                    return any(
+                        c.area in areas
+                        for c in self._fontChanges(store, info.sha, info.parents)
+                    )
+
+            elif kind == "font":
+
+                def keep(info):
+                    return any(
+                        c.domain != fontdiff.EDIT
+                        for c in self._fontChanges(store, info.sha, info.parents)
+                    )
+
             commits = [
                 dataclasses.asdict(c)
                 for c in store.log(
@@ -1560,12 +1591,14 @@ class DevHiveProjectManager(CommentRoutesMixin):
                     snapshots=snapshots,
                     glyph_snapshots=glyphSnapshots,
                     order=order,
+                    keep=keep,
                 )
             ]
             if glyphName:
                 self._addChangedSources(store, commits, path)
             else:
                 self._addChangedSourcesOfFont(store, commits)
+                self._addFontChanges(store, commits)
         finally:
             store.close()
         return web.json_response(
@@ -1645,6 +1678,101 @@ class DevHiveProjectManager(CommentRoutesMixin):
                         fontSources,
                     )
             commit["sources"] = list(dict.fromkeys(sources))
+
+    # --- beyond the glyph: what a commit changed, in words -----------------------
+
+    def _fontChanges(self, store: GitRepoStore, sha: str, parents) -> list:
+        """What a commit changed beyond the glyphs (and in the glyph info),
+        compared with its first parent; nothing for the first commit (an
+        import). Cached by pair of file versions, like the glyphs' sources."""
+        if not parents:
+            return []
+        return self._fontChangesBetween(store, parents[0], sha)
+
+    def _fontChangesBetween(self, store: GitRepoStore, old: str | None, new: str):
+        cache = self._sourcesCache()
+        changes = []
+        fontData = store.file_sha(new, fontdiff.FONT_DATA)
+        for path in fontdiff.FONT_FILES:
+            before = store.file_sha(old, path) if old else None
+            after = store.file_sha(new, path)
+            if before == after:
+                continue
+            # The kerning names its sources: from the font data of "new".
+            names = fontData if path == fontdiff.KERNING_FILE else None
+            key = ("fontdiff", path, before, after, names)
+            if key not in cache:
+                sourceNames = None
+                if names is not None:
+                    if ("names", names) not in cache:
+                        cache[("names", names)] = fontdiff.source_names(
+                            store.read_blob(names)
+                        )
+                    sourceNames = cache[("names", names)]
+                cache[key] = fontdiff.file_changes(
+                    path,
+                    store.read_blob(before) if before else None,
+                    store.read_blob(after) if after else None,
+                    sourceNames,
+                )
+            changes += cache[key]
+        return fontdiff.sort_changes(changes)
+
+    def _addFontChanges(self, store: GitRepoStore, commits: list[dict]) -> None:
+        """Each commit of the font's history gets ``font``: what it changed
+        beyond the glyph and in the glyph info, one sentence per change. Old
+        commits ("Update font-data.json") are described as well as new ones."""
+        for commit in commits:
+            commit["font"] = [
+                c.to_json(detail=False)
+                for c in self._fontChanges(store, commit["sha"], commit["parents"])
+            ]
+
+    async def fontDiffHandler(self, request: web.Request) -> web.Response:
+        """What changed between two versions of the font (``from``, ``to``:
+        commit shas, branches or tags; ``to`` defaults to the branch head,
+        ``from`` to the first parent of ``to``): every change beyond the
+        glyph, field by field (the features as lines), and the glyphs
+        changed. For a version, a snapshot, or "Compare with now"."""
+        repoPath, _ = await self._project(request, request.match_info["name"], "read")
+        branch = request.query.get("branch", DEFAULT_BRANCH)
+        store = GitRepoStore.open(repoPath)
+        try:
+            try:
+                to = store.resolve(request.query.get("to") or branch)
+                parents = store.commit_info(to).parents
+                ref = request.query.get("from")
+                old = store.resolve(ref) if ref else (parents[0] if parents else None)
+                if old is not None:
+                    store.commit_info(old)  # exists
+            except (KeyError, ValueError):
+                raise web.HTTPNotFound()
+            changes = self._fontChangesBetween(store, old, to)
+            glyphs = []
+            for change in store.diff(old, to) if old != to else ():
+                p = change.path
+                if p.startswith("glyphs/") and p.endswith(".json"):
+                    glyphs.append(
+                        {
+                            "name": fileNameToString(p[len("glyphs/") : -len(".json")]),
+                            "kind": {"add": "added", "delete": "removed"}.get(
+                                change.kind, "changed"
+                            ),
+                        }
+                    )
+            glyphs.sort(key=lambda g: g["name"])
+        finally:
+            store.close()
+        return web.json_response(
+            {
+                "branch": branch,
+                "from": old,
+                "to": to,
+                "changes": [c.to_json() for c in changes],
+                "glyphs": glyphs[:MAX_DIFF_GLYPHS],
+                "glyphsTotal": len(glyphs),
+            }
+        )
 
     async def snapshotsHandler(self, request: web.Request) -> web.Response:
         """The snapshots of a branch, newest first, and how many commits were
@@ -1816,6 +1944,10 @@ CLIENT_CONTENT_TYPES = {
     "ico": "image/x-icon",
     "webmanifest": "application/manifest+json",
 }
+
+
+# The glyphs a font-diff lists (an import changes them all).
+MAX_DIFF_GLYPHS = 2000
 
 
 def _snapshotJSON(snapshot: SnapshotInfo | GlyphSnapshotInfo) -> dict[str, Any]:

@@ -31,6 +31,7 @@ from fontra.backends.fontra import FontraBackend, componentNamesFromGlyphData
 from fontra.core.glyphdependencies import GlyphDependencies
 from fontra.core.protocols import WritableFontBackend
 
+from .fontdiff import FONT_FILES, domains_of, font_changes, title_words
 from .gitstore import DEFAULT_BRANCH, GitRepoStore, RefMovedError, Signature
 from .vfs import GitPath, GitTree
 
@@ -156,8 +157,9 @@ class GitFontraBackend(FontraBackend):
 
         new_sha = None
         for author, subset in by_author.values():
-            message = _commit_message(subset)
             for attempt in range(3):
+                # Said in words against the parent it is committed on.
+                message = _commit_message(subset, self._before(subset))
                 try:
                     new_sha = self.store.commit(
                         subset,
@@ -183,6 +185,18 @@ class GitFontraBackend(FontraBackend):
             self.tree.apply_committed(new_sha, subset)
             self._last_commit_by_us = new_sha
         return new_sha
+
+    def _before(self, changes: dict[str, bytes | None]) -> dict[str, bytes | None]:
+        """The font files among ``changes`` as they are in the commit the
+        changes go on (None: absent)."""
+        before: dict[str, bytes | None] = {}
+        for path in changes:
+            if path in FONT_FILES:
+                try:
+                    before[path] = self.store.read_file(self.tree.commit_sha, path)
+                except KeyError:
+                    before[path] = None
+        return before
 
     async def aclose(self) -> None:
         if self._poll_task is not None:
@@ -306,7 +320,19 @@ class GitFontraBackend(FontraBackend):
         return reloadPattern
 
 
-def _commit_message(changes: dict[str, bytes | None]) -> str:
+# How many sentences of the summary the commit message carries in its body.
+MAX_SUMMARY_LINES = 12
+
+
+def _commit_message(
+    changes: dict[str, bytes | None], before: dict[str, bytes | None] | None = None
+) -> str:
+    """The message of a commit: a title in words ("Edit axes, features; Edit
+    A, B"), what changed beyond the glyph (one sentence per line,
+    :mod:`fontra_hive.fontdiff`), and the trailers ``Hive-Glyphs`` (the
+    glyphs changed) and ``Hive-Font`` (the domains beyond the glyph touched:
+    fontsettings, kerning, plugindata). ``before``: the font files as they
+    are in the parent (absent: compared with nothing, said by file name)."""
     from fontra.backends.filenames import fileNameToString
 
     glyphs = sorted(
@@ -314,8 +340,26 @@ def _commit_message(changes: dict[str, bytes | None]) -> str:
         for p in changes
         if p.startswith("glyphs/") and p.endswith(".json")
     )
-    others = sorted(p for p in changes if not p.startswith("glyphs/"))
+    fontFiles = [p for p in changes if p in FONT_FILES]
+    summary = []
+    if before is not None and fontFiles:
+        try:
+            summary = font_changes(before, {p: changes[p] for p in fontFiles})
+        except Exception:  # never lose an edit over its description
+            logger.exception("could not describe the change of %s", fontFiles)
+            summary = []
+    # A glyph made or deleted changes the glyph info too: the glyphs' names
+    # say it already.
+    words = title_words(
+        c for c in summary if not (glyphs and c.area == "glyphInfo")
+    )
+    described = set(fontFiles) if before is not None and summary else set()
+    others = sorted(
+        p for p in changes if not p.startswith("glyphs/") and p not in described
+    )
     parts = []
+    if words:
+        parts.append(f"Edit {words}")
     if glyphs:
         shown = ", ".join(glyphs[:8]) + (
             f" (+{len(glyphs) - 8})" if len(glyphs) > 8 else ""
@@ -324,5 +368,18 @@ def _commit_message(changes: dict[str, bytes | None]) -> str:
     if others:
         parts.append("Update " + ", ".join(others))
     title = "; ".join(parts) or "Update"
-    trailer = f"\n\nHive-Glyphs: {' '.join(glyphs)}" if glyphs else ""
-    return title + trailer + "\n"
+    body = [c.summary for c in summary[:MAX_SUMMARY_LINES]]
+    if len(summary) > MAX_SUMMARY_LINES:
+        body.append(f"… and {len(summary) - MAX_SUMMARY_LINES} more")
+    trailers = []
+    if glyphs:
+        trailers.append(f"Hive-Glyphs: {' '.join(glyphs)}")
+    domains = domains_of(summary)
+    if domains:
+        trailers.append(f"Hive-Font: {' '.join(domains)}")
+    message = title
+    if body:
+        message += "\n\n" + "\n".join(body)
+    if trailers:
+        message += "\n\n" + "\n".join(trailers)
+    return message + "\n"

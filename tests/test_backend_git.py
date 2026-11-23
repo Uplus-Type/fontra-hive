@@ -80,8 +80,13 @@ def test_edits_are_committed_and_byte_identical(tmp_path, fixture_fontra):
         assert head != sha0 and not backend.tree.has_pending()
         info = store.commit_info(head)
         assert info.author == "Jérémie" and info.parents == (sha0,)
-        assert info.message.splitlines()[0].startswith("Edit A, B, Z")
+        # Said in words: what changed beyond the glyph, then the glyphs.
+        assert info.message.splitlines()[0] == (
+            "Edit features, custom data, kerning; Edit A, B, Z"
+        )
+        assert "Features: 1 line added" in info.message.splitlines()
         assert "Hive-Glyphs: A B Z" in info.message
+        assert "Hive-Font: fontsettings kerning" in info.message
 
         # Reopen from git: same data.
         reopened = GitFontraBackend(store, "main")
