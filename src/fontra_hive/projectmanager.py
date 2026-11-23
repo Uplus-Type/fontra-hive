@@ -200,6 +200,7 @@ class DevHiveProjectManager(CommentRoutesMixin):
         # The history, the font diff, the merge preview and the merge's
         # domain check: an executor of their own, a limit per person.
         self.historyWork = HistoryWork()
+        self._aheadBehindCache = SizedCache(AHEAD_BEHIND_BYTES, AHEAD_BEHIND_ENTRIES)
 
     async def aclose(self) -> None:
         if self._runSweepTask is not None:
@@ -1229,14 +1230,15 @@ class DevHiveProjectManager(CommentRoutesMixin):
 
     def _aheadBehind(self, store: GitRepoStore, head: str, base: str):
         """``store.ahead_behind``, cached by pair of commits (the answer for
-        two given commits never changes)."""
-        cache = self.__dict__.setdefault("_aheadBehindCache", {})
-        if len(cache) > 5000:
-            cache.clear()
+        two given commits never changes). Read from the event loop and from
+        the merge preview's thread: a :class:`SizedCache`, behind its lock."""
+        cache = self._aheadBehindCache
         key = (head, base)
-        if key not in cache:
-            cache[key] = store.ahead_behind(head, base)
-        return cache[key]
+        value = cache.get(key)
+        if value is None:
+            value = store.ahead_behind(head, base)
+            cache[key] = value
+        return value
 
     def _branchJSON(
         self, store: GitRepoStore, branch: str, default: str, info: dict
@@ -2318,6 +2320,9 @@ FONT_DIFF_SECONDS = 20
 # changes, source names): in bytes (an estimate), and in entries.
 MAX_CACHE_BYTES = 64 * 1024 * 1024
 MAX_CACHE_ENTRIES = 20000
+# The branches panel's "ahead, behind" per pair of commits.
+AHEAD_BEHIND_ENTRIES = 5000
+AHEAD_BEHIND_BYTES = 4 * 1024 * 1024
 
 
 def approx_size(value, depth: int = 0) -> int:
