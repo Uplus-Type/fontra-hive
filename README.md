@@ -205,7 +205,9 @@ list), which Hive serves with its own script added (Fontra is not modified):
   main…* (managers and admins) and *Update from main…* (anyone who can
   edit). The dialog says what the merge brings (glyphs changed on each
   side, those changed on both but in different sources, merged
-  automatically) and lists the conflicts, each glyph drawn as it is on both
+  automatically, the changes beyond the glyph with their domain, and why
+  the person cannot merge when a domain is kept from them) and lists the
+  conflicts, each glyph drawn as it is on both
   sides, with a choice for each: keep one side or take the other. See
   "Merging" below;
 - **File › Share…**: the members of the project and where their role comes
@@ -458,7 +460,10 @@ while what merged cleanly stays merged.
 
 `merge-preview` answers what a merge would do (`changes.from`,
 `changes.into`, `merged`, `conflicts`, `ahead`/`behind`, `upToDate`,
-`fastForward`, `canMerge`). `merge` refuses (409) a merge with conflicts
+`fastForward`, `canMerge`, `cannotMerge`: why not, in words;
+`beyondTheGlyph`: the changes beyond the glyph, each with `summary`,
+`domain` and `domainLabel`; `closedDomains`: those the requester may not
+write). `merge` refuses (409) a merge with conflicts
 left unresolved (the list, as JSON), a merge whose branches moved since
 the preview (`fromHead`, `intoHead`), and one with nothing to merge. Into
 the default branch it always makes a merge commit (two parents, message
@@ -468,7 +473,11 @@ glyph's history on main shows the merge as one version) and records
 `mergedInto`/`mergedAt`/`mergedBy` in the branch's information; into
 another branch (*Update from main*), a fast-forward when that branch has
 nothing of its own. Capability `merge` (managers, admins) into the default
-branch, `edit` into another. Pending edits of both branches are committed
+branch, `edit` into another; on any branch, the capability of every domain
+beyond the glyph the merge writes (font settings, kerning, plug-in data;
+403 with the domain's sentence otherwise). What the default branch already
+holds may come along: updating a branch from main is never refused for it.
+Pending edits of both branches are committed
 first; an open target picks the merge up as an external change.
 
 The panel polls `head` every 1.5 s (a few bytes) and reloads the list only
@@ -841,7 +850,10 @@ steps:
 `project` is a `HiveProjectRef` (`owner/name`, `owner/name@ref`, or a
 repository uid), whose JSON schema says `"format": "hive-project"`, so tools
 tell it from any string. Rights are those of the Hive routes: reading needs
-`read`, writing needs `edit` (and `branch` for a new branch). A runner calls
+`read`, writing needs `edit` (and `branch` for a new branch), and the
+capability of each domain beyond the glyph the result changes (`kerning.csv`:
+kerning; `features.txt`: font settings; `font-data.json`: the domains of
+its areas), on any branch: what the default branch already holds excepted. A runner calls
 `requireRecipeAccess()` first: every cited project is checked on its own and
 every ref resolved, before anything is read; the actions refuse to run
 without that check, and check again when they run. `hive-read` exposes the

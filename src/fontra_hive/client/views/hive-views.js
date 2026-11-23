@@ -470,6 +470,12 @@ const STYLE = `
   .hive-merge ul.merge-facts { padding-left: 1.2em; margin: 6px 0 10px; line-height: 1.45; }
   .hive-merge ul.merge-facts .quiet { opacity: 0.6; }
   .hive-merge h4 { margin: 14px 0 8px; font-size: 1em; }
+  .hive-merge ul.merge-beyond { list-style: none; padding: 0; margin: 6px 0 10px; line-height: 1.45; }
+  .hive-merge ul.merge-beyond li { display: flex; gap: 10px; justify-content: space-between; padding: 3px 0;
+    border-bottom: 1px solid rgba(128, 128, 128, 0.18); }
+  .hive-merge ul.merge-beyond .domain { flex: none; font-size: 0.85em; opacity: 0.6; }
+  .hive-merge ul.merge-beyond li.closed .domain { opacity: 1; color: #c0392b; font-weight: 600; }
+  .hive-merge p.cannot { color: #c0392b; }
   .hive-merge .merge-conflicts { display: flex; flex-direction: column; gap: 10px; }
   .hive-merge .merge-conflict { display: flex; align-items: center; gap: 12px; padding: 8px 0;
                  border-top: 1px solid #8883; }
@@ -717,8 +723,15 @@ export function openMergeDialog(projectName, { from, into, onMerged, onDone, tit
     ]));
     const facts = el("ul", { class: "merge-facts" });
     if (changes.from.length) facts.append(el("li", {}, [`Glyphs changed on ${from}: `, el("b", {}, [listNames(changes.from)])]));
-    if (changes.files.length) {
-      facts.append(el("li", {}, [`Also: ${changes.files.map((f) => FILE_LABELS[f] || f).join(", ")}`]));
+    // The changes beyond the glyph are listed below, with their domain: the
+    // files they come from are not repeated here.
+    const beyond = preview.beyondTheGlyph || [];
+    const described = new Set(
+      beyond.map((c) => (c.area === "features" ? "features.txt" : c.area === "kerning" ? "kerning.csv" : "font-data.json"))
+    );
+    const otherFiles = changes.files.filter((f) => !described.has(f));
+    if (otherFiles.length) {
+      facts.append(el("li", {}, [`Also: ${otherFiles.map((f) => FILE_LABELS[f] || f).join(", ")}`]));
     }
     if (preview.merged.length) {
       facts.append(el("li", {}, [
@@ -728,6 +741,22 @@ export function openMergeDialog(projectName, { from, into, onMerged, onDone, tit
     }
     if (changes.into.length) facts.append(el("li", { class: "quiet" }, [`Changed on ${into} only (kept): ${listNames(changes.into)}`]));
     lines.push(facts);
+    if (beyond.length) {
+      const closed = new Set(preview.closedDomains || []);
+      lines.push(el("h4", {}, ["Beyond the glyph"]));
+      lines.push(
+        el(
+          "ul",
+          { class: "merge-beyond" },
+          beyond.map((c) =>
+            el("li", { class: closed.has(c.domain) ? "closed" : "", "data-domain": c.domain }, [
+              el("span", {}, [c.summary]),
+              el("span", { class: "domain" }, [c.domainLabel]),
+            ])
+          )
+        )
+      );
+    }
 
     const resolutions = {};
     const merge = el("button", { class: "pill blue" }, ["Merge"]);
@@ -780,7 +809,11 @@ export function openMergeDialog(projectName, { from, into, onMerged, onDone, tit
       lines.push(list);
     }
     if (!preview.canMerge) {
-      lines.push(el("p", { class: "note" }, [`Only managers and admins can merge into ${into}.`]));
+      lines.push(
+        el("p", { class: preview.closedDomains?.length ? "note cannot" : "note" }, [
+          preview.cannotMerge || `Only managers and admins can merge into ${into}.`,
+        ])
+      );
     } else {
       lines.push(el("p", { class: "note" }, [
         `People working on ${into} see the changes arrive. Nothing is lost: ` +

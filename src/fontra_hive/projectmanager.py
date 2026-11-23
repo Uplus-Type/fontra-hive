@@ -79,6 +79,7 @@ from .gitstore import (
 
 from .fontracompat import guard_feature_reading
 from .recipe import projectResolverFor
+from .writedomains import LABELS as DOMAIN_LABELS
 from .writedomains import WRITE_DOMAINS, refusal
 
 # Fontra reading OpenType features with an outside program (sr-aef): best
@@ -1486,17 +1487,62 @@ class DevHiveProjectManager(CommentRoutesMixin):
         default = await self._defaultBranch(request, name)
         source = request.query.get("from") or ""
         target = request.query.get("into") or default
-        store = GitRepoStore.open(repoPath)
-        try:
-            state, _ = self._mergeState(store, source, target)
-        finally:
-            store.close()
+
+        def work():
+            store = GitRepoStore.open(repoPath)
+            try:
+                state, result = self._mergeState(store, source, target)
+                changes, domains = self._mergeDomains(store, state, result, default)
+            finally:
+                store.close()
+            return state, changes, domains
+
+        state, changes, domains = await asyncio.to_thread(work)
         capability = "merge" if target == default else "edit"
         state["default"] = default
-        state["canMerge"] = not self.readOnly and (
-            access is None or access.can(capability)
-        )
+        # What the merge changes beyond the glyph, each change with its
+        # domain; and the domains the person may not write.
+        state["beyondTheGlyph"] = [
+            dict(c.to_json(detail=False), domainLabel=DOMAIN_LABELS[c.domain])
+            for c in changes
+        ]
+        closed = [d for d in domains if access is not None and not access.can(d)]
+        state["closedDomains"] = closed
+        allowed = access is None or access.can(capability)
+        state["canMerge"] = not self.readOnly and allowed and not closed
+        # Why not, said before the person clicks (None: they can, or the
+        # server is read-only).
+        state["cannotMerge"] = None
+        if not allowed and target == default:
+            state["cannotMerge"] = f"Only managers and admins can merge into {target}."
+        elif not allowed:
+            state["cannotMerge"] = f"{access.role} cannot edit"
+        elif closed:
+            state["cannotMerge"] = refusal(closed[0])
         return web.json_response(state)
+
+    def _mergeDomains(self, store: GitRepoStore, state: dict, result, default: str):
+        """What a merge changes beyond the glyph in the branch merged into,
+        and the write domains it touches (fontdiff.domains_written; what
+        the default branch already holds may come along)."""
+        if result is None:
+            return [], []
+        before = self._fontFilesAt(store, state["intoHead"])
+        after = {
+            path: result.changes[path] if path in result.changes else before[path]
+            for path in before
+        }
+        defaultHead = store.head(default)
+        reference = self._fontFilesAt(store, defaultHead) if defaultHead else None
+        return fontdiff.domains_written(before, after, reference)
+
+    @staticmethod
+    def _fontFilesAt(store: GitRepoStore, sha: str) -> dict[str, bytes | None]:
+        files: dict[str, bytes | None] = {}
+        for path in fontdiff.BEYOND_THE_GLYPH_FILES:
+            blob = store.file_sha(sha, path)
+            files[path] = store.read_blob(blob) if blob else None
+        return files
 
     async def mergeHandler(self, request: web.Request) -> web.Response:
         """Merge ``from`` into ``into``: managers and admins into the default
@@ -1565,6 +1611,13 @@ class DevHiveProjectManager(CommentRoutesMixin):
                     text=json.dumps({"conflicts": state["conflicts"]}),
                     content_type="application/json",
                 )
+            # Beyond the glyph, on any branch: only the domains the person
+            # may write (managers and admins have them all).
+            if access is not None:
+                _, domains = self._mergeDomains(store, state, result, default)
+                closed = [d for d in domains if not access.can(d)]
+                if closed:
+                    raise web.HTTPForbidden(text=refusal(closed[0]))
             author = _author(access, self.author)
             ours, theirs = state["intoHead"], state["fromHead"]
             if state["fastForward"] and target != default:

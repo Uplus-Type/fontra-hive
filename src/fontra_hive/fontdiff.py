@@ -963,6 +963,67 @@ def font_changes(
     return sort_changes(changes)
 
 
+def _file_domains(path: str, old: bytes | None, new: bytes | None, described) -> set:
+    """The write domains a change of a file beyond the glyph touches. What
+    Hive cannot describe counts in the file's domain: nothing closed goes
+    through unseen."""
+    if old == new:
+        return set()
+    if path == KERNING_FILE:
+        return {KERNING}
+    if path == FEATURES:
+        return {FONTSETTINGS}
+    domains = {c.domain for c in described} - {EDIT}
+    if not domains:
+        try:
+            same = json.loads(old or b"{}") == json.loads(new or b"{}")
+        except ValueError:
+            same = False
+        if not same:
+            domains.add(FONTSETTINGS)
+    return domains
+
+
+def domains_written(
+    before: Mapping[str, bytes | None],
+    after: Mapping[str, bytes | None],
+    reference: Mapping[str, bytes | None] | None = None,
+) -> tuple[list[FontChange], list[str]]:
+    """What a write (a recipe's hive-write, a merge) changes beyond the
+    glyph, from ``before`` to ``after`` (``{file name: contents}`` for
+    :data:`BEYOND_THE_GLYPH_FILES`, None: absent), and the write domains it
+    touches, in :data:`WRITE_DOMAINS` order: ``kerning.csv`` kerning,
+    ``features.txt`` font settings, ``font-data.json`` the domains of its
+    areas.
+
+    ``reference``: the same files on the project's default branch. A domain
+    whose state after the write is the reference's is not counted: a write
+    may bring what the default branch already holds (a branch brought up to
+    date), never what nobody allowed wrote there."""
+    sourceNames = source_names(after.get(FONT_DATA) or before.get(FONT_DATA))
+
+    def describe(old_files, new_files):
+        changes: list[FontChange] = []
+        domains: set[str] = set()
+        for path in BEYOND_THE_GLYPH_FILES:
+            old, new = old_files.get(path), new_files.get(path)
+            if old == new:
+                continue
+            try:
+                described = file_changes(path, old, new, sourceNames)
+            except Exception:  # undescribable: still in its file's domain
+                described = []
+            changes += [c for c in described if c.domain != EDIT]
+            domains |= _file_domains(path, old, new, described)
+        return sort_changes(changes), domains
+
+    changes, domains = describe(before, after)
+    if reference is not None and domains:
+        _, fromReference = describe(reference, after)
+        domains &= fromReference
+    return changes, [d for d in WRITE_DOMAINS if d in domains]
+
+
 def sort_changes(changes: Iterable[FontChange]) -> list[FontChange]:
     order = {area: i for i, area in enumerate(AREAS)}
     return sorted(changes, key=lambda c: order[c.area])

@@ -84,6 +84,7 @@ from fontra.workflow.actions import (
     registerOutputAction,
 )
 
+from . import fontdiff
 from .access import Access
 from .backend_git import GitFontraBackend
 from .gitstore import (
@@ -94,6 +95,7 @@ from .gitstore import (
     glyphs_trailer,
     one_line,
 )
+from .writedomains import refusal
 
 logger = logging.getLogger(__name__)
 
@@ -535,6 +537,7 @@ class HiveWrite:
                 base = head
 
             changes = _changes(store.list_tree(base), files)
+            self._checkDomains(store, hiveProject, base, changes)
             size = sum(len(data) for data in changes.values() if data is not None)
             context.addOutput(size)
             author = hiveProject.author(context.fallbackAuthor)
@@ -570,6 +573,26 @@ class HiveWrite:
             )
         finally:
             store.close()
+
+    @staticmethod
+    def _checkDomains(store, hiveProject, base: str, changes) -> None:
+        """Beyond the glyph, a recipe writes only the domains the person may
+        write, on any branch (font settings, kerning, plug-in data): the
+        domains of what changes between the base and the result. What the
+        default branch already holds may come along."""
+        if hiveProject.access is None:
+            return
+        before = _fontFilesAt(store, base)
+        after = {
+            path: changes[path] if path in changes else before[path]
+            for path in before
+        }
+        default = store.head(hiveProject.defaultBranch)
+        reference = _fontFilesAt(store, default) if default else None
+        _, domains = fontdiff.domains_written(before, after, reference)
+        closed = [d for d in domains if not hiveProject.can(d)]
+        if closed:
+            raise ActionError(f"hive-write: {refusal(closed[0])}")
 
     async def _fontFiles(self, continueOnError: bool) -> dict[str, bytes]:
         """The font in Fontra's format, as files: exactly what the Fontra
@@ -738,6 +761,15 @@ def _isFontFile(path: str) -> bool:
         FontraBackend.kerningFileName,
         FontraBackend.featureTextFileName,
     )
+
+
+def _fontFilesAt(store, sha: str) -> dict[str, bytes | None]:
+    """The files beyond the glyph of a commit (None: absent)."""
+    files: dict[str, bytes | None] = {}
+    for path in fontdiff.BEYOND_THE_GLYPH_FILES:
+        blob = store.file_sha(sha, path)
+        files[path] = store.read_blob(blob) if blob else None
+    return files
 
 
 def _changes(
