@@ -578,7 +578,8 @@ class HiveWrite:
         """Beyond the glyph, a recipe writes only the domains the person may
         write, on any branch (font settings, kerning, plug-in data): the
         domains of what changes between the base and the result. What the
-        default branch already holds may come along."""
+        default branch already holds may come along to a branch that never
+        changed that domain itself (fontdiff.domains_written)."""
         if hiveProject.access is None:
             return
         before = _fontFilesAt(store, base)
@@ -588,7 +589,8 @@ class HiveWrite:
         }
         default = store.head(hiveProject.defaultBranch)
         reference = _fontFilesAt(store, default) if default else None
-        _, domains = fontdiff.domains_written(before, after, reference)
+        origins = fontdiff.default_branch_origins(store, base, default)
+        _, domains = fontdiff.domains_written(before, after, reference, origins)
         closed = [d for d in domains if not hiveProject.can(d)]
         if closed:
             raise ActionError(f"hive-write: {refusal(closed[0])}")

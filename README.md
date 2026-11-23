@@ -478,7 +478,15 @@ nothing of its own. Capability `merge` (managers, admins) into the default
 branch, `edit` into another; on any branch, the capability of every domain
 beyond the glyph the merge writes (font settings, kerning, plug-in data;
 403 with the domain's sentence otherwise). What the default branch already
-holds may come along: updating a branch from main is never refused for it.
+holds may come along to a branch that never changed that domain itself (its
+state before is the merge base's, or one the default branch had since):
+updating a branch from main is never refused for it, but setting someone's
+branch back to main's settings, which undoes their work there, is. A copy
+of main (a recipe) does not move the merge base: if main later goes back on
+a change the copy took, merging the branch brings that change back. The
+preview says so under *Beyond the glyph* ("Font settings on fabio are as
+main had them before: merging brings them back."); the manager who merges
+decides.
 Pending edits of both branches are committed
 first; an open target picks the merge up as an external change.
 
@@ -855,7 +863,9 @@ tell it from any string. Rights are those of the Hive routes: reading needs
 `read`, writing needs `edit` (and `branch` for a new branch), and the
 capability of each domain beyond the glyph the result changes (`kerning.csv`:
 kerning; `features.txt`: font settings; `font-data.json`: the domains of
-its areas), on any branch: what the default branch already holds excepted. A runner calls
+its areas), on any branch: what the default branch already holds excepted,
+for a domain the branch never changed itself (the merge base's state, or one
+the default branch had since; see *Merging*). A runner calls
 `requireRecipeAccess()` first: every cited project is checked on its own and
 every ref resolved, before anything is read; the actions refuse to run
 without that check, and check again when they run. `hive-read` exposes the

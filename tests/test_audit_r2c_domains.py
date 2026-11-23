@@ -222,9 +222,15 @@ def test_domains_written():
     changes, domains = fontdiff.domains_written(old, new)
     assert domains == ["fontsettings", "kerning"]
     assert [c.area for c in changes] == ["fontInfo", "kerning"]
-    # What the reference (the default branch) holds already is not counted.
-    _, domains = fontdiff.domains_written(old, new, reference=new)
+    # What the reference (the default branch) holds already is not counted
+    # when the branch had not diverged (re-check RV-3: its state before is
+    # one of the origins); otherwise, or without origins, it is.
+    _, domains = fontdiff.domains_written(old, new, reference=new, origins=[old])
     assert domains == []
+    _, domains = fontdiff.domains_written(old, new, reference=new)
+    assert domains == ["fontsettings", "kerning"]
+    _, domains = fontdiff.domains_written(old, new, reference=new, origins=[new])
+    assert domains == ["fontsettings", "kerning"]
     # A change Hive cannot read counts in its file's domain.
     _, domains = fontdiff.domains_written(
         {"font-data.json": b"{}"}, {"font-data.json": b"not json"}

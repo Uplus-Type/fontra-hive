@@ -988,6 +988,7 @@ def domains_written(
     before: Mapping[str, bytes | None],
     after: Mapping[str, bytes | None],
     reference: Mapping[str, bytes | None] | None = None,
+    origins: Iterable[Mapping[str, bytes | None]] | None = None,
 ) -> tuple[list[FontChange], list[str]]:
     """What a write (a recipe's hive-write, a merge) changes beyond the
     glyph, from ``before`` to ``after`` (``{file name: contents}`` for
@@ -996,10 +997,16 @@ def domains_written(
     ``features.txt`` font settings, ``font-data.json`` the domains of its
     areas.
 
-    ``reference``: the same files on the project's default branch. A domain
-    whose state after the write is the reference's is not counted: a write
-    may bring what the default branch already holds (a branch brought up to
-    date), never what nobody allowed wrote there."""
+    ``reference``: the same files on the project's default branch, and
+    ``origins``: the states the branch may hold without having diverged from
+    the default branch (:func:`default_branch_origins`: the merge base, then
+    the default branch's states since). A domain is not counted when its
+    state after the write is the reference's **and** its state before the
+    write is one of ``origins``: a write may bring what the default branch
+    already holds to a branch that never changed that domain itself (a
+    branch brought up to date, a recurring recipe), never undo work done on
+    the branch, nor write what nobody allowed. Without ``origins``, the
+    reference alone lets nothing through."""
     sourceNames = source_names(after.get(FONT_DATA) or before.get(FONT_DATA))
 
     def describe(old_files, new_files):
@@ -1018,10 +1025,92 @@ def domains_written(
         return sort_changes(changes), domains
 
     changes, domains = describe(before, after)
-    if reference is not None and domains:
+    if reference is not None and domains and origins is not None:
         _, fromReference = describe(reference, after)
-        domains &= fromReference
+        asReference = domains - fromReference
+        if asReference:
+            domains -= domains_held(before, origins, asReference, describe)
     return changes, [d for d in WRITE_DOMAINS if d in domains]
+
+
+def domains_held(
+    files: Mapping[str, bytes | None],
+    candidates: Iterable[Mapping[str, bytes | None]],
+    domains: set[str] | frozenset[str],
+    describe=None,
+) -> set[str]:
+    """Of ``domains``, those whose state in ``files`` is their state in one
+    of ``candidates`` (read lazily, only as far as needed)."""
+    if describe is None:
+        return domains_held(
+            files,
+            candidates,
+            domains,
+            lambda old, new: domains_written(old, new),
+        )
+    held: set[str] = set()
+    wanted = set(domains)
+    if not wanted:
+        return held
+    for candidate in candidates:
+        _, differ = describe(candidate, files)
+        held |= wanted - set(differ)
+        if held == wanted:
+            break
+    return held
+
+
+# How far back the default branch is read for the states a branch may hold
+# without having diverged (default_branch_origins): beyond, a domain counts.
+ORIGIN_COMMITS = 5000
+ORIGIN_STATES = 200
+
+
+def files_at(store, sha: str) -> dict[str, bytes | None]:
+    """The files beyond the glyph of a commit (None: absent)."""
+    files: dict[str, bytes | None] = {}
+    for path in BEYOND_THE_GLYPH_FILES:
+        blob = store.file_sha(sha, path)
+        files[path] = store.read_blob(blob) if blob else None
+    return files
+
+
+def default_branch_states(
+    store, default_head: str, base: str | None, *, include_head: bool = True
+):
+    """The distinct states of the files beyond the glyph on the first-parent
+    line of the default branch, newest first, after ``base`` (excluded) and
+    up to ``default_head`` (``include_head``: that one too). Read lazily;
+    at most :data:`ORIGIN_COMMITS` commits and :data:`ORIGIN_STATES` states."""
+    seen: set[tuple] = set()
+    commit = default_head
+    walked = 0
+    while commit is not None and commit != base and walked < ORIGIN_COMMITS:
+        walked += 1
+        key = tuple(store.file_sha(commit, p) for p in BEYOND_THE_GLYPH_FILES)
+        if key not in seen and (include_head or commit != default_head):
+            seen.add(key)
+            yield {
+                path: store.read_blob(blob) if blob else None
+                for path, blob in zip(BEYOND_THE_GLYPH_FILES, key)
+            }
+            if len(seen) >= ORIGIN_STATES:
+                return
+        parents = store.commit_info(commit).parents
+        commit = parents[0] if parents else None
+
+
+def default_branch_origins(store, head: str, default_head: str | None):
+    """The states a branch at ``head`` may hold beyond the glyph without
+    having diverged from the default branch: the files at their merge base
+    (the branch never changed them), then the default branch's states since
+    (a copy of the default branch, as a recurring recipe makes). Lazy."""
+    if default_head is None:
+        return
+    base = store.merge_base(head, default_head)
+    if base is not None:
+        yield files_at(store, base)
+    yield from default_branch_states(store, default_head, base)
 
 
 def sort_changes(changes: Iterable[FontChange]) -> list[FontChange]:

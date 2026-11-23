@@ -80,7 +80,7 @@ from .gitstore import (
 from .fontracompat import guard_feature_reading
 from .recipe import projectResolverFor
 from .writedomains import LABELS as DOMAIN_LABELS
-from .writedomains import WRITE_DOMAINS, refusal
+from .writedomains import FONTSETTINGS, WRITE_DOMAINS, refusal
 
 # Fontra reading OpenType features with an outside program (sr-aef): best
 # effort, in Try (no program in the browser) and on the server.
@@ -1505,11 +1505,12 @@ class DevHiveProjectManager(CommentRoutesMixin):
             try:
                 state, result = self._mergeState(store, source, target)
                 changes, domains = self._mergeDomains(store, state, result, default)
+                broughtBack = self._broughtBack(store, state, result, default, domains)
             finally:
                 store.close()
-            return state, changes, domains
+            return state, changes, domains, broughtBack
 
-        state, changes, domains = await asyncio.to_thread(work)
+        state, changes, domains, broughtBack = await asyncio.to_thread(work)
         capability = "merge" if target == default else "edit"
         state["default"] = default
         # What the merge changes beyond the glyph, each change with its
@@ -1520,6 +1521,12 @@ class DevHiveProjectManager(CommentRoutesMixin):
         ]
         closed = [d for d in domains if access is not None and not access.can(d)]
         state["closedDomains"] = closed
+        # A copy of the default branch is not a merge: what the branch took
+        # from an earlier state of it comes back (the re-check's RV-3).
+        state["broughtBack"] = [
+            {"domain": d, "domainLabel": DOMAIN_LABELS[d], "text": brought_back(d, source, target)}
+            for d in broughtBack
+        ]
         allowed = access is None or access.can(capability)
         state["canMerge"] = not self.readOnly and allowed and not closed
         # Why not, said before the person clicks (None: they can, or the
@@ -1536,7 +1543,8 @@ class DevHiveProjectManager(CommentRoutesMixin):
     def _mergeDomains(self, store: GitRepoStore, state: dict, result, default: str):
         """What a merge changes beyond the glyph in the branch merged into,
         and the write domains it touches (fontdiff.domains_written; what
-        the default branch already holds may come along)."""
+        the default branch already holds may come along to a branch that
+        never changed that domain itself)."""
         if result is None:
             return [], []
         before = self._fontFilesAt(store, state["intoHead"])
@@ -1546,7 +1554,25 @@ class DevHiveProjectManager(CommentRoutesMixin):
         }
         defaultHead = store.head(default)
         reference = self._fontFilesAt(store, defaultHead) if defaultHead else None
-        return fontdiff.domains_written(before, after, reference)
+        origins = fontdiff.default_branch_origins(store, state["intoHead"], defaultHead)
+        return fontdiff.domains_written(before, after, reference, origins)
+
+    @staticmethod
+    def _broughtBack(store: GitRepoStore, state: dict, result, default: str, domains):
+        """Into the default branch: the domains the merge changes whose state
+        on the branch merged is an earlier state of the default branch (not
+        its current one). A recipe that copies the default branch does not
+        move the merge base: when the default branch then changes back, the
+        merge brings the copied state back. Said in the preview."""
+        if result is None or state["into"] != default or not domains:
+            return []
+        older = fontdiff.default_branch_states(
+            store, state["intoHead"], state["base"], include_head=False
+        )
+        held = fontdiff.domains_held(
+            fontdiff.files_at(store, state["fromHead"]), older, set(domains)
+        )
+        return [d for d in WRITE_DOMAINS if d in held]
 
     @staticmethod
     def _fontFilesAt(store: GitRepoStore, sha: str) -> dict[str, bytes | None]:
@@ -2280,6 +2306,15 @@ class SizedCache:
             ):
                 _, (_, dropped) = self._data.popitem(last=False)
                 self.size -= dropped
+
+
+def brought_back(domain: str, source: str, target: str) -> str:
+    """The preview's sentence for a domain a merge brings back from an
+    earlier state of the default branch."""
+    label = DOMAIN_LABELS[domain]
+    if domain == FONTSETTINGS:
+        return f"{label} on {source} are as {target} had them before: merging brings them back."
+    return f"{label} on {source} is as {target} had it before: merging brings it back."
 
 
 def _snapshotJSON(snapshot: SnapshotInfo | GlyphSnapshotInfo) -> dict[str, Any]:
