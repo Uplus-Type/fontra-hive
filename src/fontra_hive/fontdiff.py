@@ -38,9 +38,12 @@ from __future__ import annotations
 import csv
 import dataclasses
 import difflib
-from collections import Counter
+import hashlib
+from collections import Counter, OrderedDict
 import io
 import json
+import re
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
@@ -1032,32 +1035,164 @@ def domains_written(
         _, fromReference = describe(reference, after)
         asReference = domains - fromReference
         if asReference:
-            domains -= domains_held(before, origins, asReference, describe)
+            domains -= domains_held(before, origins, asReference)
     return changes, [d for d in WRITE_DOMAINS if d in domains]
+
+
+# --- the states a branch may hold -----------------------------------------------
+#
+# A domain's state beyond the glyph is compared by its fingerprint, never by
+# a description: ``features.txt`` and ``kerning.csv`` by their git blob id,
+# ``font-data.json`` by its JSON, normalized (keys sorted) and hashed apart
+# for the plug-ins' custom data and for the rest. Reading a branch's origins
+# then costs one hash per state, not one description per state (VF-1). Two
+# states whose JSON differ only in form (a default value written out) count
+# as different: that can only close more, never open.
+
+
+class _Memo:
+    """A small cache, bounded in entries, safe for threads. Its keys are git
+    object ids: what they name never changes."""
+
+    def __init__(self, maxEntries: int):
+        self.maxEntries = maxEntries
+        self._data: OrderedDict = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, key):
+        with self._lock:
+            value = self._data.get(key)
+            if value is not None:
+                self._data.move_to_end(key)
+            return value
+
+    def put(self, key, value) -> None:
+        with self._lock:
+            self._data[key] = value
+            self._data.move_to_end(key)
+            while len(self._data) > self.maxEntries:
+                self._data.popitem(last=False)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._data.clear()
+
+
+# font-data.json blob id -> (font settings, plug-in data) fingerprints.
+_fontDataPrints = _Memo(4096)
+# commit -> (first parent, blob ids of BEYOND_THE_GLYPH_FILES): about 0.7 kB
+# each, 20 MB at most; a walk of ORIGIN_COMMITS fits six times.
+_commitSteps = _Memo(30_000)
+# (commit, commit) -> merge base.
+_SHA = re.compile("[0-9a-f]{40}")
+_mergeBases = _Memo(4096)
+
+
+def blob_id(data: bytes | None) -> str | None:
+    """The git blob id of ``data`` (None: absent)."""
+    if data is None:
+        return None
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+class FileState(Mapping):
+    """The files beyond the glyph of a commit, ``{file name: contents}``,
+    read only when asked; :attr:`blobs` gives their blob ids without
+    reading them."""
+
+    def __init__(self, store, blobs: Mapping[str, str | None]):
+        self._store = store
+        self.blobs = dict(blobs)
+        self._read: dict[str, bytes | None] = {}
+
+    def __getitem__(self, path):
+        if path not in self.blobs:
+            raise KeyError(path)
+        if path not in self._read:
+            blob = self.blobs[path]
+            self._read[path] = self._store.read_blob(blob) if blob else None
+        return self._read[path]
+
+    def __iter__(self):
+        return iter(self.blobs)
+
+    def __len__(self):
+        return len(self.blobs)
+
+
+def _blob_of(files: Mapping[str, bytes | None], path: str) -> str | None:
+    blobs = getattr(files, "blobs", None)
+    if blobs is not None:
+        return blobs.get(path)
+    return blob_id(files.get(path))
+
+
+def _json_print(value) -> str:
+    text = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()
+
+
+def _font_data_prints(data: bytes | None) -> tuple[str, str]:
+    """``(font settings, plug-in data)`` of a ``font-data.json``: its JSON
+    normalized and hashed, the plug-ins' custom data apart. A file that is
+    not a JSON object: its bytes, in both (it counts in both)."""
+    try:
+        font = json.loads(data.decode("utf-8")) if data is not None else {}
+    except ValueError:
+        font = None
+    if not isinstance(font, dict):
+        raw = "raw:" + (blob_id(data) or "")
+        return raw, raw
+    settings = dict(font)
+    custom = settings.pop("customData", None)
+    plugins = {}
+    if isinstance(custom, dict):
+        rest = {}
+        for key, value in custom.items():
+            if customDataDomain(key) == PLUGINDATA:
+                plugins[key] = value
+            else:
+                rest[key] = value
+        if rest:
+            settings["customData"] = rest
+    elif custom is not None:
+        settings["customData"] = custom
+    return _json_print(settings), _json_print(plugins)
+
+
+def fingerprints(files: Mapping[str, bytes | None]) -> dict[str, tuple]:
+    """``{domain: fingerprint}`` of the files beyond the glyph: equal
+    fingerprints, same state of that domain."""
+    fontData = _blob_of(files, FONT_DATA)
+    prints = _fontDataPrints.get(fontData) if fontData else None
+    if prints is None:
+        prints = _font_data_prints(files.get(FONT_DATA))
+        if fontData:
+            _fontDataPrints.put(fontData, prints)
+    settings, plugins = prints
+    return {
+        FONTSETTINGS: (_blob_of(files, FEATURES), settings),
+        KERNING: (_blob_of(files, KERNING_FILE),),
+        PLUGINDATA: (plugins,),
+    }
 
 
 def domains_held(
     files: Mapping[str, bytes | None],
     candidates: Iterable[Mapping[str, bytes | None]],
     domains: set[str] | frozenset[str],
-    describe=None,
 ) -> set[str]:
     """Of ``domains``, those whose state in ``files`` is their state in one
-    of ``candidates`` (read lazily, only as far as needed)."""
-    if describe is None:
-        return domains_held(
-            files,
-            candidates,
-            domains,
-            lambda old, new: domains_written(old, new),
-        )
+    of ``candidates`` (read lazily, only as far as needed), compared by
+    :func:`fingerprints`: no candidate is described."""
     held: set[str] = set()
     wanted = set(domains)
     if not wanted:
         return held
+    mine = fingerprints(files)
     for candidate in candidates:
-        _, differ = describe(candidate, files)
-        held |= wanted - set(differ)
+        theirs = fingerprints(candidate)
+        held |= {d for d in wanted if mine.get(d) == theirs.get(d)}
         if held == wanted:
             break
     return held
@@ -1069,13 +1204,55 @@ ORIGIN_COMMITS = 5000
 ORIGIN_STATES = 200
 
 
-def files_at(store, sha: str) -> dict[str, bytes | None]:
-    """The files beyond the glyph of a commit (None: absent)."""
-    files: dict[str, bytes | None] = {}
-    for path in BEYOND_THE_GLYPH_FILES:
-        blob = store.file_sha(sha, path)
-        files[path] = store.read_blob(blob) if blob else None
-    return files
+def _step(store, sha: str) -> tuple[str | None, tuple]:
+    """``(first parent, blob ids of BEYOND_THE_GLYPH_FILES)`` of a commit:
+    one commit and one tree read, kept."""
+    if not _SHA.fullmatch(sha):
+        sha = store.resolve(sha)
+    found = _commitSteps.get(sha)
+    if found is None:
+        found = store.first_parent_and_files(sha, BEYOND_THE_GLYPH_FILES)
+        _commitSteps.put(sha, found)
+    return found
+
+
+def files_at(store, sha: str) -> FileState:
+    """The files beyond the glyph of a commit (None: absent), read when asked."""
+    _, blobs = _step(store, sha)
+    return FileState(store, dict(zip(BEYOND_THE_GLYPH_FILES, blobs)))
+
+
+def merge_base(store, a: str, b: str) -> str | None:
+    """``store.merge_base`` of two commits, kept (a name is not kept: what
+    it names moves)."""
+    if not (_SHA.fullmatch(a) and _SHA.fullmatch(b)):
+        return store.merge_base(a, b)
+    key = (a, b)
+    found = _mergeBases.get(key)
+    if found is None:
+        found = (store.merge_base(a, b),)
+        _mergeBases.put(key, found)
+    return found[0]
+
+
+def _walk_states(store, default_head, base, include_head, origins=None):
+    seen: set[tuple] = set()
+    commit = default_head
+    walked = 0
+    while commit is not None and commit != base:
+        if walked >= ORIGIN_COMMITS:
+            break
+        walked += 1
+        parent, key = _step(store, commit)
+        if key not in seen and (include_head or commit != default_head):
+            seen.add(key)
+            yield FileState(store, dict(zip(BEYOND_THE_GLYPH_FILES, key)))
+            if len(seen) >= ORIGIN_STATES:
+                commit = parent
+                break
+        commit = parent
+    if origins is not None and commit is not None and commit != base:
+        origins.cut = True  # stopped at a bound, not at the base
 
 
 def default_branch_states(
@@ -1085,35 +1262,47 @@ def default_branch_states(
     line of the default branch, newest first, after ``base`` (excluded) and
     up to ``default_head`` (``include_head``: that one too). Read lazily;
     at most :data:`ORIGIN_COMMITS` commits and :data:`ORIGIN_STATES` states."""
-    seen: set[tuple] = set()
-    commit = default_head
-    walked = 0
-    while commit is not None and commit != base and walked < ORIGIN_COMMITS:
-        walked += 1
-        key = tuple(store.file_sha(commit, p) for p in BEYOND_THE_GLYPH_FILES)
-        if key not in seen and (include_head or commit != default_head):
-            seen.add(key)
-            yield {
-                path: store.read_blob(blob) if blob else None
-                for path, blob in zip(BEYOND_THE_GLYPH_FILES, key)
-            }
-            if len(seen) >= ORIGIN_STATES:
-                return
-        parents = store.commit_info(commit).parents
-        commit = parents[0] if parents else None
+    return _walk_states(store, default_head, base, include_head)
 
 
-def default_branch_origins(store, head: str, default_head: str | None):
+class Origins:
     """The states a branch at ``head`` may hold beyond the glyph without
     having diverged from the default branch: the files at their merge base
     (the branch never changed them), then the default branch's states since
-    (a copy of the default branch, as a recurring recipe makes). Lazy."""
-    if default_head is None:
-        return
-    base = store.merge_base(head, default_head)
-    if base is not None:
-        yield files_at(store, base)
-    yield from default_branch_states(store, default_head, base)
+    (a copy of the default branch, as a recurring recipe makes). Read
+    lazily, once. :attr:`cut`: the reading stopped at its bounds
+    (:data:`ORIGIN_STATES`, :data:`ORIGIN_COMMITS`) before the merge base,
+    so an older copy of the default branch was not looked for (VF-4)."""
+
+    def __init__(self, store, head: str, default_head: str | None):
+        self._store = store
+        self._head = head
+        self._default = default_head
+        self.cut = False
+
+    def __iter__(self):
+        if self._default is None:
+            return
+        base = merge_base(self._store, self._head, self._default)
+        if base is not None:
+            yield files_at(self._store, base)
+        yield from _walk_states(self._store, self._default, base, True, self)
+
+
+def default_branch_origins(store, head: str, default_head: str | None) -> Origins:
+    """:class:`Origins` of a branch at ``head``."""
+    return Origins(store, head, default_head)
+
+
+def copies_reference(
+    after: Mapping[str, bytes | None], reference: Mapping[str, bytes | None] | None
+) -> set[str]:
+    """The write domains whose state in ``after`` is the reference's (a
+    write that copies the default branch there)."""
+    if reference is None:
+        return set()
+    mine, theirs = fingerprints(after), fingerprints(reference)
+    return {d for d in WRITE_DOMAINS if mine[d] == theirs[d]}
 
 
 def sort_changes(changes: Iterable[FontChange]) -> list[FontChange]:

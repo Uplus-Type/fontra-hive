@@ -26,8 +26,10 @@ from typing import Any, Callable, Hashable
 
 from aiohttp import web
 
-THREADS = 2
+# One person never holds every thread: one is always left to the others.
+THREADS = 3
 PER_PERSON = 2
+assert PER_PERSON < THREADS
 BUSY = "Hive is still working on your last request. Try again in a moment."
 
 

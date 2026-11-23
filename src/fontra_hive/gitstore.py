@@ -25,6 +25,7 @@ import re
 import stat
 import time
 import unicodedata
+import zlib
 from dataclasses import dataclass, replace
 from typing import Callable, Iterable, Iterator, Mapping
 
@@ -565,6 +566,52 @@ class GitRepoStore:
         except KeyError:
             return None
         return _s(sha)
+
+    def _raw_reader(self) -> Callable[[bytes], bytes]:
+        """``read(hex id) -> raw contents`` of an object: a loose object read
+        straight from its file (dulwich would build the object first), a
+        packed one through dulwich."""
+        store = self.repo.object_store
+        root = getattr(store, "path", None)
+
+        def read(sha: bytes) -> bytes:
+            if root is not None:
+                name = sha.decode("ascii")
+                try:
+                    with open(os.path.join(root, name[:2], name[2:]), "rb") as f:
+                        data = zlib.decompress(f.read())
+                except FileNotFoundError:
+                    pass
+                else:
+                    return data[data.index(b"\0") + 1 :]
+            return store.get_raw(sha)[1]
+
+        return read
+
+    def first_parent_and_files(
+        self, commit_sha: str, paths: Iterable[str]
+    ) -> tuple[str | None, tuple[str | None, ...]]:
+        """``(first parent, blob shas)`` of a commit, for ``paths`` at the
+        top of its tree (None: absent): one commit and one tree read, raw
+        (no object built), to walk a long history cheaply."""
+        get_raw = self._raw_reader()
+        raw = get_raw(_b(commit_sha))
+        # "tree <id>", then "parent <id>" lines (the first parent first).
+        first, second = (raw.split(b"\n", 2) + [b"", b""])[:2]
+        tree = first[5:] if first.startswith(b"tree ") else None
+        parent = second[7:] if second.startswith(b"parent ") else None
+        if tree is None:
+            raise KeyError(f"not a commit: {commit_sha}")
+        entries = get_raw(tree)
+        found: dict[bytes, str] = {}
+        position, end = 0, len(entries)
+        while position < end:
+            space = entries.index(b" ", position)
+            nul = entries.index(b"\0", space)
+            found[entries[space + 1 : nul]] = entries[nul + 1 : nul + 21].hex()
+            position = nul + 21
+        blobs = tuple(found.get(_b(path)) for path in paths)
+        return (_s(parent) if parent else None), blobs
 
     def read_file(self, commit_sha: str, path: str) -> bytes:
         tree = self.repo[self.repo[_b(commit_sha)].tree]

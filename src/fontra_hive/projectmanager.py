@@ -1609,7 +1609,7 @@ class DevHiveProjectManager(CommentRoutesMixin):
         theirs, ours = store.head(source), store.head(target)
         if theirs is None or ours is None:
             return [], []  # _mergeState answers 404
-        base = store.merge_base(ours, theirs)
+        base = fontdiff.merge_base(store, ours, theirs)  # kept: the origins ask too
 
         def files(sha):
             found = {}
