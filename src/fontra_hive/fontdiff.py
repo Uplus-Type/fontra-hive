@@ -949,12 +949,15 @@ def font_changes(
     old: Mapping[str, bytes | None],
     new: Mapping[str, bytes | None],
     detail: bool = False,
+    fontData: bytes | None = None,
 ) -> list[FontChange]:
     """What changed beyond the glyphs between two versions of a package,
     given ``{file name: contents}`` for :data:`FONT_FILES` (a missing key or
     None: the file is absent), in the order of :data:`AREAS`. ``detail``:
-    with the features' lines (never for a commit message)."""
-    sourceNames = source_names(new.get(FONT_DATA) or old.get(FONT_DATA))
+    with the features' lines (never for a commit message). ``fontData``:
+    the ``font-data.json`` that names the kerning's sources when neither
+    side holds it (a change of the kerning alone)."""
+    sourceNames = source_names(new.get(FONT_DATA) or old.get(FONT_DATA) or fontData)
     changes: list[FontChange] = []
     for path in FONT_FILES:
         changes += file_changes(

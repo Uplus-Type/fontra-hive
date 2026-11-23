@@ -31,7 +31,14 @@ from fontra.backends.fontra import FontraBackend, componentNamesFromGlyphData
 from fontra.core.glyphdependencies import GlyphDependencies
 from fontra.core.protocols import WritableFontBackend
 
-from .fontdiff import FONT_FILES, domains_of, font_changes, title_words
+from .fontdiff import (
+    FONT_DATA,
+    FONT_FILES,
+    KERNING_FILE,
+    domains_of,
+    font_changes,
+    title_words,
+)
 from .gitstore import (
     DEFAULT_BRANCH,
     GitRepoStore,
@@ -166,7 +173,9 @@ class GitFontraBackend(FontraBackend):
         for author, subset in by_author.values():
             for attempt in range(3):
                 # Said in words against the parent it is committed on.
-                message = _commit_message(subset, self._before(subset))
+                message = _commit_message(
+                    subset, self._before(subset), self._sourcesFontData(subset)
+                )
                 try:
                     new_sha = self.store.commit(
                         subset,
@@ -204,6 +213,17 @@ class GitFontraBackend(FontraBackend):
                 except KeyError:
                     before[path] = None
         return before
+
+    def _sourcesFontData(self, changes: dict[str, bytes | None]) -> bytes | None:
+        """The ``font-data.json`` of the commit the changes go on, when they
+        change the kerning without it: the kerning names its sources by
+        their names, not their identifiers."""
+        if KERNING_FILE not in changes or FONT_DATA in changes:
+            return None
+        try:
+            return self.store.read_file(self.tree.commit_sha, FONT_DATA)
+        except KeyError:
+            return None
 
     async def aclose(self) -> None:
         if self._poll_task is not None:
@@ -340,14 +360,18 @@ MAX_SUMMARY_LINES = 12
 
 
 def _commit_message(
-    changes: dict[str, bytes | None], before: dict[str, bytes | None] | None = None
+    changes: dict[str, bytes | None],
+    before: dict[str, bytes | None] | None = None,
+    fontData: bytes | None = None,
 ) -> str:
     """The message of a commit: a title in words ("Edit axes, features; Edit
     A, B"), what changed beyond the glyph (one sentence per line,
     :mod:`fontra_hive.fontdiff`), and the trailers ``Hive-Glyphs`` (the
     glyphs changed) and ``Hive-Font`` (the domains beyond the glyph touched:
     fontsettings, kerning, plugindata). ``before``: the font files as they
-    are in the parent (absent: compared with nothing, said by file name)."""
+    are in the parent (absent: compared with nothing, said by file name).
+    ``fontData``: the head's ``font-data.json``, which names the kerning's
+    sources when the changes do not hold it."""
     from fontra.backends.filenames import fileNameToString
 
     # Every text from the font goes through one_line before it enters the
@@ -361,7 +385,9 @@ def _commit_message(
     summary = []
     if before is not None and fontFiles:
         try:
-            summary = font_changes(before, {p: changes[p] for p in fontFiles})
+            summary = font_changes(
+                before, {p: changes[p] for p in fontFiles}, fontData=fontData
+            )
         except Exception:  # never lose an edit over its description
             logger.exception("could not describe the change of %s", fontFiles)
             summary = []
