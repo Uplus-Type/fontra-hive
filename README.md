@@ -339,7 +339,9 @@ and is served by the Fontra server itself under `/hive/plugin/`.
   is rewritten or squashed: a snapshot is an empty commit (same tree as its
   parent) whose message sums up the grouped commits — count, authors,
   glyphs — with `Hive-Snapshot*` trailers, plus an annotated tag
-  `snapshot/<name>` on it. Clones, `git pull`, earlier `Hive-Restore`
+  `snapshot/<name>` on it. The tag is what makes it a snapshot: a commit
+  whose message has the trailers but no tag on it is an ordinary commit.
+  Clones, `git pull`, earlier `Hive-Restore`
   references and per-commit authorship are unaffected, and the history of
   every edit stays available. (Compacting old history into one commit per
   snapshot, on a separate branch or by rewriting, is left for later.)

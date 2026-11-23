@@ -92,8 +92,10 @@ class CommitInfo:
 class SnapshotInfo:
     """A named point of a branch: an empty commit (same tree as its parent)
     whose message carries a ``Hive-Snapshot:`` trailer, plus an annotated tag
-    ``snapshot/<name>`` pointing at it. Nothing is rewritten: the commits
-    since the previous snapshot stay in the history, the snapshot groups them.
+    ``snapshot/<name>`` pointing at it. The tag is what makes it a snapshot:
+    a commit with the trailer but no tag is an ordinary commit. Nothing is
+    rewritten: the commits since the previous snapshot stay in the history,
+    the snapshot groups them.
     """
 
     name: str  # tag-safe slug, unique in the repository
@@ -778,13 +780,17 @@ class GitRepoStore:
                 if order is not None:
                     order.append(("glyph-snapshot", gs.name))
             if snapshots is not None:
-                snapshot_name = _trailer(commit.message, HIVE_SNAPSHOT_TRAILER)
+                snapshot_name = self._snapshot_name(commit)
                 if snapshot_name is not None:
                     snapshots.append(self._snapshot_info(commit))
                     current_snapshot = snapshot_name
                     if order is not None:
                         order.append(("snapshot", snapshot_name))
-                    if paths is not None:
+                    # A snapshot changes no file: skipped in path mode only
+                    # when its tree is its parent's (anything else is shown).
+                    if paths is not None and (
+                        parent is not None and store[parent].tree == commit.tree
+                    ):
                         commit_id = parent
                         continue
             if paths is None:
@@ -830,7 +836,7 @@ class GitRepoStore:
         commit_id: bytes | None = _b(self.resolve(ref))
         while commit_id is not None:
             commit = store[commit_id]
-            if _trailer(commit.message, HIVE_SNAPSHOT_TRAILER) is not None:
+            if self._snapshot_name(commit) is not None:
                 result.append(self._snapshot_info(commit))
             commit_id = commit.parents[0] if commit.parents else None
         return result
@@ -841,7 +847,7 @@ class GitRepoStore:
         commit_id: bytes | None = _b(self.resolve(ref))
         while commit_id is not None:
             commit = store[commit_id]
-            if _trailer(commit.message, HIVE_SNAPSHOT_TRAILER) is not None:
+            if self._snapshot_name(commit) is not None:
                 return self._snapshot_info(commit)
             commit_id = commit.parents[0] if commit.parents else None
         return None
@@ -1046,7 +1052,7 @@ class GitRepoStore:
         commit = self.repo[_b(sha)]
         if not isinstance(commit, Commit):
             return None
-        if _trailer(commit.message, HIVE_SNAPSHOT_TRAILER) is None:
+        if self._snapshot_name(commit) is None:
             return None
         return self._snapshot_info(commit)
 
@@ -1064,6 +1070,19 @@ class GitRepoStore:
         if isinstance(obj, Tag):
             obj = self.repo[obj.object[1]]
         return _s(obj.id) if isinstance(obj, Commit) else None
+
+    def _snapshot_name(self, commit: Commit) -> str | None:
+        """The name of the snapshot ``commit`` is, or None.
+
+        A snapshot is known by its tag ``snapshot/<name>`` pointing at the
+        commit, which only Hive writes. The ``Hive-Snapshot`` trailer says
+        which tag to look for, nothing more: a commit whose message was
+        forged (a name with a blank line, written before the trailers were
+        made safe) has no such tag, and stays an ordinary commit."""
+        name = _trailer(commit.message, HIVE_SNAPSHOT_TRAILER)
+        if not name:
+            return None
+        return name if self.snapshot_commit(name) == _s(commit.id) else None
 
     def _snapshot_info(self, commit: Commit) -> SnapshotInfo:
         info = self.commit_info(_s(commit.id))
