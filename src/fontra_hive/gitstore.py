@@ -209,8 +209,11 @@ FOLLOWS_REMOTE = "This branch follows the remote repository: pull to update it."
 
 def follows_remote(branch: str | None) -> bool:
     """Whether ``branch`` mirrors a remote branch (``upstream/…``), which no
-    route writes but the pull."""
-    return isinstance(branch, str) and branch.startswith(UPSTREAM_BRANCH_PREFIX)
+    route writes but the pull. Whatever its case: on a disk that ignores
+    case, ``Upstream/main`` is the file of ``upstream/main``."""
+    return isinstance(branch, str) and branch.casefold().startswith(
+        UPSTREAM_BRANCH_PREFIX
+    )
 
 
 def branch_name_error(name: str) -> str | None:
@@ -285,15 +288,17 @@ class GitRepoStore:
         except KeyError:  # not a name a branch can have: no such branch
             return None
         sha = self.repo.refs.read_ref(ref)
-        return _s(sha) if sha else None
+        if not sha:
+            return None
+        # Only a branch of that exact name: on a disk that ignores case,
+        # "Upstream/main" would read (and write) the file of "upstream/main".
+        if branch not in self.branches():
+            return None
+        return _s(sha)
 
     def branches(self) -> list[str]:
-        prefix = b"refs/heads/"
-        return sorted(
-            _s(ref[len(prefix) :])
-            for ref in self.repo.refs.keys()
-            if ref.startswith(prefix)
-        )
+        """The branches, by their exact names (as git lists them)."""
+        return sorted(_s(ref) for ref in self.repo.refs.keys(base=b"refs/heads"))
 
     def create_branch(self, name: str, from_ref: str = DEFAULT_BRANCH) -> str:
         sha = self.resolve(from_ref)
@@ -314,10 +319,14 @@ class GitRepoStore:
         error = branch_name_error(name)
         if error:
             return error
+        # Compared whatever the case: on a disk that ignores case, two names
+        # that differ only by case are one file.
+        folded = name.casefold()
         for existing in self.branches():
-            if existing == name:
-                return f"There is already a branch {name!r}."
-            if name.startswith(existing + "/") or existing.startswith(name + "/"):
+            other = existing.casefold()
+            if other == folded:
+                return f"There is already a branch {existing!r}."
+            if folded.startswith(other + "/") or other.startswith(folded + "/"):
                 return f"{name!r} clashes with the branch {existing!r}."
         return None
 
