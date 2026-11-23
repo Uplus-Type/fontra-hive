@@ -1071,7 +1071,9 @@ class DevHiveProjectManager(CommentRoutesMixin):
     async def restoreFontHandler(self, request: web.Request) -> web.Response:
         """Bring the whole font, or some parts of it (``parts``, comma
         separated: :data:`fontrestore.PARTS`), back to the state they had at
-        ``ref`` (a version or a snapshot), as a new commit.
+        ``ref`` (a version or a snapshot), as a new commit. ``tzOffset``
+        (the browser's ``getTimezoneOffset()``) dates a version in the
+        person's time in the sentence they read; the commit says UTC.
 
         The whole font is the managers' (``merge``); a part, of whoever has
         the capability of its domain. Restoring the axes and sources, or the
@@ -1113,7 +1115,11 @@ class DevHiveProjectManager(CommentRoutesMixin):
                 store.commit_info(sha)
             except (KeyError, ValueError, AttributeError):
                 raise web.HTTPNotFound(text=f"No version {ref!r} in this project.")
-            label = fontrestore.ref_label(store, sha)
+            label = fontrestore.ref_label(store, sha)  # the commit: UTC
+            # The sentence the person reads: in their time.
+            said = fontrestore.ref_label(
+                store, sha, fontrestore.parse_tz_offset(request.query.get("tzOffset"))
+            )
             for attempt in range(3):
                 if backend is not None:
                     backend.flush()  # commit pending edits first, so nothing is lost
@@ -1129,7 +1135,7 @@ class DevHiveProjectManager(CommentRoutesMixin):
                             "restored": sha,
                             "parts": parts,
                             "changed": False,
-                            "result": fontrestore.result_sentence(parts, label, False),
+                            "result": fontrestore.result_sentence(parts, said, False),
                         }
                     )
                 if parts is None or fontrestore.GUARDED_PARTS & set(parts):
@@ -1173,7 +1179,7 @@ class DevHiveProjectManager(CommentRoutesMixin):
                 "changed": True,
                 "title": message.split("\n", 1)[0],
                 "summary": [c.summary for c in summary],
-                "result": fontrestore.result_sentence(parts, label, True),
+                "result": fontrestore.result_sentence(parts, said, True),
             }
         )
 

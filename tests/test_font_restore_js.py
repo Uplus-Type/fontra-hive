@@ -144,6 +144,8 @@ def test_parts_restored_after_confirm(page):
     page.evaluate(f"{restore}.click()")
     page.wait_for_function("restored.length === 1")
     post = page.evaluate("requests.find(r => r.route === 'restore-font')")
+    # The browser's time zone, to date a version in the person's time.
+    assert post.pop("tzOffset") == str(page.evaluate("new Date().getTimezoneOffset()"))
     assert post == {
         "route": "restore-font", "method": "POST", "branch": "main",
         "ref": "5" * 40, "parts": "features",
@@ -275,9 +277,9 @@ def test_font_info_restores_its_panel(page):
     page.evaluate(f"{FOOTER}.querySelector('.restore-panel').click()")
     page.evaluate(f"{FOOTER}.querySelector('.restore-panel').click()")
     page.wait_for_function("restores.length === 1")
-    assert page.evaluate("restores[0]") == {
-        "branch": "main", "ref": "2" * 40, "parts": "axesAndSources"
-    }
+    restored = page.evaluate("restores[0]")
+    assert restored.pop("tzOffset")
+    assert restored == {"branch": "main", "ref": "2" * 40, "parts": "axesAndSources"}
     page.wait_for_function("requests.filter(r => r.route === 'log').length >= 2")
     page.keyboard.press("Escape")
     # A designer to whom the project keeps the font settings: greyed.

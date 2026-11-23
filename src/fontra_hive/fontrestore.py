@@ -31,6 +31,7 @@ Copyright (c) 2026 Jérémie Hornus / U+Type — GPLv3, see LICENSE.
 from __future__ import annotations
 
 import csv
+import datetime
 import io
 import json
 from dataclasses import dataclass
@@ -463,12 +464,30 @@ def coherence_problem(
 # --- the commit -----------------------------------------------------------------------
 
 
-def ref_label(store, sha: str) -> str:
-    """``“Round 1”`` for a snapshot, ``version 3f2a9c1d0b`` otherwise."""
+def ref_label(store, sha: str, tzOffset: int | None = None) -> str:
+    """``“Round 1”`` for a snapshot; otherwise the version's date,
+    ``the version of 23 Nov 2026, 09:50 UTC``, or in the person's time
+    when ``tzOffset`` is given (minutes, as JavaScript's
+    ``getTimezoneOffset``: UTC minus local time) and then without "UTC"."""
     snapshot = store.snapshot_at(sha)
     if snapshot is not None:
         return f"“{snapshot.title}”"
-    return f"version {sha[:10]}"
+    when = datetime.datetime.fromtimestamp(
+        store.commit_info(sha).time, datetime.timezone.utc
+    )
+    if tzOffset is not None:
+        when -= datetime.timedelta(minutes=tzOffset)
+    text = f"{when.day} {when:%b %Y, %H:%M}"
+    return f"the version of {text}" + ("" if tzOffset is not None else " UTC")
+
+
+def parse_tz_offset(text: str | None) -> int | None:
+    """The browser's ``getTimezoneOffset()`` (None: absent or not one)."""
+    try:
+        value = int(text)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return value if -900 <= value <= 900 else None
 
 
 def _words(parts: list[str]) -> str:

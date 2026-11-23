@@ -441,6 +441,8 @@ export async function requestRestore({ projectName, branch, ref, parts = null })
   url.searchParams.set("branch", branch);
   url.searchParams.set("ref", ref);
   if (parts) url.searchParams.set("parts", parts.join(","));
+  // A version is said by its date, in this person's time.
+  url.searchParams.set("tzOffset", String(new Date().getTimezoneOffset()));
   const response = await fetch(url, { method: "POST", credentials: "same-origin" });
   const text = await response.text();
   let data;

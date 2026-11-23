@@ -288,6 +288,30 @@ def test_nothing_to_restore(hive):
     assert data["result"] == "Features are already as at “Round 1”: nothing to restore."
 
 
+def test_a_version_is_said_by_its_date(hive):
+    """Not a snapshot: the commit dates it in UTC, the sentence in the
+    person's time (the browser's getTimezoneOffset)."""
+    import datetime
+
+    store = store_of(hive)
+    day = int(datetime.datetime(2026, 11, 19, 15, 40, tzinfo=datetime.timezone.utc).timestamp())
+    version = store.commit(
+        {"features.txt": b"# then\n"}, message="Features then", author=ME, timestamp=day
+    )
+    store.commit({"features.txt": b"# now\n"}, message="Features now", author=ME)
+    store.close()
+    status, data = restore(hive, ref=version, parts="features", tzOffset="-60")
+    assert status == 200
+    assert data["title"] == "Restore features from the version of 19 Nov 2026, 15:40 UTC"
+    assert data["result"].startswith(
+        "Features are back as at the version of 19 Nov 2026, 16:40, in a new version."
+    )
+    # Without the browser's time zone, or with nonsense: UTC.
+    restore(hive, parts="features")
+    status, data = restore(hive, ref=version, parts="features", tzOffset="lots")
+    assert "19 Nov 2026, 15:40 UTC" in data["result"]
+
+
 # --- who may restore what -------------------------------------------------------------
 
 
